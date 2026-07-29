@@ -785,8 +785,15 @@ V3.1 fields:
 - Automation Notice Sent At
 - Manager Due Date
 - Employee Due Date
+- Calendar Status
 - Calendar Event ID
 - Calendar Created At
+- Manager Email Sent At
+- Employee Email Sent At
+- HR Email Sent At
+- Launch Completed At
+- Last Launch Error
+- Launch Attempt Count
 - Compensation Decision
 - Compensation Decision Notes
 - Compensation Decision At
@@ -1382,33 +1389,34 @@ The design intends to retry communications without creating another cycle.
 
 ## Critical known transactional risk
 
-The current `launchReviewCycleCommunications_()` function:
+The original V3.1 `launchReviewCycleCommunications_()` function:
 
-1. Creates the Calendar event
-2. Stores the event ID only in the in-memory cycle object
-3. Sends the three emails
-4. Writes the updated cycle row after the emails
+1. Created the Calendar event
+2. Stored the event ID only in the in-memory cycle object
+3. Sent the three emails
+4. Wrote the updated cycle row after the emails
 
-If Calendar creation succeeds but email sending fails before the row is written:
+If Calendar creation succeeded but email sending failed before the row was written:
 
-- The event ID is not persisted.
-- A retry may create a duplicate Calendar event.
+- The event ID was not persisted.
+- A retry could create a duplicate Calendar event.
 
-Similarly, if one or two emails send and a later email fails:
+Similarly, if one or two emails sent and a later email failed:
 
-- The cycle may not be marked sent.
-- A retry can resend emails that already went out.
+- The cycle may not have been marked sent.
+- A retry could resend emails that already went out.
 
-This is the highest-priority engineering fix.
+This was the highest-priority engineering fix and is addressed in Phase 1.
 
-## Recommended fix
+## Phase 1 fix (implemented)
 
-Treat each launch component as its own persisted step:
+Treat each launch component as its own persisted step.
 
-Cycle fields should include:
+Cycle fields now include:
 
 - Calendar Status
 - Calendar Event ID
+- Calendar Created At
 - Manager Email Sent At
 - Employee Email Sent At
 - HR Email Sent At
@@ -1416,19 +1424,26 @@ Cycle fields should include:
 - Last Launch Error
 - Launch Attempt Count
 
-Safer sequence:
+Safer sequence now in production code:
 
 1. Persist cycle before external actions.
 2. If Calendar Event ID is blank:
    - Create event
-   - Immediately persist event ID
+   - Immediately persist event ID / Calendar Status / Calendar Created At
 3. If Manager Email Sent At is blank:
    - Send manager email
    - Immediately persist timestamp
 4. Repeat for employee and HR email
 5. Set Launch Completed At only when all components succeed
+6. Leave completed timestamps untouched on retry
+7. Capture actionable text in Last Launch Error
+8. Increment Launch Attempt Count at the start of each attempt
 
-This makes retries idempotent and greatly reduces duplicate communications.
+Legacy cycles that already have `Automation Notice Sent At` plus a Calendar Event ID are treated as complete and backfilled onto the per-step fields.
+
+Manual and automated launches share this orchestration. The HR resend control remains an intentional audited resend and does not clear completion timestamps.
+
+Run `runV31IdempotencyTests()` before trusting Live mode.
 
 ---
 
@@ -1555,16 +1570,16 @@ Before further coding:
 - Never develop only inside the Apps Script browser editor.
 - Keep a known-good deployment version available for rollback.
 
-## Priority 1: Fix launch idempotency
+## Priority 1: Fix launch idempotency — DONE in Phase 1 drop-in
 
-Implement per-step persisted statuses for:
+Implemented per-step persisted statuses for:
 
 - Calendar
 - Manager email
 - Employee email
 - HR email
 
-This should be completed before Live automation is trusted.
+Keep automation in Preview until Workspace retry tests and `runV31IdempotencyTests()` pass. Do not enable Live until those checks succeed.
 
 ## Priority 2: Add automated date tests
 

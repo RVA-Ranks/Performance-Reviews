@@ -168,3 +168,22 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] No duplicate triggers exist
 - [ ] A failed launch appears in `ReviewAutomationLog`
 - [ ] An incomplete automated launch appears in preview as needing retry
+
+## K. Launch idempotency (Phase 1)
+
+Run `runV31IdempotencyTests()` in the Apps Script editor first.
+
+- [ ] `upgradeToV31()` / `ensureV31DataModel_()` adds new launch columns without reordering existing ones
+- [ ] Re-running the upgrade does not duplicate columns or lose cycle data
+- [ ] Existing completed cycles (Automation Notice Sent At + Calendar Event ID) are treated as complete
+- [ ] Calendar succeeds, manager email fails → event ID persisted; retry does not create another event
+- [ ] Manager email succeeds, employee email fails → manager timestamp persisted; retry does not resend manager email
+- [ ] Employee email succeeds, HR email fails → retry sends only HR email
+- [ ] Final persistence failure after all external actions → retry skips completed components
+- [ ] `Launch Completed At` is blank until Calendar + three emails succeed
+- [ ] `Launch Attempt Count` increments on each attempt
+- [ ] `Last Launch Error` captures actionable failure text
+- [ ] Concurrent Run Now / trigger cannot launch the same candidate twice (script lock)
+- [ ] Preview mode still creates no cycles, events, or emails
+- [ ] HR intentional resend still sends three emails without duplicating the Calendar event
+- [ ] Automation preview shows per-component pending/done state for incomplete launches

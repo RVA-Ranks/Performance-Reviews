@@ -1,5 +1,16 @@
 # V3.1 Changelog
 
+## Phase 1 — Launch idempotency (post-baseline)
+
+- Added per-step launch fields: Calendar Status, Manager/Employee/HR Email Sent At, Launch Completed At, Last Launch Error, Launch Attempt Count
+- Rewrote launch orchestration so Calendar creation and each recipient email persist immediately after success
+- Retries skip completed components and never recreate a Calendar event when an event ID already exists
+- Automation preview now shows partial component status for incomplete launches
+- Legacy cycles with Automation Notice Sent At + Calendar Event ID are treated as complete and backfilled
+- Added `V31_Idempotency_Tests.gs` for partial-failure and retry simulations
+- Kept intentional HR resend as an audited manual override that does not clear timestamps
+- Production remains Preview-first; do not enable Live until Workspace retry tests pass
+
 ## Automation
 
 - Added daily hire-date review automation
@@ -72,6 +83,7 @@
 - Added manager and employee due dates
 - Added calendar event fields
 - Added compensation-decision fields
+- Added per-recipient launch email timestamps and launch completion fields
 
 ## Preserved
 

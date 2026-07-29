@@ -39,8 +39,15 @@ const V31 = Object.freeze({
     'Automation Notice Sent At',
     'Manager Due Date',
     'Employee Due Date',
+    'Calendar Status',
     'Calendar Event ID',
     'Calendar Created At',
+    'Manager Email Sent At',
+    'Employee Email Sent At',
+    'HR Email Sent At',
+    'Launch Completed At',
+    'Last Launch Error',
+    'Launch Attempt Count',
     'Compensation Decision',
     'Compensation Decision Notes',
     'Compensation Decision At',
@@ -64,6 +71,10 @@ const V31 = Object.freeze({
     PENDING: 'Pending',
     ADJUSTMENT: 'Adjustment Submitted',
     NONE: 'No Adjustment Recommended',
+  },
+
+  CALENDAR: {
+    CREATED: 'Created',
   },
 });
 
@@ -305,6 +316,28 @@ function getV31CycleData_(cycle, email, isHr) {
     calendarCreatedAt: formatDateTime_(
       cycle['Calendar Created At']
     ),
+    calendarStatus: String(
+      cycle['Calendar Status'] || ''
+    ),
+    managerEmailSentAt: formatDateTime_(
+      cycle['Manager Email Sent At']
+    ),
+    employeeEmailSentAt: formatDateTime_(
+      cycle['Employee Email Sent At']
+    ),
+    hrEmailSentAt: formatDateTime_(
+      cycle['HR Email Sent At']
+    ),
+    launchCompletedAt: formatDateTime_(
+      cycle['Launch Completed At']
+    ),
+    lastLaunchError: isHr
+      ? String(cycle['Last Launch Error'] || '')
+      : '',
+    launchAttemptCount: isHr
+      ? Number(cycle['Launch Attempt Count'] || 0)
+      : 0,
+    launchComplete: isReviewLaunchComplete_(cycle),
     daysUntilMeeting: daysUntilMeeting,
 
     compensationRequired:
@@ -1011,12 +1044,19 @@ function runReviewAutomation() {
             cycle,
             true
           );
+        const summary =
+          getReviewLaunchComponentSummary_(
+            launched
+          );
 
         results.push({
           employeeName: candidate.employeeName,
           reviewType: candidate.reviewType,
           cycleId: launched['Cycle ID'],
-          result: 'Created and sent',
+          result: summary.complete
+            ? 'Created and sent'
+            : 'Partial launch',
+          launchComponents: summary,
         });
 
         logReviewAutomation_({
@@ -1031,9 +1071,14 @@ function runReviewAutomation() {
           reviewType: candidate.reviewType,
           reviewDate: candidate.reviewDate,
           cycleId: launched['Cycle ID'],
-          result: 'Success',
-          details:
-            'Calendar event and three workflow emails sent.',
+          result: summary.complete
+            ? 'Success'
+            : 'Partial',
+          details: summary.complete
+            ? 'Calendar event and three workflow emails completed.'
+            : describeReviewLaunchStatus_(
+                launched
+              ),
         });
       } catch (error) {
         failed++;
@@ -1242,10 +1287,7 @@ function findReviewAutomationCandidates_(windowDays) {
         automationKey
       ];
 
-      if (
-        existing &&
-        existing['Automation Notice Sent At']
-      ) {
+      if (existing && isReviewLaunchComplete_(existing)) {
         return;
       }
 
@@ -1339,8 +1381,13 @@ function findReviewAutomationCandidates_(windowDays) {
         daysUntilReview:
           v31DaysBetween_(today, reviewDate),
         status: existing
-          ? 'Launch needs retry'
+          ? describeReviewLaunchStatus_(existing)
           : 'Ready to create',
+        launchComponents: existing
+          ? getReviewLaunchComponentSummary_(
+              existing
+            )
+          : null,
       });
     });
   });
@@ -1428,8 +1475,15 @@ function createAutomatedReviewCycle_(candidate) {
     'Employee Due Date': parseDateInput_(
       candidate.employeeDueDate
     ),
+    'Calendar Status': '',
     'Calendar Event ID': '',
     'Calendar Created At': '',
+    'Manager Email Sent At': '',
+    'Employee Email Sent At': '',
+    'HR Email Sent At': '',
+    'Launch Completed At': '',
+    'Last Launch Error': '',
+    'Launch Attempt Count': 0,
     'Compensation Decision':
       V31.COMPENSATION.PENDING,
     'Compensation Decision Notes': '',
@@ -1510,10 +1564,27 @@ function applyV31DefaultsToCycle_(
     cycle['Employee Due Date'] ||
     dueDate ||
     '';
+  cycle['Calendar Status'] =
+    cycle['Calendar Status'] || '';
   cycle['Calendar Event ID'] =
     cycle['Calendar Event ID'] || '';
   cycle['Calendar Created At'] =
     cycle['Calendar Created At'] || '';
+  cycle['Manager Email Sent At'] =
+    cycle['Manager Email Sent At'] || '';
+  cycle['Employee Email Sent At'] =
+    cycle['Employee Email Sent At'] || '';
+  cycle['HR Email Sent At'] =
+    cycle['HR Email Sent At'] || '';
+  cycle['Launch Completed At'] =
+    cycle['Launch Completed At'] || '';
+  cycle['Last Launch Error'] =
+    cycle['Last Launch Error'] || '';
+  cycle['Launch Attempt Count'] =
+    cycle['Launch Attempt Count'] === '' ||
+    cycle['Launch Attempt Count'] == null
+      ? 0
+      : Number(cycle['Launch Attempt Count'] || 0);
   cycle['Compensation Decision'] =
     cycle['Compensation Decision'] ||
     V31.COMPENSATION.PENDING;
@@ -1524,9 +1595,121 @@ function applyV31DefaultsToCycle_(
   cycle['Compensation Decision By'] =
     cycle['Compensation Decision By'] || '';
 
+  return backfillLegacyLaunchFields_(cycle);
+}
+
+/**
+ * Backfill per-step launch fields for cycles completed under the
+ * pre-idempotent V3.1 package (single Automation Notice Sent At).
+ */
+function backfillLegacyLaunchFields_(cycle) {
+  if (
+    cycle['Automation Notice Sent At'] &&
+    cycle['Calendar Event ID'] &&
+    !cycle['Launch Completed At']
+  ) {
+    const sentAt =
+      cycle['Automation Notice Sent At'];
+
+    cycle['Calendar Status'] =
+      cycle['Calendar Status'] ||
+      V31.CALENDAR.CREATED;
+    cycle['Manager Email Sent At'] =
+      cycle['Manager Email Sent At'] || sentAt;
+    cycle['Employee Email Sent At'] =
+      cycle['Employee Email Sent At'] || sentAt;
+    cycle['HR Email Sent At'] =
+      cycle['HR Email Sent At'] || sentAt;
+    cycle['Launch Completed At'] = sentAt;
+  } else if (
+    cycle['Calendar Event ID'] &&
+    !cycle['Calendar Status']
+  ) {
+    cycle['Calendar Status'] =
+      V31.CALENDAR.CREATED;
+  }
+
   return cycle;
 }
 
+function isReviewLaunchComplete_(cycle) {
+  if (!cycle) return false;
+
+  if (cycle['Launch Completed At']) {
+    return true;
+  }
+
+  // Legacy completed launches used one notice timestamp for all emails.
+  return !!(
+    cycle['Automation Notice Sent At'] &&
+    cycle['Calendar Event ID']
+  );
+}
+
+function isReviewLaunchComponentsComplete_(cycle) {
+  return !!(
+    cycle['Calendar Event ID'] &&
+    cycle['Manager Email Sent At'] &&
+    cycle['Employee Email Sent At'] &&
+    cycle['HR Email Sent At']
+  );
+}
+
+function getReviewLaunchComponentSummary_(cycle) {
+  return {
+    calendar: !!cycle['Calendar Event ID'],
+    managerEmail: !!cycle['Manager Email Sent At'],
+    employeeEmail: !!cycle['Employee Email Sent At'],
+    hrEmail: !!cycle['HR Email Sent At'],
+    complete: isReviewLaunchComplete_(cycle),
+    lastError: String(
+      cycle['Last Launch Error'] || ''
+    ),
+    attemptCount: Number(
+      cycle['Launch Attempt Count'] || 0
+    ),
+  };
+}
+
+function describeReviewLaunchStatus_(cycle) {
+  if (isReviewLaunchComplete_(cycle)) {
+    return 'Launch complete';
+  }
+
+  const parts = [
+    cycle['Calendar Event ID']
+      ? 'Calendar done'
+      : 'Calendar pending',
+    cycle['Manager Email Sent At']
+      ? 'Manager email done'
+      : 'Manager email pending',
+    cycle['Employee Email Sent At']
+      ? 'Employee email done'
+      : 'Employee email pending',
+    cycle['HR Email Sent At']
+      ? 'HR email done'
+      : 'HR email pending',
+  ];
+
+  const error = String(
+    cycle['Last Launch Error'] || ''
+  ).trim();
+
+  return (
+    'Launch needs retry — ' +
+    parts.join('; ') +
+    (error ? ' (' + error + ')' : '')
+  );
+}
+
+/**
+ * Create Calendar event and send launch emails with independently
+ * persisted completion for each external action.
+ *
+ * Callers that mutate cycles (createReviewCycle, runReviewAutomation)
+ * must already hold LockService.getScriptLock() — script locks are
+ * not re-entrant, so this function does not nest another lock.
+ */
 function launchReviewCycleCommunications_(
   cycle,
   automated
@@ -1534,32 +1717,104 @@ function launchReviewCycleCommunications_(
   const location = findCycle_(
     cycle['Cycle ID']
   );
-  const stored = applyV31DefaultsToCycle_(
+  let stored = applyV31DefaultsToCycle_(
     location.object,
     automated ? 'Automated' : 'Manual'
   );
 
-  if (!stored['Calendar Event ID']) {
-    const event = createReviewCalendarEvent_(
-      stored
-    );
+  if (isReviewLaunchComplete_(stored)) {
+    const needsLegacyPersist =
+      !location.object['Launch Completed At'] &&
+      !!stored['Launch Completed At'];
 
-    stored['Calendar Event ID'] =
-      event.getId();
-    stored['Calendar Created At'] =
-      new Date();
+    if (needsLegacyPersist) {
+      stored['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, stored);
+    }
+
+    return stored;
   }
 
-  if (!stored['Automation Notice Sent At']) {
-    sendV31LaunchEmails_(stored);
-    stored['Automation Notice Sent At'] =
-      new Date();
-  }
-
+  const attemptCount =
+    Number(stored['Launch Attempt Count'] || 0) +
+    1;
+  stored['Launch Attempt Count'] = attemptCount;
   stored['Updated At'] = new Date();
   writeCycle_(location.rowNumber, stored);
 
-  return stored;
+  try {
+    if (!stored['Calendar Event ID']) {
+      const event = createReviewCalendarEvent_(
+        stored
+      );
+
+      stored['Calendar Event ID'] =
+        event.getId();
+      stored['Calendar Created At'] =
+        new Date();
+      stored['Calendar Status'] =
+        V31.CALENDAR.CREATED;
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, stored);
+    } else if (!stored['Calendar Status']) {
+      stored['Calendar Status'] =
+        V31.CALENDAR.CREATED;
+      stored['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, stored);
+    }
+
+    if (!stored['Manager Email Sent At']) {
+      sendV31ManagerLaunchEmail_(stored);
+      stored['Manager Email Sent At'] =
+        new Date();
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, stored);
+    }
+
+    if (!stored['Employee Email Sent At']) {
+      sendV31EmployeeLaunchEmail_(stored);
+      stored['Employee Email Sent At'] =
+        new Date();
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, stored);
+    }
+
+    if (!stored['HR Email Sent At']) {
+      sendV31HrLaunchEmail_(stored);
+      stored['HR Email Sent At'] = new Date();
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, stored);
+    }
+
+    if (
+      isReviewLaunchComponentsComplete_(stored) &&
+      !stored['Launch Completed At']
+    ) {
+      const completedAt = new Date();
+
+      stored['Launch Completed At'] =
+        completedAt;
+      stored['Automation Notice Sent At'] =
+        stored['Automation Notice Sent At'] ||
+        completedAt;
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = completedAt;
+      writeCycle_(location.rowNumber, stored);
+    }
+
+    return stored;
+  } catch (error) {
+    stored['Last Launch Error'] = String(
+      error.message || error
+    );
+    stored['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, stored);
+    throw error;
+  }
 }
 
 function createReviewCalendarEvent_(cycle) {
@@ -1717,38 +1972,41 @@ function buildReviewCalendarDescription_(cycle) {
   ].join('\n');
 }
 
-function sendV31LaunchEmails_(cycle) {
-  const settings = getSettings_();
-  const managerUrl =
-    getWebAppUrl_() +
-    '?cycleId=' +
-    encodeURIComponent(cycle['Cycle ID']) +
-    '&action=manager-review';
-  const employeeUrl =
-    getWebAppUrl_() +
-    '?cycleId=' +
-    encodeURIComponent(cycle['Cycle ID']) +
-    '&action=self-evaluation';
-  const overviewUrl =
-    getWebAppUrl_() +
-    '?cycleId=' +
-    encodeURIComponent(cycle['Cycle ID']) +
-    '&action=overview';
-  const helpUrl =
-    getWebAppUrl_() +
-    '?action=help';
-  const compensationUrl = String(
-    settings.COMPENSATION_ADJUSTMENT_URL || ''
-  );
+function buildV31LaunchEmailUrls_(cycle) {
+  return {
+    managerUrl:
+      getWebAppUrl_() +
+      '?cycleId=' +
+      encodeURIComponent(cycle['Cycle ID']) +
+      '&action=manager-review',
+    employeeUrl:
+      getWebAppUrl_() +
+      '?cycleId=' +
+      encodeURIComponent(cycle['Cycle ID']) +
+      '&action=self-evaluation',
+    overviewUrl:
+      getWebAppUrl_() +
+      '?cycleId=' +
+      encodeURIComponent(cycle['Cycle ID']) +
+      '&action=overview',
+    helpUrl: getWebAppUrl_() + '?action=help',
+    compensationUrl: String(
+      getSettings_().COMPENSATION_ADJUSTMENT_URL ||
+        ''
+    ),
+  };
+}
 
+function sendV31ManagerLaunchEmail_(cycle) {
+  const urls = buildV31LaunchEmailUrls_(cycle);
   const managerButtons =
     emailButton_(
-      managerUrl,
+      urls.managerUrl,
       'Start Manager Review'
     ) +
-    (compensationUrl
+    (urls.compensationUrl
       ? emailButton_(
-          compensationUrl,
+          urls.compensationUrl,
           'Open Compensation Adjustment'
         )
       : '');
@@ -1780,9 +2038,13 @@ function sendV31LaunchEmails_(cycle) {
       '<p>The employee self-evaluation remains private until both evaluations are submitted and the meeting is opened.</p>' +
       managerButtons +
       '<p><a href="' +
-      htmlEscape_(helpUrl) +
+      htmlEscape_(urls.helpUrl) +
       '">View the step-by-step manager guide</a></p>'
   );
+}
+
+function sendV31EmployeeLaunchEmail_(cycle) {
+  const urls = buildV31LaunchEmailUrls_(cycle);
 
   sendHtmlEmail_(
     cycle['Employee Email'],
@@ -1800,13 +2062,17 @@ function sendV31LaunchEmails_(cycle) {
       '</strong>.</p>' +
       '<p>Your responses remain private from your manager until both evaluations are submitted and the review meeting is opened.</p>' +
       emailButton_(
-        employeeUrl,
+        urls.employeeUrl,
         'Start Self-Evaluation'
       ) +
       '<p><a href="' +
-      htmlEscape_(helpUrl) +
+      htmlEscape_(urls.helpUrl) +
       '">View the step-by-step employee guide</a></p>'
   );
+}
+
+function sendV31HrLaunchEmail_(cycle) {
+  const urls = buildV31LaunchEmailUrls_(cycle);
 
   sendHtmlEmail_(
     cycle['HR Email'],
@@ -1837,10 +2103,20 @@ function sendV31LaunchEmails_(cycle) {
       '</li>' +
       '</ul>' +
       emailButton_(
-        overviewUrl,
+        urls.overviewUrl,
         'Open Review Cycle'
       )
   );
+}
+
+/**
+ * Sends all three launch emails. Used only by the intentional HR
+ * resend control — does not update per-recipient timestamps.
+ */
+function sendV31LaunchEmails_(cycle) {
+  sendV31ManagerLaunchEmail_(cycle);
+  sendV31EmployeeLaunchEmail_(cycle);
+  sendV31HrLaunchEmail_(cycle);
 }
 
 function resendReviewLaunchEmails(cycleId) {
@@ -1852,29 +2128,36 @@ function resendReviewLaunchEmails(cycleId) {
     );
   }
 
-  const location = findCycle_(cycleId);
-  const cycle = applyV31DefaultsToCycle_(
-    location.object,
-    location.object['Cycle Source'] ||
-      'Manual'
-  );
+  return withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] ||
+        'Manual'
+    );
 
-  sendV31LaunchEmails_(cycle);
+    sendV31LaunchEmails_(cycle);
 
-  audit_(
-    cycleId,
-    'Review launch emails resent',
-    email,
-    String(cycle['Status']),
-    String(cycle['Status']),
-    ''
-  );
+    audit_(
+      cycleId,
+      'Review launch emails resent',
+      email,
+      String(cycle['Status']),
+      String(cycle['Status']),
+      JSON.stringify({
+        intentionalResend: true,
+        calendarEventId: String(
+          cycle['Calendar Event ID'] || ''
+        ),
+      })
+    );
 
-  return {
-    ok: true,
-    message:
-      'The HR, manager, and employee launch emails were resent. The existing calendar event was not duplicated.',
-  };
+    return {
+      ok: true,
+      message:
+        'The HR, manager, and employee launch emails were resent. The existing calendar event was not duplicated.',
+    };
+  });
 }
 
 /* =============================== LOG ===================================== */
