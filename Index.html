@@ -1,0 +1,3050 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --brand: #5b128b;
+      --brand-dark: #3c075f;
+      --brand-soft: #f2e9f7;
+      --brand-faint: #fbf8fc;
+      --ink: #261f2b;
+      --muted: #706777;
+      --line: #e0d8e4;
+      --canvas: #f5f3f7;
+      --surface: #ffffff;
+      --success: #18704a;
+      --success-soft: #e9f6ef;
+      --warning: #9a6309;
+      --warning-soft: #fff4d7;
+      --danger: #a22d2d;
+      --danger-soft: #fcecec;
+      --info: #255c94;
+      --info-soft: #eaf2fb;
+      --shadow: 0 8px 28px rgba(47, 22, 60, .08);
+      --sidebar-width: 252px;
+      --radius: 13px;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-height: 100%; background: var(--canvas); }
+    body {
+      min-height: 100%;
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    a { color: inherit; }
+
+    .hidden { display: none !important; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .boot-screen {
+      min-height: 100vh;
+      padding: 28px;
+      background: var(--canvas);
+    }
+
+    .boot-header,
+    .skeleton-card,
+    .skeleton-line {
+      overflow: hidden;
+      position: relative;
+      background: #ece7ef;
+    }
+
+    .boot-header {
+      width: 240px;
+      height: 34px;
+      margin-bottom: 30px;
+      border-radius: 9px;
+    }
+
+    .boot-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    .skeleton-card {
+      min-height: 132px;
+      border-radius: var(--radius);
+    }
+
+    .boot-list {
+      max-width: 1080px;
+      margin: 20px auto;
+      padding: 24px;
+      background: var(--surface);
+      border-radius: var(--radius);
+    }
+
+    .skeleton-line {
+      height: 14px;
+      margin: 12px 0;
+      border-radius: 5px;
+    }
+
+    .boot-header::after,
+    .skeleton-card::after,
+    .skeleton-line::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.7), transparent);
+      animation: shimmer 1.35s infinite;
+    }
+
+    @keyframes shimmer { to { transform: translateX(100%); } }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 50;
+      width: var(--sidebar-width);
+      display: flex;
+      flex-direction: column;
+      padding: 22px 16px 16px;
+      color: #fff;
+      background: linear-gradient(175deg, var(--brand-dark), #57107e 70%, #6d228f);
+      box-shadow: 4px 0 20px rgba(49, 10, 74, .18);
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 0 8px 22px;
+      border-bottom: 1px solid rgba(255,255,255,.15);
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+      color: var(--brand-dark);
+      background: #fff;
+      font-size: 19px;
+      font-weight: 900;
+    }
+
+    .sidebar-brand strong { display: block; letter-spacing: .04em; }
+    .sidebar-brand small { color: rgba(255,255,255,.72); }
+
+    .nav-section-label {
+      margin: 23px 10px 8px;
+      color: rgba(255,255,255,.55);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .nav-button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 11px 12px;
+      margin: 3px 0;
+      color: rgba(255,255,255,.82);
+      background: transparent;
+      border: 0;
+      border-radius: 9px;
+      text-align: left;
+      font-weight: 650;
+    }
+
+    .nav-button:hover { background: rgba(255,255,255,.10); color: #fff; }
+    .nav-button.active { background: #fff; color: var(--brand-dark); }
+    .nav-icon {
+      width: 22px;
+      display: inline-grid;
+      place-items: center;
+      font-size: 17px;
+    }
+
+    .nav-count {
+      min-width: 22px;
+      margin-left: auto;
+      padding: 2px 7px;
+      border-radius: 999px;
+      color: var(--brand-dark);
+      background: rgba(255,255,255,.88);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255,255,255,.15);
+    }
+
+    .sidebar-user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px;
+    }
+
+    .avatar {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      color: var(--brand-dark);
+      background: #fff;
+      font-size: 13px;
+      font-weight: 850;
+    }
+
+    .sidebar-user-name { font-size: 13px; font-weight: 750; }
+    .sidebar-user-role { color: rgba(255,255,255,.65); font-size: 11px; }
+
+    .app-body {
+      grid-column: 2;
+      min-width: 0;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      min-height: 69px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 25px;
+      background: rgba(255,255,255,.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+    }
+
+    .mobile-menu-button { display: none; }
+    .topbar-title { min-width: 0; }
+    .topbar-title strong { display: block; font-size: 16px; }
+    .topbar-title span { display: block; color: var(--muted); font-size: 12px; }
+
+    .topbar-spacer { flex: 1; }
+
+    .save-indicator {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .save-indicator.saving { color: var(--info); }
+    .save-indicator.error { color: var(--danger); }
+    .save-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #a9a0ae;
+    }
+    .save-indicator.saving .save-dot { background: var(--info); animation: pulse 1s infinite; }
+    .save-indicator.saved .save-dot { background: var(--success); }
+    .save-indicator.error .save-dot { background: var(--danger); }
+    @keyframes pulse { 50% { opacity: .35; } }
+
+    .icon-button {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      color: var(--ink);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      font-size: 19px;
+    }
+
+    .icon-button:hover { background: var(--brand-faint); border-color: var(--line); }
+    .notification-badge {
+      position: absolute;
+      top: 2px;
+      right: 1px;
+      min-width: 18px;
+      height: 18px;
+      display: grid;
+      place-items: center;
+      padding: 0 5px;
+      color: #fff;
+      background: var(--danger);
+      border: 2px solid #fff;
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .network-banner {
+      position: sticky;
+      top: 69px;
+      z-index: 35;
+      padding: 9px 24px;
+      color: var(--warning);
+      background: var(--warning-soft);
+      border-bottom: 1px solid #f0d89c;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .page-content {
+      width: min(1240px, calc(100% - 42px));
+      margin: 0 auto;
+      padding: 27px 0 60px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .page-header h1 { margin: 0 0 5px; color: var(--brand-dark); font-size: 29px; }
+    .page-header p { margin: 0; color: var(--muted); line-height: 1.5; }
+
+    .button-row { display: flex; flex-wrap: wrap; gap: 9px; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 40px;
+      padding: 9px 15px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 750;
+      text-decoration: none;
+    }
+
+    .button.primary { color: #fff; background: var(--brand); }
+    .button.primary:hover { background: #4a0e73; }
+    .button.secondary { color: var(--brand-dark); background: var(--brand-soft); }
+    .button.outline { color: var(--ink); background: #fff; border-color: var(--line); }
+    .button.success { color: #fff; background: var(--success); }
+    .button.warning { color: #fff; background: var(--warning); }
+    .button.danger { color: #fff; background: var(--danger); }
+    .button.text { min-height: auto; padding: 5px 8px; color: var(--brand); background: transparent; }
+    .button:disabled { opacity: .52; cursor: wait; }
+
+    .card {
+      padding: 22px;
+      margin-bottom: 18px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 17px;
+    }
+    .card-header h2, .card-header h3 { margin: 0; }
+    .card-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    .metric-card {
+      min-height: 126px;
+      padding: 18px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 4px 16px rgba(47,22,60,.05);
+    }
+
+    .metric-label { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .metric-value { margin: 10px 0 5px; color: var(--brand-dark); font-size: 32px; font-weight: 850; }
+    .metric-help { color: var(--muted); font-size: 12px; }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(290px, .7fr);
+      gap: 18px;
+    }
+
+    .action-list { display: grid; gap: 11px; }
+    .action-card {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 13px;
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .action-card:hover { border-color: #c8afd5; box-shadow: 0 5px 16px rgba(64,20,84,.07); }
+    .action-icon {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      color: var(--brand-dark);
+      background: var(--brand-soft);
+      border-radius: 11px;
+      font-size: 18px;
+    }
+    .action-card.warning .action-icon { color: var(--warning); background: var(--warning-soft); }
+    .action-card.success .action-icon { color: var(--success); background: var(--success-soft); }
+    .action-title { margin-bottom: 4px; font-size: 14px; font-weight: 780; }
+    .action-meta { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .empty-state {
+      padding: 36px 22px;
+      color: var(--muted);
+      background: var(--brand-faint);
+      border: 1px dashed #cdbfd3;
+      border-radius: 11px;
+      text-align: center;
+    }
+    .empty-state-icon { margin-bottom: 9px; font-size: 28px; }
+    .empty-state strong { display: block; margin-bottom: 6px; color: var(--ink); }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      color: #4c4650;
+      background: #efedf0;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .status-pill.blue { color: var(--info); background: var(--info-soft); }
+    .status-pill.purple { color: var(--brand-dark); background: var(--brand-soft); }
+    .status-pill.amber { color: var(--warning); background: var(--warning-soft); }
+    .status-pill.green { color: var(--success); background: var(--success-soft); }
+    .status-pill.red { color: var(--danger); background: var(--danger-soft); }
+
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      overflow: hidden;
+      background: #ece8ee;
+      border-radius: 999px;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--brand), #9553b6);
+      border-radius: inherit;
+      transition: width .25s ease;
+    }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 12px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+    tr.table-row { cursor: pointer; }
+    tr.table-row:hover { background: var(--brand-faint); }
+
+    .filter-bar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 190px 180px auto;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 750; }
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 11px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid #bfb4c5;
+      border-radius: 8px;
+      transition: border .15s, box-shadow .15s;
+    }
+    textarea { min-height: 112px; resize: vertical; line-height: 1.45; }
+    input:focus, select:focus, textarea:focus {
+      outline: 0;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(91,18,139,.13);
+    }
+    input[readonly], textarea[readonly] { color: #57515b; background: #f6f4f7; }
+    .field.invalid input, .field.invalid select, .field.invalid textarea,
+    input.invalid, select.invalid, textarea.invalid {
+      border-color: var(--danger);
+      box-shadow: 0 0 0 2px rgba(162,45,45,.09);
+    }
+    .field-error { margin-top: 5px; color: var(--danger); font-size: 11px; }
+    .field-help { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+    .form-grid .full { grid-column: 1 / -1; }
+
+    .cycle-hero {
+      padding: 22px;
+      margin-bottom: 15px;
+      background: linear-gradient(135deg, #fff, var(--brand-faint));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .cycle-hero-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .cycle-hero h1 { margin: 5px 0 6px; color: var(--brand-dark); font-size: 26px; }
+    .cycle-hero p { margin: 0; color: var(--muted); }
+    .breadcrumb-button {
+      padding: 0;
+      color: var(--brand);
+      background: transparent;
+      border: 0;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0;
+      margin-top: 22px;
+    }
+    .timeline-stage { position: relative; min-width: 0; padding-top: 27px; text-align: center; }
+    .timeline-stage::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: #ded8e1;
+    }
+    .timeline-stage:first-child::before { left: 50%; }
+    .timeline-stage:last-child::before { right: 50%; }
+    .timeline-dot {
+      position: absolute;
+      top: 2px;
+      left: 50%;
+      z-index: 1;
+      width: 18px;
+      height: 18px;
+      transform: translateX(-50%);
+      background: #ded8e1;
+      border: 4px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 0 0 1px #d2cbd5;
+    }
+    .timeline-stage.complete::before, .timeline-stage.complete .timeline-dot { background: var(--success); }
+    .timeline-stage.current .timeline-dot { background: var(--brand); box-shadow: 0 0 0 4px rgba(91,18,139,.14); }
+    .timeline-label { color: var(--muted); font-size: 11px; font-weight: 700; }
+    .timeline-stage.current .timeline-label { color: var(--brand-dark); }
+
+    .cycle-tabs {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      margin-bottom: 17px;
+      padding: 5px;
+      background: #ebe7ed;
+      border-radius: 10px;
+    }
+    .cycle-tab {
+      flex: 0 0 auto;
+      padding: 9px 14px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .cycle-tab.active { color: var(--brand-dark); background: #fff; box-shadow: 0 2px 7px rgba(50,20,64,.08); }
+    .cycle-tab .tab-dot { display: inline-block; width: 7px; height: 7px; margin-left: 6px; background: var(--warning); border-radius: 50%; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 200px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .summary-grid > div { padding: 11px 13px; border-bottom: 1px solid var(--line); }
+    .summary-label { background: var(--brand-faint); font-weight: 700; }
+
+    .review-status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .review-status-card { padding: 17px; border: 1px solid var(--line); border-radius: 10px; }
+    .review-status-card h3 { margin: 0 0 5px; font-size: 15px; }
+    .review-status-card p { margin: 0 0 13px; color: var(--muted); font-size: 12px; }
+
+    .privacy-banner,
+    .warning-banner,
+    .info-banner,
+    .success-banner,
+    .error-banner {
+      padding: 12px 14px;
+      margin-bottom: 15px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .privacy-banner, .info-banner { color: var(--info); background: var(--info-soft); border-color: #c8dff3; }
+    .warning-banner { color: var(--warning); background: var(--warning-soft); border-color: #efd79d; }
+    .success-banner { color: var(--success); background: var(--success-soft); border-color: #bfe4cf; }
+    .error-banner { color: var(--danger); background: var(--danger-soft); border-color: #efc6c6; }
+
+    .editor-shell { display: grid; grid-template-columns: 218px minmax(0, 1fr); gap: 18px; }
+    .editor-sidebar {
+      position: sticky;
+      top: 88px;
+      align-self: start;
+      padding: 15px;
+      background: var(--brand-faint);
+      border: 1px solid var(--line);
+      border-radius: 11px;
+    }
+    .editor-progress-number { margin-bottom: 8px; color: var(--brand-dark); font-size: 25px; font-weight: 850; }
+    .editor-progress-meta { margin: 8px 0 17px; color: var(--muted); font-size: 11px; }
+    .editor-step-button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 10px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .editor-step-button.active { color: var(--brand-dark); background: #fff; box-shadow: 0 2px 8px rgba(62,20,78,.07); }
+    .step-number {
+      display: grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      border-radius: 50%;
+      color: var(--muted);
+      background: #e9e4eb;
+      font-size: 11px;
+    }
+    .editor-step-button.active .step-number { color: #fff; background: var(--brand); }
+    .editor-step-button.complete .step-number { color: #fff; background: var(--success); }
+
+    .editor-main { min-width: 0; }
+    .editor-section-header { margin-bottom: 17px; }
+    .editor-section-header h2 { margin: 0 0 6px; color: var(--brand-dark); }
+    .editor-section-header p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .rating-guide-details { margin-bottom: 14px; }
+    .rating-guide-details summary { color: var(--brand); cursor: pointer; font-size: 12px; font-weight: 750; }
+    .rating-scale-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+    .rating-definition { padding: 9px; background: var(--brand-faint); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; line-height: 1.35; }
+    .rating-definition strong { display: block; margin-bottom: 4px; color: var(--brand-dark); }
+
+    .factor-card {
+      padding: 16px;
+      margin-bottom: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .factor-card.invalid { border-color: #e0a6a6; background: #fffafa; }
+    .factor-head { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 14px; margin-bottom: 10px; }
+    .factor-title { color: var(--brand-dark); font-weight: 800; }
+    .factor-description { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+
+    .editor-footer {
+      position: sticky;
+      bottom: 10px;
+      z-index: 15;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+      padding: 12px;
+      background: rgba(255,255,255,.96);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 9px 28px rgba(47,22,60,.12);
+      backdrop-filter: blur(8px);
+    }
+    .editor-footer-spacer { flex: 1; }
+    .editor-footer-status { color: var(--muted); font-size: 11px; }
+
+    .readiness-list { display: grid; gap: 8px; margin: 13px 0 18px; }
+    .readiness-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      padding: 10px;
+      border-radius: 8px;
+      background: var(--brand-faint);
+      font-size: 12px;
+    }
+    .readiness-item.error { color: var(--danger); background: var(--danger-soft); }
+    .readiness-item.warning { color: var(--warning); background: var(--warning-soft); }
+    .readiness-item.success { color: var(--success); background: var(--success-soft); }
+
+    .comparison-table td:nth-child(n+2), .comparison-table th:nth-child(n+2) { text-align: center; }
+    .difference-large { color: var(--danger); font-weight: 850; }
+    .comparison-detail {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 13px;
+      background: var(--brand-faint);
+      border-radius: 8px;
+    }
+    .comparison-comment strong { display: block; margin-bottom: 5px; color: var(--brand-dark); }
+    .comparison-comment { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .signature-wrap { overflow: hidden; background: #fff; border: 1px solid #bfb4c5; border-radius: 9px; }
+    canvas { display: block; width: 100%; height: 175px; background: #fff; touch-action: none; }
+    .signature-actions { padding: 7px; text-align: right; border-top: 1px solid var(--line); }
+
+    .notification-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      z-index: 80;
+      width: min(410px, 100vw);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      box-shadow: -10px 0 35px rgba(40,18,51,.19);
+      transform: translateX(105%);
+      transition: transform .22s ease;
+    }
+    .notification-drawer.open { transform: translateX(0); }
+    .drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 19px; border-bottom: 1px solid var(--line); }
+    .drawer-header h2 { margin: 0; font-size: 18px; }
+    .drawer-body { flex: 1; overflow-y: auto; padding: 12px; }
+    .notification-item { width: 100%; display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 10px; padding: 13px; color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--line); text-align: left; }
+    .notification-item:hover { background: var(--brand-faint); }
+    .notification-item.unread { background: #fcf9fd; }
+    .notification-dot { width: 8px; height: 8px; margin-top: 5px; background: var(--brand); border-radius: 50%; }
+    .notification-item:not(.unread) .notification-dot { background: transparent; }
+    .notification-title { font-size: 13px; font-weight: 750; }
+    .notification-meta { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+
+    .drawer-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      background: rgba(25,16,29,.3);
+    }
+
+    .toast-container {
+      position: fixed;
+      top: 82px;
+      right: 20px;
+      z-index: 100;
+      width: min(380px, calc(100vw - 32px));
+      display: grid;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .toast {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      padding: 13px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--brand);
+      border-radius: 10px;
+      box-shadow: 0 12px 35px rgba(36,18,43,.17);
+      pointer-events: auto;
+      animation: toastIn .2s ease;
+    }
+    .toast.success { border-left-color: var(--success); }
+    .toast.warning { border-left-color: var(--warning); }
+    .toast.error { border-left-color: var(--danger); }
+    .toast-icon { font-size: 18px; }
+    .toast-title { font-size: 13px; font-weight: 800; }
+    .toast-message { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .toast-close { padding: 0; color: var(--muted); background: transparent; border: 0; }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 110;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(26,17,30,.48);
+      backdrop-filter: blur(3px);
+    }
+    .modal {
+      width: min(520px, 100%);
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 25px 70px rgba(27,15,32,.3);
+    }
+    .modal-header { padding: 20px 22px 0; }
+    .modal-header h2 { margin: 0; color: var(--brand-dark); font-size: 20px; }
+    .modal-body { padding: 14px 22px 20px; color: #514a55; font-size: 13px; line-height: 1.5; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 9px; padding: 14px 22px; background: #f8f6f9; border-top: 1px solid var(--line); border-radius: 0 0 14px 14px; }
+    .modal-check { display: flex; gap: 9px; margin: 10px 0; padding: 10px; background: var(--brand-faint); border-radius: 8px; }
+    .modal-check input { width: auto; margin-top: 2px; }
+
+    .error-state { max-width: 620px; margin: 80px auto; padding: 28px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); text-align: center; box-shadow: var(--shadow); }
+    .error-state-icon { font-size: 38px; }
+    .error-state h2 { color: var(--brand-dark); }
+    .error-state p { color: var(--muted); }
+
+    @media (max-width: 1080px) {
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .editor-shell { grid-template-columns: 1fr; }
+      .editor-sidebar { position: static; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+      .editor-sidebar .progress-block { grid-column: 1 / -1; }
+      .editor-step-button { justify-content: center; text-align: center; }
+      .editor-step-button span:last-child { display: none; }
+    }
+
+    @media (max-width: 820px) {
+      .app-shell { display: block; }
+      .sidebar { transform: translateX(-105%); transition: transform .2s ease; }
+      .sidebar.open { transform: translateX(0); }
+      .app-body { grid-column: auto; }
+      .mobile-menu-button { display: grid; }
+      .page-content { width: min(100% - 26px, 1240px); }
+      .topbar { padding: 0 14px; }
+      .save-indicator { display: none; }
+      .filter-bar { grid-template-columns: 1fr 1fr; }
+      .cycle-hero-top { display: block; }
+      .cycle-hero-actions { margin-top: 14px; }
+      .review-status-grid { grid-template-columns: 1fr; }
+      .factor-head { grid-template-columns: 1fr; }
+      .rating-scale-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 560px) {
+      .boot-grid, .metric-grid, .form-grid, .comparison-detail { grid-template-columns: 1fr; }
+      .page-header { align-items: flex-start; flex-direction: column; }
+      .filter-bar { grid-template-columns: 1fr; }
+      .action-card { grid-template-columns: 42px minmax(0, 1fr); }
+      .action-card .button { grid-column: 1 / -1; }
+      .timeline-label { font-size: 9px; }
+      .summary-grid { grid-template-columns: 1fr; }
+      .summary-label { padding-bottom: 3px !important; border-bottom: 0 !important; }
+      .rating-scale-grid { grid-template-columns: 1fr; }
+      .editor-sidebar { grid-template-columns: repeat(4, 1fr); padding: 9px; }
+      .editor-step-button { padding: 7px; }
+      .editor-footer { flex-wrap: wrap; }
+      .editor-footer-spacer { display: none; }
+      .editor-footer .button { flex: 1; }
+    }
+  
+    /* V3.1 automation, guidance, and help center */
+    .guide-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 17px 18px;
+      margin-bottom: 18px;
+      border: 1px solid #d8c4e5;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, #fff, var(--brand-faint));
+      box-shadow: 0 4px 18px rgba(47,22,60,.04);
+    }
+    .guide-banner-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      color: var(--brand-dark);
+      background: var(--brand-soft);
+      font-weight: 900;
+    }
+    .guide-banner h3 { margin: 0 0 4px; font-size: 15px; }
+    .guide-banner p { margin: 0; color: var(--muted); font-size: 13px; }
+    .guide-banner .button { margin-left: auto; white-space: nowrap; }
+
+    .guidance-stack {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .guidance-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 15px 16px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--info);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .guidance-card.warning { border-left-color: var(--warning); background: #fffdf7; }
+    .guidance-card.success { border-left-color: var(--success); background: #fbfffc; }
+    .guidance-card h3 { margin: 0 0 3px; font-size: 14px; }
+    .guidance-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .guidance-card .button { margin-left: auto; white-space: nowrap; }
+
+    .compensation-card {
+      border: 1px solid #e6d6b4;
+      background: linear-gradient(145deg, #fffdf7, #fff);
+    }
+    .compensation-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: var(--warning);
+      background: var(--warning-soft);
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .compensation-status.complete {
+      color: var(--success);
+      background: var(--success-soft);
+    }
+    .task-subactions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+    }
+    .task-subaction-note {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .automation-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr);
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .automation-mode {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .automation-mode.live { color: var(--success); background: var(--success-soft); }
+    .automation-mode.preview { color: var(--info); background: var(--info-soft); }
+    .automation-mode.paused { color: var(--warning); background: var(--warning-soft); }
+    .automation-checklist {
+      display: grid;
+      gap: 9px;
+      margin: 14px 0 0;
+    }
+    .automation-check {
+      display: flex;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .automation-check strong { color: var(--ink); }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 13px;
+    }
+    .settings-grid .wide { grid-column: span 2; }
+    .preview-table td,
+    .preview-table th { white-space: nowrap; }
+    .preview-table td:first-child,
+    .preview-table th:first-child { white-space: normal; }
+
+    .help-layout {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 18px;
+    }
+    .help-menu {
+      position: sticky;
+      top: 88px;
+      align-self: start;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .help-menu button {
+      width: 100%;
+      padding: 10px 11px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+      text-align: left;
+      font-weight: 700;
+    }
+    .help-menu button:hover { color: var(--brand-dark); background: var(--brand-faint); }
+    .help-section {
+      scroll-margin-top: 88px;
+      margin-bottom: 18px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 4px 18px rgba(47,22,60,.04);
+    }
+    .help-section h2 { margin-bottom: 7px; }
+    .help-section h3 { margin-top: 20px; margin-bottom: 5px; }
+    .help-section p,
+    .help-section li { color: var(--muted); line-height: 1.58; font-size: 14px; }
+    .process-steps {
+      display: grid;
+      gap: 11px;
+      counter-reset: guide;
+      margin-top: 14px;
+    }
+    .process-step {
+      position: relative;
+      padding: 14px 14px 14px 52px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--brand-faint);
+    }
+    .process-step::before {
+      counter-increment: guide;
+      content: counter(guide);
+      position: absolute;
+      left: 14px;
+      top: 13px;
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--brand);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .process-step strong { display: block; margin-bottom: 3px; }
+    .faq-item {
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .faq-item:last-child { border-bottom: 0; }
+    .faq-item strong { display: block; margin-bottom: 4px; }
+
+    @media (max-width: 900px) {
+      .automation-hero,
+      .help-layout { grid-template-columns: 1fr; }
+      .settings-grid { grid-template-columns: 1fr 1fr; }
+      .settings-grid .wide { grid-column: 1 / -1; }
+      .help-menu { position: static; display: flex; overflow-x: auto; }
+      .help-menu button { width: auto; white-space: nowrap; }
+    }
+    @media (max-width: 620px) {
+      .settings-grid { grid-template-columns: 1fr; }
+      .settings-grid .wide { grid-column: auto; }
+      .guide-banner,
+      .guidance-card { display: block; }
+      .guide-banner .button,
+      .guidance-card .button { margin: 12px 0 0; width: 100%; }
+    }
+
+  </style>
+</head>
+<body>
+  <div id="bootScreen" class="boot-screen">
+    <div class="boot-header"></div>
+    <div class="boot-grid">
+      <div class="skeleton-card"></div><div class="skeleton-card"></div>
+      <div class="skeleton-card"></div><div class="skeleton-card"></div>
+    </div>
+    <div class="boot-list">
+      <div class="skeleton-line" style="width:32%"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line" style="width:88%"></div>
+      <div class="skeleton-line" style="width:94%"></div>
+      <div class="skeleton-line" style="width:72%"></div>
+    </div>
+  </div>
+
+  <div id="appShell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">A</div>
+        <div><strong>AITHERAS</strong><small>Performance</small></div>
+      </div>
+
+      <div class="nav-section-label">Workspace</div>
+      <nav>
+        <button class="nav-button active" data-view="home" onclick="navigate('home')"><span class="nav-icon">⌂</span><span>Home</span></button>
+        <button class="nav-button" data-view="reviews" onclick="navigate('reviews')"><span class="nav-icon">▤</span><span>Reviews</span></button>
+        <button class="nav-button" data-view="signatures" onclick="navigate('signatures')"><span class="nav-icon">✎</span><span>Signatures</span><span id="signatureNavCount" class="nav-count hidden">0</span></button>
+        <button class="nav-button" data-view="help" onclick="navigate('help')"><span class="nav-icon">?</span><span>How-To Guide</span></button>
+        <button id="adminNavButton" class="nav-button hidden" data-view="admin" onclick="navigate('admin')"><span class="nav-icon">⚙</span><span>Administration</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div id="sidebarAvatar" class="avatar">AU</div>
+          <div><div id="sidebarUserName" class="sidebar-user-name"></div><div id="sidebarUserRole" class="sidebar-user-role"></div></div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-body">
+      <header class="topbar">
+        <button class="icon-button mobile-menu-button" aria-label="Open navigation" onclick="toggleSidebar()">☰</button>
+        <div class="topbar-title"><strong id="topbarTitle">Home</strong><span id="topbarSubtitle">Performance Review Portal</span></div>
+        <div class="topbar-spacer"></div>
+        <div id="saveIndicator" class="save-indicator hidden"><span class="save-dot"></span><span id="saveIndicatorText">All changes saved</span></div>
+        <button class="icon-button" aria-label="Open how-to guide" onclick="navigate('help')">?</button>
+        <button class="icon-button" aria-label="Notifications" onclick="toggleNotifications()">♢<span id="notificationBadge" class="notification-badge hidden">0</span></button>
+        <div id="topbarAvatar" class="avatar">AU</div>
+      </header>
+
+      <div id="networkBanner" class="network-banner hidden">You are offline. Changes will be stored in this browser and synced when the connection returns.</div>
+
+      <main class="page-content">
+        <section id="homeView" class="app-view"></section>
+        <section id="reviewsView" class="app-view hidden"></section>
+        <section id="signaturesView" class="app-view hidden"></section>
+        <section id="helpView" class="app-view hidden"></section>
+        <section id="adminView" class="app-view hidden"></section>
+        <section id="cycleView" class="app-view hidden"></section>
+        <section id="errorView" class="app-view hidden"></section>
+      </main>
+    </div>
+  </div>
+
+  <div id="drawerOverlay" class="drawer-overlay hidden" onclick="closeNotifications()"></div>
+  <aside id="notificationDrawer" class="notification-drawer" aria-label="Notifications">
+    <div class="drawer-header"><h2>Notifications</h2><div class="button-row"><button class="button text" onclick="markAllNotificationsRead()">Mark all read</button><button class="icon-button" onclick="closeNotifications()">×</button></div></div>
+    <div id="notificationDrawerBody" class="drawer-body"></div>
+  </aside>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <div id="modalOverlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modal-header"><h2 id="modalTitle"></h2></div>
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-footer"><button class="button outline" onclick="closeModal()">Cancel</button><button id="modalConfirmButton" class="button primary" onclick="confirmModal()">Confirm</button></div>
+    </div>
+  </div>
+
+<script>
+const INITIAL_CYCLE_ID = <?!= JSON.stringify(initialCycleId) ?>;
+const INITIAL_ACTION = <?!= JSON.stringify(initialAction) ?>;
+
+const REVIEW_TYPES = {
+  manager: 'Manager Review',
+  self: 'Self-Evaluation'
+};
+
+const EDITOR_STEPS = {
+  manager: [
+    { key: 'ratings', label: 'Ratings' },
+    { key: 'summary', label: 'Overall Assessment' },
+    { key: 'development', label: 'Development' },
+    { key: 'review', label: 'Review & Submit' }
+  ],
+  self: [
+    { key: 'ratings', label: 'Ratings' },
+    { key: 'summary', label: 'Overall Assessment' },
+    { key: 'development', label: 'Development' },
+    { key: 'review', label: 'Review & Submit' }
+  ]
+};
+
+let state = null;
+let currentCycle = null;
+let currentView = 'home';
+let currentCycleTab = 'overview';
+let preferredCycleAction = '';
+let modalCallback = null;
+let notificationItems = [];
+let signaturePads = {};
+let meetingDraft = null;
+let meetingDirty = false;
+let meetingAutosaveTimer = null;
+let autosaveDelayMs = 5000;
+let deepLinkConsumed = false;
+
+const editorState = {
+  manager: createEditorState(),
+  self: createEditorState()
+};
+
+function createEditorState() {
+  return {
+    step: 0,
+    draft: null,
+    dirty: false,
+    saving: false,
+    lastSavedAt: '',
+    autosaveTimer: null,
+    validation: { errors: [], warnings: [], fieldErrors: {} },
+    showErrors: false
+  };
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  window.addEventListener('online', handleOnlineStatus);
+  window.addEventListener('offline', handleOnlineStatus);
+  window.addEventListener('beforeunload', handleBeforeUnload);
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      closeNotifications();
+      closeModal();
+    }
+  });
+  handleOnlineStatus();
+  refreshApplication(INITIAL_CYCLE_ID || '', INITIAL_ACTION || '');
+});
+
+function server(method) {
+  const args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function(resolve, reject) {
+    const runner = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject);
+    runner[method].apply(runner, args);
+  });
+}
+
+async function refreshApplication(cycleId, action) {
+  showBootScreen();
+  try {
+    const data = await server('getReviewBootstrapData', cycleId || '');
+    renderApplication(data, action || '');
+  } catch (error) {
+    showFatalError(error);
+  }
+}
+
+function renderApplication(data, action) {
+  state = data;
+  autosaveDelayMs = Math.max(Number(data.autosaveDelaySeconds || 5), 2) * 1000;
+  document.getElementById('bootScreen').classList.add('hidden');
+  document.getElementById('appShell').classList.remove('hidden');
+
+  renderUserChrome();
+  renderAdminView();
+  renderDashboard();
+  renderReviewsView();
+  renderSignaturesView();
+  renderHelpView();
+  rebuildNotifications();
+
+  if (data.selectedCycle) {
+    openCycle(data.selectedCycle, action || '');
+  } else if ((action || '') === 'help') {
+    navigate('help');
+  } else {
+    navigate(currentView === 'cycle' ? 'home' : currentView);
+  }
+
+  setTimeout(maybeShowWelcomeGuide, 250);
+}
+
+function renderUserChrome() {
+  const user = state.user || { displayName: state.currentUserEmail, initials: 'AU', primaryRole: 'User' };
+  document.getElementById('sidebarAvatar').textContent = user.initials;
+  document.getElementById('topbarAvatar').textContent = user.initials;
+  document.getElementById('sidebarUserName').textContent = user.displayName;
+  document.getElementById('sidebarUserRole').textContent = user.primaryRole + ' · ' + user.email;
+  document.getElementById('adminNavButton').classList.toggle('hidden', !state.isHr);
+}
+
+function navigate(view) {
+  currentView = view;
+  currentCycle = view === 'cycle' ? currentCycle : null;
+  document.querySelectorAll('.app-view').forEach(function(section) {
+    section.classList.toggle('hidden', section.id !== view + 'View');
+  });
+  document.querySelectorAll('.nav-button').forEach(function(button) {
+    button.classList.toggle('active', button.dataset.view === view);
+  });
+
+  const titles = {
+    home: ['Home', 'Your performance review workspace'],
+    reviews: ['Reviews', 'All review cycles available to you'],
+    signatures: ['Signatures', 'Review packets waiting for your signature'],
+    help: ['How-To Guide', 'Step-by-step help for the entire review process'],
+    admin: ['Administration', 'Create and manage review cycles'],
+    cycle: [currentCycle ? currentCycle.employeeName + ' — ' + currentCycle.reviewType : 'Review', 'Review workspace'],
+    error: ['Something went wrong', 'Performance Review Portal']
+  };
+  setTopbar(titles[view][0], titles[view][1]);
+  if (view !== 'cycle') document.getElementById('saveIndicator').classList.add('hidden');
+  closeSidebar();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function setTopbar(title, subtitle) {
+  document.getElementById('topbarTitle').textContent = title;
+  document.getElementById('topbarSubtitle').textContent = subtitle;
+}
+
+function renderDashboard() {
+  const cycles = state.cycles || [];
+  const actions = cycles.filter(function(cycle) { return cycle.actionRequired; });
+  const ready = cycles.filter(function(cycle) { return cycle.status === 'Ready for Review Meeting'; });
+  const signatures = cycles.filter(function(cycle) { return cycle.actionKey === 'signature'; });
+  const completed = cycles.filter(function(cycle) { return cycle.status === 'Complete'; });
+  const userName = (state.user && state.user.displayName ? state.user.displayName.split(' ')[0] : 'there');
+
+  const metrics = [
+    { label: 'Action required', value: actions.length, help: actions.length ? 'Items waiting on you' : 'You are caught up' },
+    { label: 'Ready for meeting', value: ready.length, help: 'Both evaluations submitted' },
+    { label: 'Signatures', value: signatures.length, help: 'Packets assigned to you' },
+    { label: 'Completed', value: completed.length, help: 'Available in review history' }
+  ];
+
+  const upcoming = cycles
+    .filter(function(cycle) { return cycle.reviewMeetingDateIso && cycle.status !== 'Complete'; })
+    .sort(function(a,b) { return new Date(a.reviewMeetingDateIso) - new Date(b.reviewMeetingDateIso); })
+    .slice(0, 5);
+
+  document.getElementById('homeView').innerHTML =
+    '<div class="page-header"><div><h1>Good ' + greetingPeriod() + ', ' + escapeHtml(userName) + '</h1>' +
+    '<p>Here is what needs attention across your performance reviews.</p></div>' +
+    (state.isHr ? '<button class="button primary" onclick="navigate(\'admin\')">＋ Create Review Cycle</button>' : '') + '</div>' +
+    renderDashboardGuide() +
+    '<div class="metric-grid">' + metrics.map(renderMetricCard).join('') + '</div>' +
+    '<div class="dashboard-grid"><div class="card"><div class="card-header"><div><h2>Action Center</h2><p>Your highest-priority next steps.</p></div></div>' +
+    renderActionList(actions.slice(0, 8)) + '</div>' +
+    '<div class="card"><div class="card-header"><div><h2>Upcoming</h2><p>Scheduled review meetings.</p></div></div>' +
+    renderUpcomingList(upcoming) + '</div></div>' +
+    '<div class="card"><div class="card-header"><div><h2>Recent Reviews</h2><p>Recently updated cycles available to you.</p></div><button class="button text" onclick="navigate(\'reviews\')">View all</button></div>' +
+    renderCompactCycleTable(cycles.slice(0, 7)) + '</div>';
+}
+
+function renderMetricCard(metric) {
+  return '<div class="metric-card"><div class="metric-label">' + escapeHtml(metric.label) + '</div><div class="metric-value">' + metric.value + '</div><div class="metric-help">' + escapeHtml(metric.help) + '</div></div>';
+}
+
+function renderDashboardGuide() {
+  const roles = (state.user && state.user.roles) || [];
+  let title = 'Your review workspace';
+  let message = 'Use the Action Center for your next required step. Drafts save automatically, and the How-To Guide remains available from the left navigation.';
+
+  if (roles.includes('Manager')) {
+    title = 'Manager workflow';
+    message = 'Complete the manager review and compensation decision before the meeting. The employee self-evaluation remains private until the meeting opens.';
+  } else if (roles.includes('Employee')) {
+    title = 'Employee workflow';
+    message = 'Complete your self-evaluation before the due date. Your manager cannot see it until both evaluations are submitted and the meeting opens.';
+  }
+
+  if (state.isHr) {
+    title = 'HR workflow';
+    message = 'Review automation launches six-month and annual cycles four weeks before the anniversary. Use Administration to preview, configure, and monitor the process.';
+  }
+
+  return '<div class="guide-banner"><div class="guide-banner-icon">?</div><div><h3>' +
+    escapeHtml(title) + '</h3><p>' + escapeHtml(message) +
+    '</p></div><button class="button outline" onclick="navigate(\'help\')">Open How-To Guide</button></div>';
+}
+
+function renderActionList(actions) {
+  if (!actions.length) {
+    return '<div class="empty-state"><div class="empty-state-icon">✓</div><strong>No action required</strong>You are caught up. New assignments and signature requests will appear here.</div>';
+  }
+
+  return '<div class="action-list">' + actions.map(function(cycle) {
+    const tone = cycle.actionTone === 'warning' ? 'warning' : cycle.actionTone === 'success' ? 'success' : '';
+    const icon = cycle.actionKey === 'signature' ? '✎' : cycle.actionKey === 'meeting' ? '◉' : cycle.actionKey === 'compensation' ? '$' : '▤';
+    const progress = cycle.actionKey === 'manager-review' ? cycle.managerProgress : cycle.actionKey === 'self-evaluation' ? cycle.selfProgress : null;
+    const compensation = cycle.v31 && cycle.v31.compensationActionRequired
+      ? '<div class="task-subactions"><button class="button outline" onclick="openCompensationWorkflow(\'' +
+        escapeAttr(cycle.cycleId) +
+        '\')">Open Compensation Adjustment</button><span class="task-subaction-note">Then record the compensation decision in this portal.</span></div>'
+      : '';
+
+    return '<div class="action-card ' + tone + '"><div class="action-icon">' + icon + '</div><div><div class="action-title">' + escapeHtml(cycle.actionLabel) + '</div>' +
+      '<div class="action-meta"><strong>' + escapeHtml(cycle.employeeName) + '</strong> · ' + escapeHtml(cycle.reviewType) +
+      (progress ? '<br>' + progress.percent + '% complete · ' + progress.ratingsCompleted + ' of ' + progress.ratingsTotal + ' ratings' : '') +
+      (cycle.v31 && cycle.v31.managerDueDate && cycle.actionKey === 'manager-review' ? '<br>Due ' + escapeHtml(cycle.v31.managerDueDate) : '') +
+      (cycle.v31 && cycle.v31.employeeDueDate && cycle.actionKey === 'self-evaluation' ? '<br>Due ' + escapeHtml(cycle.v31.employeeDueDate) : '') +
+      '</div>' + compensation + '</div><button class="button ' + actionButtonClass(cycle.actionTone) + '" onclick="openCycleFromSummary(\'' + escapeAttr(cycle.cycleId) + '\',\'' + escapeAttr(cycle.actionKey) + '\')">' + escapeHtml(cycle.actionLabel) + '</button></div>';
+  }).join('') + '</div>';
+}
+
+function renderUpcomingList(cycles) {
+  if (!cycles.length) {
+    return '<div class="empty-state"><strong>No upcoming meetings</strong>Scheduled review meetings will appear here.</div>';
+  }
+  return '<div class="action-list">' + cycles.map(function(cycle) {
+    return '<button class="notification-item" onclick="openCycleFromSummary(\'' + escapeAttr(cycle.cycleId) + '\',\'overview\')"><span class="notification-dot" style="background:var(--info)"></span><span><span class="notification-title">' + escapeHtml(cycle.employeeName) + '</span><span class="notification-meta">' + escapeHtml(cycle.reviewMeetingDate) + ' · ' + escapeHtml(humanStatus(cycle.status)) + '</span></span></button>';
+  }).join('') + '</div>';
+}
+
+function renderCompactCycleTable(cycles) {
+  if (!cycles.length) return '<div class="empty-state"><strong>No reviews yet</strong>Your review history will appear here.</div>';
+  return '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Review</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>' +
+    cycles.map(function(cycle) {
+      return '<tr class="table-row" onclick="openCycleFromSummary(\'' + escapeAttr(cycle.cycleId) + '\',\'' + escapeAttr(cycle.actionKey || 'overview') + '\')"><td><strong>' + escapeHtml(cycle.employeeName) + '</strong><br><span class="field-help">' + escapeHtml(cycle.employeeJobTitle || cycle.managerName) + '</span></td><td>' + escapeHtml(cycle.reviewType) + '</td><td>' + statusPill(cycle.status) + '</td><td>' + escapeHtml(cycle.updatedAt) + '</td><td>›</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+function renderReviewsView() {
+  document.getElementById('reviewsView').innerHTML =
+    '<div class="page-header"><div><h1>Reviews</h1><p>Search and filter every review cycle available to you.</p></div></div>' +
+    '<div class="card"><div class="filter-bar"><input id="reviewSearch" placeholder="Search employee, manager, project…" oninput="applyReviewFilters()">' +
+    '<select id="reviewStatusFilter" onchange="applyReviewFilters()"><option value="">All statuses</option><option>Open for Input</option><option>Ready for Review Meeting</option><option>Review Meeting Open</option><option>Awaiting Signatures</option><option>Complete</option></select>' +
+    '<select id="reviewRoleFilter" onchange="applyReviewFilters()"><option value="">All roles</option><option value="Manager">Manager</option><option value="Employee">Employee</option><option value="HR">HR</option></select>' +
+    '<button class="button outline" onclick="clearReviewFilters()">Clear filters</button></div><div id="reviewsTable"></div></div>';
+  applyReviewFilters();
+}
+
+function applyReviewFilters() {
+  const search = (valueOf('reviewSearch') || '').toLowerCase();
+  const status = valueOf('reviewStatusFilter');
+  const role = valueOf('reviewRoleFilter');
+  const cycles = (state.cycles || []).filter(function(cycle) {
+    const haystack = [cycle.employeeName, cycle.managerName, cycle.departmentProject, cycle.reviewType].join(' ').toLowerCase();
+    return (!search || haystack.includes(search)) && (!status || cycle.status === status) && (!role || cycle.relationship.includes(role));
+  });
+
+  const target = document.getElementById('reviewsTable');
+  if (!target) return;
+  target.innerHTML = cycles.length ? renderDetailedCycleTable(cycles) : '<div class="empty-state"><strong>No matching reviews</strong>Try changing the search or filters.</div>';
+}
+
+function renderDetailedCycleTable(cycles) {
+  return '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Review</th><th>Status</th><th>Manager Review</th><th>Self-Evaluation</th><th>My Role</th><th>Action</th></tr></thead><tbody>' + cycles.map(function(cycle) {
+    return '<tr class="table-row" onclick="openCycleFromSummary(\'' + escapeAttr(cycle.cycleId) + '\',\'' + escapeAttr(cycle.actionKey) + '\')"><td><strong>' + escapeHtml(cycle.employeeName) + '</strong><br><span class="field-help">' + escapeHtml(cycle.employeeJobTitle || '') + '</span></td><td>' + escapeHtml(cycle.reviewType) + '<br><span class="field-help">Meeting: ' + escapeHtml(cycle.reviewMeetingDate) + '</span></td><td>' + statusPill(cycle.status) + '</td><td>' + escapeHtml(humanDocumentStatus(cycle.managerReviewStatus)) + '<br><span class="field-help">' + cycle.managerProgress.percent + '% complete</span></td><td>' + escapeHtml(humanDocumentStatus(cycle.selfEvaluationStatus)) + '<br><span class="field-help">' + cycle.selfProgress.percent + '% complete</span></td><td>' + escapeHtml(cycle.relationship) + '</td><td><button class="button ' + actionButtonClass(cycle.actionTone) + '" onclick="event.stopPropagation();openCycleFromSummary(\'' + escapeAttr(cycle.cycleId) + '\',\'' + escapeAttr(cycle.actionKey) + '\')">' + escapeHtml(cycle.actionLabel) + '</button></td></tr>';
+  }).join('') + '</tbody></table></div>';
+}
+
+function clearReviewFilters() {
+  setValue('reviewSearch', ''); setValue('reviewStatusFilter', ''); setValue('reviewRoleFilter', ''); applyReviewFilters();
+}
+
+function renderSignaturesView() {
+  const cycles = (state.cycles || []).filter(function(cycle) { return cycle.actionKey === 'signature'; });
+  document.getElementById('signatureNavCount').textContent = cycles.length;
+  document.getElementById('signatureNavCount').classList.toggle('hidden', !cycles.length);
+  document.getElementById('signaturesView').innerHTML =
+    '<div class="page-header"><div><h1>Signatures</h1><p>Review packets currently assigned to you for signature.</p></div></div>' +
+    '<div class="card">' + (cycles.length ? renderActionList(cycles) : '<div class="empty-state"><div class="empty-state-icon">✓</div><strong>No signatures waiting</strong>You have no outstanding review packets to sign.</div>') + '</div>';
+}
+
+
+function renderHelpView() {
+  const user = state && state.user ? state.user : {};
+  const roles = user.roles || [];
+  const roleLine = roles.length ? roles.join(', ') : 'Portal user';
+
+  document.getElementById('helpView').innerHTML =
+    '<div class="page-header"><div><h1>How-To Guide</h1><p>Step-by-step help for every stage of the AITHERAS review process. Your current role: ' + escapeHtml(roleLine) + '.</p></div></div>' +
+    '<div class="help-layout"><nav class="help-menu">' +
+    '<button onclick="scrollHelpTo(\'help-overview\')">Process Overview</button>' +
+    '<button onclick="scrollHelpTo(\'help-manager\')">Manager Guide</button>' +
+    '<button onclick="scrollHelpTo(\'help-employee\')">Employee Guide</button>' +
+    '<button onclick="scrollHelpTo(\'help-hr\')">HR Guide</button>' +
+    '<button onclick="scrollHelpTo(\'help-meeting\')">Review Meeting</button>' +
+    '<button onclick="scrollHelpTo(\'help-signatures\')">Signatures</button>' +
+    '<button onclick="scrollHelpTo(\'help-faq\')">Frequently Asked Questions</button>' +
+    '</nav><div>' +
+    '<section id="help-overview" class="help-section"><h2>How the Review Process Works</h2><p>The portal guides the review from the initial four-week notice through final signatures. The manager and employee prepare independently, meet to discuss both perspectives, and then sign one combined review packet.</p>' +
+    '<div class="process-steps">' +
+    '<div class="process-step"><strong>Review cycle launches</strong>Four weeks before the six-month or annual anniversary, the system emails HR, the manager, and the employee and creates one shared calendar event.</div>' +
+    '<div class="process-step"><strong>Independent preparation</strong>The manager completes the Manager Performance Review. The employee completes the Self-Evaluation. Neither sees the other submission yet.</div>' +
+    '<div class="process-step"><strong>Review meeting</strong>After both evaluations are submitted, the manager or HR opens the meeting workspace. Both evaluations become visible for discussion.</div>' +
+    '<div class="process-step"><strong>Finalization</strong>The manager records meeting outcomes, goals, and action steps. The compensation decision must also be recorded.</div>' +
+    '<div class="process-step"><strong>Signatures and records</strong>The manager and employee each sign once. HR signs last. Both final PDFs are emailed and remain available in the portal.</div>' +
+    '</div></section>' +
+
+    '<section id="help-manager" class="help-section"><h2>Manager Guide</h2>' +
+    '<h3>1. Open the assignment</h3><p>Use the link in the launch email or open the Action Center on your dashboard. The Manager Review tab opens directly.</p>' +
+    '<h3>2. Complete the manager review</h3><p>Rate every factor from 1–7 or choose N/A. Ratings of 1, 2, 6, or 7 require a supporting example. Drafts autosave while you work.</p>' +
+    '<h3>3. Review compensation</h3><p>Open the Compensation Adjustment workflow from your dashboard or the review Overview tab. Afterward, record either <strong>Adjustment Submitted</strong> or <strong>No Adjustment Recommended</strong> in the review portal.</p>' +
+    '<h3>4. Submit and seal</h3><p>Review the completeness summary and submit. Your ratings and comments are locked after submission.</p>' +
+    '<h3>5. Conduct the meeting</h3><p>Once both evaluations are submitted, open the Review Meeting tab at the actual meeting. Discuss rating gaps and record agreed goals and action steps.</p>' +
+    '<h3>6. Finalize and sign</h3><p>Complete the final checklist and release the packet. Sign once when prompted; your signature applies to both documents.</p></section>' +
+
+    '<section id="help-employee" class="help-section"><h2>Employee Guide</h2>' +
+    '<h3>1. Open your self-evaluation</h3><p>Use the email button or the Action Center. Only you and HR can view your draft before the meeting.</p>' +
+    '<h3>2. Complete every factor</h3><p>Use the rating definitions, describe accomplishments, identify growth areas, and propose goals. Drafts save automatically.</p>' +
+    '<h3>3. Submit before the deadline</h3><p>Submission seals your independent evaluation. Your manager still cannot view it until both evaluations are submitted and the meeting opens.</p>' +
+    '<h3>4. Participate in the meeting</h3><p>Review both evaluations, discuss differences, and add post-meeting comments when needed.</p>' +
+    '<h3>5. Sign once</h3><p>Your single electronic signature applies to both the manager review and your self-evaluation. Signing acknowledges the discussion and does not necessarily mean agreement with every statement.</p></section>' +
+
+    '<section id="help-hr" class="help-section"><h2>HR Guide</h2>' +
+    '<h3>Automation setup</h3><p>Keep EmployeeAssignments current, especially hire dates, manager emails, and the Review Automation checkbox. In Administration, verify the preview before enabling Live mode.</p>' +
+    '<h3>What the automation sends</h3><p>For each qualifying review, the system creates one cycle, one calendar event, and three workflow emails: HR confirmation, manager instructions, and employee instructions.</p>' +
+    '<h3>Monitoring</h3><p>Use the HR dashboard to see status, due dates, compensation decisions, meetings ready to begin, and outstanding signatures. HR can view both evaluations but cannot edit the participants’ original responses.</p>' +
+    '<h3>Manual launch</h3><p>Use Create Review Cycle Manually for off-cycle, promotion, corrective, or replacement reviews. Manual launches use the same emails and calendar workflow.</p></section>' +
+
+    '<section id="help-meeting" class="help-section"><h2>Running the Review Meeting</h2><p>Do not open the meeting early. Opening it makes both independent evaluations visible to the manager and employee.</p>' +
+    '<div class="process-steps">' +
+    '<div class="process-step"><strong>Review accomplishments first</strong>Start with major contributions and areas of agreement.</div>' +
+    '<div class="process-step"><strong>Discuss rating gaps</strong>The comparison screen highlights differences of two or more points. Expand the comments and discuss the evidence behind each perspective.</div>' +
+    '<div class="process-step"><strong>Set practical goals</strong>Record clear expectations, development goals, manager support, and action steps.</div>' +
+    '<div class="process-step"><strong>Invite employee comments</strong>The employee should have a meaningful opportunity to respond before the packet is finalized.</div>' +
+    '</div></section>' +
+
+    '<section id="help-signatures" class="help-section"><h2>Signatures and Final Records</h2><p>The manager and employee may sign in either order. HR is notified only after both participants sign. HR’s final signature creates both PDFs and distributes them to the employee, manager, and HR.</p><p>One signature per person covers both final documents. Users do not need direct access to the underlying Google Sheet, templates, or Drive folder.</p></section>' +
+
+    '<section id="help-faq" class="help-section"><h2>Frequently Asked Questions</h2>' +
+    '<div class="faq-item"><strong>Can the manager see the self-evaluation before submitting?</strong><p>No. The evaluations remain independent until both are submitted and the meeting workspace is opened.</p></div>' +
+    '<div class="faq-item"><strong>What does a rating of 4 mean?</strong><p>Four means the employee fully and consistently meets expectations. It is a successful rating, not a weak one.</p></div>' +
+    '<div class="faq-item"><strong>What happens if I close the browser?</strong><p>Drafts autosave to the server. Unsynced changes are also kept in the current browser and restored when you reopen the review.</p></div>' +
+    '<div class="faq-item"><strong>What if no compensation change is recommended?</strong><p>The manager records No Adjustment Recommended. A formal adjustment form is not required in that case.</p></div>' +
+    '<div class="faq-item"><strong>Can HR edit the evaluations?</strong><p>HR can view both for oversight but cannot change the manager’s or employee’s original submitted evaluation.</p></div>' +
+    '<div class="faq-item"><strong>Why is there a calendar event and an email?</strong><p>The email gives role-specific instructions and direct links. The single shared calendar event keeps the meeting date visible to HR, the manager, and the employee.</p></div>' +
+    '</section></div></div>';
+}
+
+function scrollHelpTo(id) {
+  const section = document.getElementById(id);
+  if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function maybeShowWelcomeGuide() {
+  if (!state || !state.v31 || !state.v31.helpCenterEnabled) return;
+  const key = 'aitheras-review-v31-welcome:' + state.currentUserEmail;
+  if (localStorage.getItem(key)) return;
+
+  const roles = (state.user && state.user.roles) || [];
+  let body = '<p>The portal now guides each review from the four-week launch notice through final signatures.</p><ul><li>Use the Action Center for the next required step.</li><li>Drafts save automatically.</li><li>Contextual guidance appears inside each review cycle.</li><li>The How-To Guide is always available from the left navigation.</li></ul>';
+
+  if (roles.includes('Manager')) {
+    body += '<p><strong>Manager reminder:</strong> Complete both the manager review and the compensation decision before the packet is finalized.</p>';
+  }
+
+  openModal({
+    title: 'Welcome to AITHERAS Performance',
+    body: body,
+    confirmLabel: 'Got It',
+    tone: 'primary',
+    onConfirm: function() {
+      localStorage.setItem(key, '1');
+      closeModal();
+    }
+  });
+}
+
+function renderAdminView() {
+  if (!state || !state.isHr) {
+    document.getElementById('adminView').innerHTML = '';
+    return;
+  }
+
+  const automation =
+    (state.v31 && state.v31.automation) || {};
+
+  document.getElementById('adminView').innerHTML =
+    '<div class="page-header"><div><h1>Administration</h1><p>Manage review automation, launch cycles, and monitor the workflow.</p></div></div>' +
+    renderAutomationPanel(automation) +
+    '<div class="card"><div class="card-header"><div><h2>Create Review Cycle Manually</h2><p>This sends the full launch package: HR notice, manager instructions, employee instructions, and one shared calendar event.</p></div></div>' +
+    '<form id="cycleForm" onsubmit="submitNewCycle(event)"><div class="form-grid">' +
+    '<div class="full"><label for="assignmentSelect">Employee / Manager Assignment *</label><select id="assignmentSelect" required onchange="applyAssignment()"><option value="">Select an active assignment</option></select></div>' +
+    '<div><label for="reviewType">Review Type *</label><select id="reviewType" required><option value="">Select</option><option>Initial Review</option><option>6-Month Review</option><option>1-Year Review</option><option>Annual Review</option><option>Promotion Review</option><option>Other</option></select></div>' +
+    '<div><label for="reviewMeetingDate">Scheduled Review Meeting Date *</label><input id="reviewMeetingDate" type="date" required></div>' +
+    '<div><label for="reviewPeriodStart">Review Period Start *</label><input id="reviewPeriodStart" type="date" required></div>' +
+    '<div><label for="reviewPeriodEnd">Review Period End *</label><input id="reviewPeriodEnd" type="date" required></div>' +
+    '<div><label for="employeeName">Employee Name *</label><input id="employeeName" readonly required></div>' +
+    '<div><label for="employeeEmail">Employee Email *</label><input id="employeeEmail" readonly required></div>' +
+    '<div><label for="employeeJobTitle">Job Title *</label><input id="employeeJobTitle" required></div>' +
+    '<div><label for="departmentProject">Department / Project *</label><input id="departmentProject" required></div>' +
+    '<div><label for="hireDate">Hire Date</label><input id="hireDate" type="date"></div>' +
+    '<div><label for="managerName">Manager Name *</label><input id="managerName" readonly required></div>' +
+    '<div><label for="managerEmail">Manager Email *</label><input id="managerEmail" readonly required></div></div>' +
+    '<div class="button-row" style="margin-top:18px"><button id="createCycleButton" class="button primary" type="submit">Create, Notify, and Add Calendar Event</button></div></form></div>';
+
+  populateAssignments();
+}
+
+function renderAutomationPanel(automation) {
+  const mode = automation.mode || 'Preview';
+  const modeClass = mode.toLowerCase();
+  const triggerText = automation.triggerInstalled
+    ? 'Daily trigger installed'
+    : 'No daily trigger installed';
+  const compensationConfigured = !!automation.compensationAdjustmentUrl;
+
+  return '<div class="automation-hero">' +
+    '<div class="card"><div class="card-header"><div><h2>Review Automation</h2><p>Automatically launches six-month and annual reviews four weeks before the employee anniversary.</p></div><span class="automation-mode ' +
+    escapeAttr(modeClass) +
+    '">' + escapeHtml(mode) + '</span></div>' +
+    '<div class="automation-checklist">' +
+    '<div class="automation-check"><span>✓</span><span><strong>Schedule:</strong> 6-month review and 1-year/annual review based on hire date.</span></div>' +
+    '<div class="automation-check"><span>✓</span><span><strong>Launch:</strong> HR email, manager email, employee email, and one shared calendar event.</span></div>' +
+    '<div class="automation-check"><span>✓</span><span><strong>Meeting:</strong> ' +
+    escapeHtml(formatHourLabel(automation.eventStartHour || 12)) +
+    ' for ' +
+    escapeHtml(String(automation.eventDurationMinutes || 60)) +
+    ' minutes; weekend anniversaries shift to Monday when enabled.</span></div>' +
+    '<div class="automation-check"><span>' +
+    (automation.triggerInstalled ? '✓' : '△') +
+    '</span><span><strong>Trigger:</strong> ' +
+    escapeHtml(triggerText) +
+    (automation.lastRun ? ' · Last run ' + escapeHtml(formatLocalDateTime(automation.lastRun)) : '') +
+    '</span></div>' +
+    '<div class="automation-check"><span>' +
+    (compensationConfigured ? '✓' : '!') +
+    '</span><span><strong>Compensation app:</strong> ' +
+    (compensationConfigured ? 'Connected' : 'URL still needs to be added below') +
+    '</span></div></div>' +
+    '<div class="button-row" style="margin-top:17px">' +
+    (mode === 'Live'
+      ? '<button class="button warning" onclick="confirmPauseAutomation()">Pause Automation</button><button class="button success" onclick="runAutomationNow()">Run Now</button>'
+      : '<button class="button success" onclick="confirmEnableAutomation()">Enable Live Automation</button>') +
+    '<button class="button outline" onclick="refreshAutomationPreview()">Refresh Preview</button></div></div>' +
+    '<div class="card"><div class="card-header"><div><h2>Next Scheduled Reviews</h2><p>Preview only. No emails are sent from this table.</p></div></div>' +
+    '<div id="automationPreview">' + renderAutomationPreviewTable(automation.preview || []) + '</div></div></div>' +
+    '<div class="card"><div class="card-header"><div><h2>Automation Settings</h2><p>These settings control when cycles launch, when forms are due, and where calendar events are created.</p></div></div>' +
+    '<form id="automationSettingsForm" onsubmit="saveAutomationSettings(event)"><div class="settings-grid">' +
+    '<div><label for="autoNoticeDays">Notice before review (days)</label><input id="autoNoticeDays" type="number" min="7" max="60" value="' + escapeAttr(automation.noticeDays || 28) + '"><div class="field-help">Recommended: 28 days.</div></div>' +
+    '<div><label for="autoFormDueDays">Forms due before meeting (days)</label><input id="autoFormDueDays" type="number" min="1" max="21" value="' + escapeAttr(automation.formDueDays || 7) + '"></div>' +
+    '<div><label for="autoTriggerHour">Daily automation hour</label><input id="autoTriggerHour" type="number" min="0" max="23" value="' + escapeAttr(automation.triggerHour || 8) + '"><div class="field-help">Uses 24-hour time.</div></div>' +
+    '<div><label for="autoEventStartHour">Calendar event start hour</label><input id="autoEventStartHour" type="number" min="0" max="23" value="' + escapeAttr(automation.eventStartHour || 12) + '"></div>' +
+    '<div><label for="autoEventDuration">Event duration (minutes)</label><input id="autoEventDuration" type="number" min="15" max="240" value="' + escapeAttr(automation.eventDurationMinutes || 60) + '"></div>' +
+    '<div><label for="autoCalendarId">Calendar ID</label><input id="autoCalendarId" value="' + escapeAttr(automation.calendarId || 'primary') + '"><div class="field-help">Use “primary” for the deployment owner’s calendar.</div></div>' +
+    '<div><label for="autoEmailReminder">Calendar email reminder (days)</label><input id="autoEmailReminder" type="number" min="0" max="28" value="' + escapeAttr(automation.eventEmailReminderDays || 7) + '"></div>' +
+    '<div><label for="autoPopupReminder">Calendar pop-up reminder (hours)</label><input id="autoPopupReminder" type="number" min="0" max="672" value="' + escapeAttr(automation.eventPopupReminderHours || 24) + '"></div>' +
+    '<div class="wide"><label for="compensationAdjustmentUrl">Compensation Adjustment app URL</label><input id="compensationAdjustmentUrl" type="url" placeholder="https://..." value="' + escapeAttr(automation.compensationAdjustmentUrl || '') + '"><div class="field-help">Managers see this link in their dashboard, cycle workspace, and launch email.</div></div>' +
+    '<div><label class="modal-check"><input id="shiftWeekendMeetings" type="checkbox" ' + (automation.shiftWeekendMeetings ? 'checked' : '') + '><span>Shift Saturday/Sunday meetings to Monday</span></label></div>' +
+    '<div><label class="modal-check"><input id="compensationDecisionRequired" type="checkbox" ' + (automation.compensationDecisionRequired ? 'checked' : '') + '><span>Require a compensation decision before signatures</span></label></div>' +
+    '</div><div class="button-row" style="margin-top:18px"><button id="saveAutomationSettingsButton" class="button primary" type="submit">Save Automation Settings</button></div></form></div>';
+}
+
+function renderAutomationPreviewTable(candidates) {
+  if (!candidates.length) {
+    return '<div class="empty-state"><strong>No reviews ready to launch</strong>No six-month or annual review falls inside the current automation window.</div>';
+  }
+
+  return '<div class="table-wrap"><table class="preview-table"><thead><tr><th>Employee</th><th>Review</th><th>Review date</th><th>Meeting date</th><th>Launch status</th></tr></thead><tbody>' +
+    candidates.map(function(item) {
+      return '<tr><td><strong>' + escapeHtml(item.employeeName) + '</strong><br><span class="field-help">' + escapeHtml(item.managerName) + '</span></td><td>' + escapeHtml(item.reviewType) + '</td><td>' + escapeHtml(formatIsoDateForDisplay(item.reviewDate)) + '<br><span class="field-help">' + escapeHtml(String(item.daysUntilReview)) + ' days away</span></td><td>' + escapeHtml(formatIsoDateForDisplay(item.meetingDate)) + '</td><td>' + escapeHtml(item.status) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+async function saveAutomationSettings(event) {
+  event.preventDefault();
+  const button = document.getElementById('saveAutomationSettingsButton');
+  setButtonBusy(button, true, 'Saving settings…');
+
+  const payload = {
+    noticeDays: Number(valueOf('autoNoticeDays')),
+    formDueDays: Number(valueOf('autoFormDueDays')),
+    triggerHour: Number(valueOf('autoTriggerHour')),
+    eventStartHour: Number(valueOf('autoEventStartHour')),
+    eventDurationMinutes: Number(valueOf('autoEventDuration')),
+    calendarId: valueOf('autoCalendarId'),
+    eventEmailReminderDays: Number(valueOf('autoEmailReminder')),
+    eventPopupReminderHours: Number(valueOf('autoPopupReminder')),
+    compensationAdjustmentUrl: valueOf('compensationAdjustmentUrl'),
+    shiftWeekendMeetings: document.getElementById('shiftWeekendMeetings').checked,
+    compensationDecisionRequired: document.getElementById('compensationDecisionRequired').checked
+  };
+
+  try {
+    const result = await server('saveReviewAutomationSettings', payload);
+    state.v31.automation = result.automation;
+    state.v31.compensationAdjustmentUrl = result.automation.compensationAdjustmentUrl;
+    state.v31.compensationDecisionRequired = result.automation.compensationDecisionRequired;
+    showToast('success', 'Automation settings saved', result.message);
+    renderAdminView();
+  } catch (error) {
+    showToast('error', 'Could not save settings', errorMessage(error));
+    setButtonBusy(button, false, 'Save Automation Settings');
+  }
+}
+
+function confirmEnableAutomation() {
+  openModal({
+    title: 'Enable live review automation?',
+    body: '<p>Once enabled, the daily trigger can create review cycles, send three workflow emails, and create one Google Calendar event for each qualifying review.</p><p>Only enable this after the preview and Compensation Adjustment URL are correct.</p>',
+    confirmLabel: 'Enable Live Automation',
+    tone: 'success',
+    checks: [
+      'I reviewed the upcoming-review preview.',
+      'The employee hire dates and manager assignments are accurate.',
+      'The Compensation Adjustment app URL is correct.'
+    ],
+    onConfirm: function() { changeAutomationMode('Live'); }
+  });
+}
+
+function confirmPauseAutomation() {
+  openModal({
+    title: 'Pause review automation?',
+    body: '<p>The daily trigger will be removed. Existing review cycles and calendar events will not be changed.</p>',
+    confirmLabel: 'Pause Automation',
+    tone: 'warning',
+    onConfirm: function() { changeAutomationMode('Paused'); }
+  });
+}
+
+async function changeAutomationMode(mode) {
+  closeModal();
+
+  try {
+    const result = await server('setReviewAutomationMode', mode);
+    state.v31.automation = result.automation;
+    showToast(mode === 'Live' ? 'success' : 'warning', 'Automation updated', result.message);
+    renderAdminView();
+  } catch (error) {
+    showToast('error', 'Could not update automation', errorMessage(error));
+  }
+}
+
+async function refreshAutomationPreview() {
+  try {
+    const result = await server('getReviewAutomationPreview', Number((state.v31.automation || {}).noticeDays || 28));
+    state.v31.automation.preview = result.candidates;
+    document.getElementById('automationPreview').innerHTML = renderAutomationPreviewTable(result.candidates);
+    showToast('info', 'Preview refreshed', result.candidates.length + ' review(s) currently fall inside the automation window.');
+  } catch (error) {
+    showToast('error', 'Could not refresh preview', errorMessage(error));
+  }
+}
+
+async function runAutomationNow() {
+  openModal({
+    title: 'Run live review automation now?',
+    body: '<p>This will immediately create and send every qualifying review shown in the preview that has not already been launched.</p>',
+    confirmLabel: 'Run Automation',
+    tone: 'success',
+    checks: ['I reviewed the preview and am ready to send these review cycles.'],
+    onConfirm: async function() {
+      closeModal();
+      try {
+        const result = await server('runReviewAutomationNow');
+        showToast(result.failed ? 'warning' : 'success', 'Automation run complete', result.message);
+        await refreshApplication('', '');
+        navigate('admin');
+      } catch (error) {
+        showToast('error', 'Automation run failed', errorMessage(error));
+      }
+    }
+  });
+}
+
+function formatHourLabel(hour) {
+  const value = Number(hour || 0);
+  const suffix = value >= 12 ? 'PM' : 'AM';
+  const display = value % 12 || 12;
+  return display + ':00 ' + suffix + ' ET';
+}
+
+function formatIsoDateForDisplay(value) {
+  if (!value) return '';
+  const parts = String(value).split('-');
+  if (parts.length !== 3) return String(value);
+  return Number(parts[1]) + '/' + Number(parts[2]) + '/' + parts[0];
+}
+
+function populateAssignments() {
+  const select = document.getElementById('assignmentSelect');
+  if (!select || !state) return;
+  select.innerHTML = '<option value="">Select an active assignment</option>';
+  (state.assignments || []).forEach(function(item, index) {
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = item.employeeName + ' — Manager: ' + item.managerName;
+    select.appendChild(option);
+  });
+}
+
+function applyAssignment() {
+  const index = valueOf('assignmentSelect');
+  if (index === '') return;
+  const item = state.assignments[Number(index)];
+  setValue('employeeName', item.employeeName);
+  setValue('employeeEmail', item.employeeEmail);
+  setValue('employeeJobTitle', item.employeeJobTitle);
+  setValue('departmentProject', item.departmentProject);
+  setValue('hireDate', toDateInput(item.hireDate));
+  setValue('managerName', item.managerName);
+  setValue('managerEmail', item.managerEmail);
+}
+
+async function submitNewCycle(event) {
+  event.preventDefault();
+  const button = document.getElementById('createCycleButton');
+  setButtonBusy(button, true, 'Creating review cycle…');
+  const payload = {
+    reviewType: valueOf('reviewType'), reviewPeriodStart: valueOf('reviewPeriodStart'), reviewPeriodEnd: valueOf('reviewPeriodEnd'), reviewMeetingDate: valueOf('reviewMeetingDate'),
+    employeeName: valueOf('employeeName'), employeeEmail: valueOf('employeeEmail'), employeeJobTitle: valueOf('employeeJobTitle'), departmentProject: valueOf('departmentProject'), hireDate: valueOf('hireDate'),
+    managerName: valueOf('managerName'), managerEmail: valueOf('managerEmail')
+  };
+  try {
+    const result = await server('createReviewCycle', payload);
+    showToast('success', 'Review cycle created', result.message);
+    await refreshApplication(result.cycleId, 'overview');
+  } catch (error) {
+    showToast('error', 'Could not create review cycle', errorMessage(error));
+    setButtonBusy(button, false, 'Create, Notify, and Add Calendar Event');
+  }
+}
+
+function openCycleFromSummary(cycleId, action) {
+  markNotificationReadByCycle(cycleId, action);
+  loadCycle(cycleId, action);
+}
+
+async function loadCycle(cycleId, action) {
+  preferredCycleAction = action || 'overview';
+  currentView = 'cycle';
+  showCycleSkeleton();
+  navigate('cycle');
+  try {
+    const result = await server('getReviewCycle', cycleId);
+    openCycle(result.cycle, action || 'overview');
+  } catch (error) {
+    renderCycleError(error, cycleId, action);
+  }
+}
+
+function openCycle(cycle, action) {
+  currentCycle = cycle;
+  initializeDrafts(cycle);
+  initializeMeetingDraft(cycle);
+  preferredCycleAction = action || cycle.primaryAction.key || 'overview';
+  currentCycleTab = actionToTab(preferredCycleAction, cycle);
+  renderCycleWorkspace();
+  navigate('cycle');
+  setTopbar(cycle.employeeName + ' — ' + cycle.reviewType, humanStatus(cycle.status));
+
+  if (preferredCycleAction === 'compensation') {
+    setTimeout(function() {
+      openCompensationWorkflow(cycle.cycleId);
+    }, 350);
+  }
+
+  if (!deepLinkConsumed && INITIAL_CYCLE_ID) {
+    deepLinkConsumed = true;
+    showToast('info', 'Review opened', 'You were taken directly to the next action for this review.');
+  }
+}
+
+function renderCycleWorkspace() {
+  if (!currentCycle) return;
+  const cycle = currentCycle;
+  const tabs = buildCycleTabs(cycle);
+  document.getElementById('cycleView').innerHTML =
+    '<div class="cycle-hero"><div class="cycle-hero-top"><div><button class="breadcrumb-button" onclick="navigate(\'reviews\')">‹ Back to reviews</button><h1>' + escapeHtml(cycle.employeeName) + ' — ' + escapeHtml(cycle.reviewType) + '</h1><p>' + escapeHtml(cycle.employeeJobTitle) + ' · ' + escapeHtml(cycle.departmentProject) + ' · Meeting ' + escapeHtml(cycle.reviewMeetingDate) + '</p></div>' +
+    '<div class="cycle-hero-actions button-row">' + statusPill(cycle.status) + renderCycleHeaderActions(cycle) + '</div></div>' + renderTimeline(cycle.lifecycle) + '</div>' +
+    '<div class="cycle-tabs">' + tabs.map(function(tab) { return '<button class="cycle-tab ' + (tab.key === currentCycleTab ? 'active' : '') + '" onclick="activateCycleTab(\'' + tab.key + '\')">' + escapeHtml(tab.label) + (tab.attention ? '<span class="tab-dot"></span>' : '') + '</button>'; }).join('') + '</div>' +
+    '<div id="cycleTabContent"></div>';
+  renderActiveCycleTab();
+}
+
+function renderCycleHeaderActions(cycle) {
+  let html = '';
+  if (cycle.canStartMeeting) html += '<button class="button success" onclick="confirmStartMeeting()">Start Review Meeting</button>';
+  if (cycle.canReleaseSignatures) html += '<button class="button warning" onclick="openReleaseModal()">Finalize & Release</button>';
+  if (cycle.isHr && cycle.v31 && cycle.v31.noticeSentAt && cycle.status !== 'Complete') html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
+  if (cycle.canDownloadManager) html += '<button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button>';
+  if (cycle.canDownloadSelf) html += '<button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button>';
+  return html;
+}
+
+async function resendLaunchInstructions() {
+  openModal({
+    title: 'Resend launch instructions?',
+    body: '<p>HR, the manager, and the employee will each receive their original role-specific launch email again. The calendar event will not be duplicated.</p>',
+    confirmLabel: 'Resend Emails',
+    tone: 'primary',
+    onConfirm: async function() {
+      closeModal();
+      try {
+        const result = await server('resendReviewLaunchEmails', currentCycle.cycleId);
+        showToast('success', 'Instructions resent', result.message);
+      } catch (error) {
+        showToast('error', 'Could not resend instructions', errorMessage(error));
+      }
+    }
+  });
+}
+
+function renderTimeline(stages) {
+  return '<div class="timeline">' + (stages || []).map(function(stage) {
+    return '<div class="timeline-stage ' + (stage.complete ? 'complete ' : '') + (stage.current ? 'current' : '') + '"><span class="timeline-dot"></span><span class="timeline-label">' + escapeHtml(stage.label) + '</span></div>';
+  }).join('') + '</div>';
+}
+
+function buildCycleTabs(cycle) {
+  return [
+    { key: 'overview', label: 'Overview' },
+    { key: 'manager', label: 'Manager Review', attention: cycle.canEditManagerReview },
+    { key: 'self', label: 'Self-Evaluation', attention: cycle.canEditSelfEvaluation },
+    { key: 'meeting', label: 'Review Meeting', attention: cycle.canStartMeeting || cycle.status === 'Review Meeting Open' },
+    { key: 'signatures', label: 'Signatures', attention: cycle.signatureTasks.length > 0 }
+  ];
+}
+
+function activateCycleTab(tab) {
+  flushVisibleDraftToState();
+  currentCycleTab = tab;
+  renderCycleWorkspace();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderActiveCycleTab() {
+  const target = document.getElementById('cycleTabContent');
+  if (!target || !currentCycle) return;
+  if (currentCycleTab === 'overview') target.innerHTML = renderCycleOverview(currentCycle);
+  if (currentCycleTab === 'manager') renderReviewTab('manager', target);
+  if (currentCycleTab === 'self') renderReviewTab('self', target);
+  if (currentCycleTab === 'meeting') renderMeetingTab(target);
+  if (currentCycleTab === 'signatures') renderSignaturesTab(target);
+  updateGlobalSaveIndicator();
+}
+
+function renderCycleOverview(cycle) {
+  const summary = [
+    ['Employee', cycle.employeeName + ' (' + cycle.employeeEmail + ')'],
+    ['Job Title', cycle.employeeJobTitle],
+    ['Department / Project', cycle.departmentProject],
+    ['Manager', cycle.managerName + ' (' + cycle.managerEmail + ')'],
+    ['Review Period', cycle.reviewPeriodStart + ' – ' + cycle.reviewPeriodEnd],
+    ['Scheduled Meeting', cycle.reviewMeetingDate],
+    ['Manager Review', humanDocumentStatus(cycle.managerReviewStatus)],
+    ['Self-Evaluation', humanDocumentStatus(cycle.selfEvaluationStatus)],
+    ['Manager Form Due', cycle.v31 && cycle.v31.managerDueDate ? cycle.v31.managerDueDate : 'Not set'],
+    ['Employee Form Due', cycle.v31 && cycle.v31.employeeDueDate ? cycle.v31.employeeDueDate : 'Not set'],
+    ['Calendar Event', cycle.v31 && cycle.v31.calendarEventId ? 'Created' : 'Not created'],
+    ['Meeting Opened', cycle.meetingOpenedAt || 'Not yet'],
+    ['Completed', cycle.completedAt || 'Not yet']
+  ];
+
+  return renderCycleGuidance(cycle) +
+    '<div class="review-status-grid">' +
+    renderProgressStatusCard(
+      'Manager Performance Review',
+      cycle.managerReviewProgress,
+      cycle.managerReviewStatus,
+      cycle.managerReviewVisible,
+      cycle.canEditManagerReview ? 'manager-review' : 'manager'
+    ) +
+    renderProgressStatusCard(
+      'Employee Self-Evaluation',
+      cycle.selfEvaluationProgress,
+      cycle.selfEvaluationStatus,
+      cycle.selfEvaluationVisible,
+      cycle.canEditSelfEvaluation ? 'self-evaluation' : 'self'
+    ) +
+    '</div>' +
+    renderCompensationCard(cycle) +
+    (cycle.status === 'Open for Input'
+      ? '<div class="privacy-banner"><strong>Independent preparation is active.</strong> The manager and employee cannot see each other’s responses until both are submitted and the meeting is opened.</div>'
+      : '') +
+    '<div class="card"><div class="card-header"><div><h2>Review Details</h2><p>Core information for this review cycle.</p></div>' +
+    (cycle.primaryAction && cycle.primaryAction.required
+      ? '<button class="button ' + actionButtonClass(cycle.primaryAction.tone) + '" onclick="handleCycleAction(\'' +
+        escapeAttr(cycle.primaryAction.key) +
+        '\')">' +
+        escapeHtml(cycle.primaryAction.label) +
+        '</button>'
+      : '') +
+    '</div><div class="summary-grid">' +
+    summary.map(function(row) {
+      return '<div class="summary-label">' +
+        escapeHtml(row[0]) +
+        '</div><div>' +
+        escapeHtml(row[1]) +
+        '</div>';
+    }).join('') +
+    '</div></div>';
+}
+
+function renderCycleGuidance(cycle) {
+  const items = cycle.v31 && cycle.v31.guidance
+    ? cycle.v31.guidance
+    : [];
+
+  if (!items.length) return '';
+
+  return '<div class="guidance-stack">' +
+    items.map(function(item) {
+      return '<div class="guidance-card ' +
+        escapeAttr(item.tone || 'info') +
+        '"><div><h3>' +
+        escapeHtml(item.title) +
+        '</h3><p>' +
+        escapeHtml(item.message) +
+        '</p></div>' +
+        (item.actionLabel
+          ? '<button class="button outline" onclick="handleCycleAction(\'' +
+            escapeAttr(item.action || 'overview') +
+            '\')">' +
+            escapeHtml(item.actionLabel) +
+            '</button>'
+          : '') +
+        '</div>';
+    }).join('') +
+    '</div>';
+}
+
+function renderCompensationCard(cycle) {
+  if (
+    !cycle.v31 ||
+    !cycle.v31.compensationRequired ||
+    (!cycle.isManager && !cycle.isHr)
+  ) {
+    return '';
+  }
+
+  const complete = cycle.v31.compensationComplete;
+  const statusClass = complete ? ' complete' : '';
+  const decision = cycle.v31.compensationDecision || 'Pending';
+
+  return '<div class="card compensation-card"><div class="card-header"><div><h2>Compensation Decision</h2><p>Complete the compensation review alongside the manager performance review.</p></div><span class="compensation-status' +
+    statusClass +
+    '">' +
+    escapeHtml(decision) +
+    '</span></div>' +
+    '<p class="field-help">Open the Compensation Adjustment workflow when a change is recommended. Then record the decision here so the review packet can move to signatures.</p>' +
+    (cycle.v31.compensationDecisionNotes
+      ? '<div class="notice" style="margin-top:12px"><strong>Recorded note:</strong> ' +
+        escapeHtml(cycle.v31.compensationDecisionNotes) +
+        '</div>'
+      : '') +
+    (cycle.v31.canManageCompensation
+      ? '<div class="button-row" style="margin-top:15px">' +
+        (cycle.v31.compensationAdjustmentUrl
+          ? '<button class="button primary" onclick="openCompensationWorkflow(\'' +
+            escapeAttr(cycle.cycleId) +
+            '\')">Open Compensation Adjustment</button>'
+          : '<button class="button outline" disabled>Compensation URL Not Configured</button>') +
+        '<button class="button outline" onclick="recordCompensationChoice(\'' +
+        escapeAttr(cycle.cycleId) +
+        '\',\'No Adjustment Recommended\')">No Adjustment Recommended</button>' +
+        '<button class="button outline" onclick="recordCompensationChoice(\'' +
+        escapeAttr(cycle.cycleId) +
+        '\',\'Adjustment Submitted\')">Mark Adjustment Submitted</button>' +
+        '</div>'
+      : '') +
+    '</div>';
+}
+
+function handleCycleAction(action) {
+  if (action === 'compensation') {
+    openCompensationWorkflow(currentCycle.cycleId);
+    return;
+  }
+
+  activateCycleTab(actionToTab(action, currentCycle));
+}
+
+function renderProgressStatusCard(title, progress, status, visible, action) {
+  return '<div class="review-status-card"><div class="card-header"><div><h3>' + escapeHtml(title) + '</h3><p>' + escapeHtml(humanDocumentStatus(status)) + '</p></div>' + statusPillForDocument(status) + '</div>' +
+    '<div class="progress-track"><div class="progress-fill" style="width:' + progress.percent + '%"></div></div><div class="field-help" style="margin-top:7px">' + progress.percent + '% complete · ' + progress.ratingsCompleted + ' of ' + progress.ratingsTotal + ' ratings</div>' +
+    '<div class="button-row" style="margin-top:13px"><button class="button outline" onclick="activateCycleTab(\'' + (action === 'manager-review' ? 'manager' : action === 'self-evaluation' ? 'self' : action) + '\')">' + (visible ? 'Open' : 'View status') + '</button></div></div>';
+}
+
+function renderReviewTab(type, target) {
+  const isManager = type === 'manager';
+  const visible = isManager ? currentCycle.managerReviewVisible : currentCycle.selfEvaluationVisible;
+  const editable = isManager ? currentCycle.canEditManagerReview : currentCycle.canEditSelfEvaluation;
+  const title = isManager ? 'Manager Performance Review' : 'Employee Self-Evaluation';
+
+  if (!visible) {
+    target.innerHTML = '<div class="card"><div class="empty-state"><div class="empty-state-icon">◉</div><strong>' + title + ' is private</strong>This evaluation remains hidden until both participants submit and the review meeting is opened.</div></div>';
+    return;
+  }
+
+  if (!editable) {
+    const review = isManager ? currentCycle.managerReview : currentCycle.selfEvaluation;
+    target.innerHTML = '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>' + escapeHtml(humanDocumentStatus(isManager ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus)) + '</p></div></div>' + renderReadOnlyReview(review, type) + '</div>';
+    return;
+  }
+
+  renderReviewEditor(type, target);
+}
+
+function initializeDrafts(cycle) {
+  if (cycle.managerReview) {
+    editorState.manager.draft = restoreLocalDraft('manager', cycle.managerReview);
+    editorState.manager.lastSavedAt = cycle.managerReview.lastSavedAt || '';
+    editorState.manager.validation = validateReviewDraft(editorState.manager.draft, 'manager');
+    editorState.manager.showErrors = false;
+    if (editorState.manager.dirty && cycle.canEditManagerReview) {
+      clearTimeout(editorState.manager.autosaveTimer);
+      editorState.manager.autosaveTimer = setTimeout(function() { autosaveReview('manager'); }, 800);
+    }
+  }
+  if (cycle.selfEvaluation) {
+    editorState.self.draft = restoreLocalDraft('self', cycle.selfEvaluation);
+    editorState.self.lastSavedAt = cycle.selfEvaluation.lastSavedAt || '';
+    editorState.self.validation = validateReviewDraft(editorState.self.draft, 'self');
+    editorState.self.showErrors = false;
+    if (editorState.self.dirty && cycle.canEditSelfEvaluation) {
+      clearTimeout(editorState.self.autosaveTimer);
+      editorState.self.autosaveTimer = setTimeout(function() { autosaveReview('self'); }, 800);
+    }
+  }
+}
+
+function restoreLocalDraft(type, serverDraft) {
+  const clone = deepClone(serverDraft || {});
+  const key = draftStorageKey(type);
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) || 'null');
+    const serverTime = new Date(serverDraft.lastSavedAt || 0).getTime();
+    const localTime = new Date(stored && stored.savedAt || 0).getTime();
+    if (stored && stored.data && localTime > serverTime) {
+      editorState[type].dirty = true;
+      setTimeout(function() { showToast('warning', 'Draft restored', 'Unsynced work from this browser was restored and will autosave.'); }, 300);
+      return stored.data;
+    }
+  } catch (error) {}
+  editorState[type].dirty = false;
+  return clone;
+}
+
+function renderReviewEditor(type, target) {
+  const model = editorState[type];
+  const progress = calculateClientProgress(model.draft, type);
+  const steps = EDITOR_STEPS[type];
+  const title = type === 'manager' ? 'Manager Performance Review' : 'Employee Self-Evaluation';
+
+  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>Drafts save automatically while you work. Submission permanently seals your independent evaluation.</p></div>' + statusPillForDocument(type === 'manager' ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus) + '</div>' +
+    '<div class="editor-shell"><aside class="editor-sidebar"><div class="progress-block"><div id="editorProgressNumber" class="editor-progress-number">' + progress.percent + '%</div><div class="progress-track"><div id="editorProgressFill" class="progress-fill" style="width:' + progress.percent + '%"></div></div><div id="editorProgressMeta" class="editor-progress-meta">' + progress.ratingsCompleted + ' of ' + progress.ratingsTotal + ' ratings · ' + progress.errors.length + ' required item(s) missing</div></div>' +
+    steps.map(function(step, index) { return '<button class="editor-step-button ' + (index === model.step ? 'active ' : '') + (isStepComplete(model.draft, type, index) ? 'complete' : '') + '" onclick="setEditorStep(\'' + type + '\',' + index + ')"><span class="step-number">' + (index + 1) + '</span><span>' + escapeHtml(step.label) + '</span></button>'; }).join('') + '</aside>' +
+    '<div class="editor-main"><div id="editorStepContent"></div><div class="editor-footer"><button class="button outline" onclick="moveEditorStep(\'' + type + '\',-1)" ' + (model.step === 0 ? 'disabled' : '') + '>Previous</button><button class="button secondary" onclick="manualSaveReview(\'' + type + '\')">Save draft</button><div class="editor-footer-spacer"></div><span id="editorFooterStatus" class="editor-footer-status">' + editorSaveStatusText(type) + '</span>' + (model.step < steps.length - 1 ? '<button class="button primary" onclick="moveEditorStep(\'' + type + '\',1)">Next</button>' : '<button class="button primary" onclick="requestSubmitReview(\'' + type + '\')">Submit and Seal</button>') + '</div></div></div></div>';
+
+  renderEditorStep(type);
+  updateGlobalSaveIndicator();
+}
+
+function renderEditorStep(type) {
+  const model = editorState[type];
+  const draft = model.draft;
+  const step = model.step;
+  const target = document.getElementById('editorStepContent');
+  if (!target) return;
+
+  if (step === 0) target.innerHTML = renderRatingsStep(type, draft);
+  if (step === 1) target.innerHTML = renderSummaryStep(type, draft);
+  if (step === 2) target.innerHTML = renderDevelopmentStep(type, draft);
+  if (step === 3) target.innerHTML = renderReviewSubmitStep(type, draft);
+  bindEditorInputs(type);
+  applyInlineValidation(type);
+}
+
+function renderRatingsStep(type, draft) {
+  const byId = ratingsById(draft.ratings);
+  return '<div class="editor-section-header"><h2>Performance Factors</h2><p>Rate each factor using the 1–7 scale. Supporting comments are required for ratings of 1, 2, 6, or 7.</p></div>' + renderRatingGuide() +
+    state.factors.map(function(factor) {
+      const item = byId[factor.id] || { rating: '', comments: '' };
+      const ratingId = 'rating-' + type + '-' + factor.id;
+      const commentId = 'comments-' + type + '-' + factor.id;
+      return '<div id="factor-' + type + '-' + factor.id + '" class="factor-card"><div class="factor-head"><div><div class="factor-title">' + escapeHtml(factor.label) + '</div><div class="factor-description">' + escapeHtml(factor.description) + '</div></div><div class="field"><label for="' + ratingId + '">Rating *</label>' + ratingSelectHtml(ratingId, item.rating, 'rating', factor.id) + '<div id="error-' + ratingId + '" class="field-error hidden"></div></div></div>' +
+      '<div class="field"><label for="' + commentId + '">Comments</label><textarea id="' + commentId + '" data-kind="comments" data-factor-id="' + factor.id + '">' + escapeHtml(item.comments || '') + '</textarea><div class="field-help">Use specific examples where possible.</div><div id="error-' + commentId + '" class="field-error hidden"></div></div></div>';
+    }).join('');
+}
+
+function renderRatingGuide() {
+  return '<details class="rating-guide-details"><summary>View the complete 1–7 rating definitions</summary><div class="rating-scale-grid">' + state.ratings.map(function(rating) { return '<div class="rating-definition"><strong>' + rating.value + ' — ' + escapeHtml(rating.label) + '</strong>' + escapeHtml(rating.definition) + '</div>'; }).join('') + '<div class="rating-definition"><strong>N/A</strong>Not applicable to the role or insufficient opportunity to evaluate.</div></div></details>';
+}
+
+function renderSummaryStep(type, draft) {
+  return '<div class="editor-section-header"><h2>Overall Assessment</h2><p>Summarize performance across the full review period rather than averaging individual scores mechanically.</p></div>' +
+    '<div class="field factor-card"><label for="overall-' + type + '">Overall Performance Rating *</label>' + ratingSelectHtml('overall-' + type, draft.overallRating, 'overallRating', '') + '<div id="error-overall-' + type + '" class="field-error hidden"></div></div>' +
+    '<div class="field"><label for="overall-comments-' + type + '">Overall Comments</label><textarea id="overall-comments-' + type + '" data-kind="field" data-field="overallComments">' + escapeHtml(draft.overallComments || '') + '</textarea><div class="field-help">Describe the major themes, impact, and context behind the overall rating.</div></div>';
+}
+
+function renderDevelopmentStep(type, draft) {
+  const manager = type === 'manager';
+  const fields = manager ? [
+    ['areasForImprovement', 'Areas for Improvement', 'Identify specific behaviors, skills, or outcomes that should improve.'],
+    ['actionSteps', 'Action Steps', 'Document concrete actions the employee and manager will take.'],
+    ['supervisorComments', 'Supervisor Comments', 'Add relevant context not captured elsewhere.']
+  ] : [
+    ['keyAccomplishments', 'Key Accomplishments', 'Summarize the most meaningful contributions from the review period.'],
+    ['areasForGrowth', 'Areas for Growth', 'Identify skills, habits, or responsibilities you want to strengthen.'],
+    ['goalsForNextPeriod', 'Goals for the Next Review Period', 'Describe the outcomes you plan to achieve next.'],
+    ['supportNeeded', 'Support or Training Needed', 'Describe training, resources, or manager support that would help.']
+  ];
+  return '<div class="editor-section-header"><h2>' + (manager ? 'Development and Follow-Through' : 'Accomplishments and Development') + '</h2><p>These sections help turn the review into a practical development plan.</p></div>' + fields.map(function(field) {
+    return '<div class="field" style="margin-bottom:16px"><label for="field-' + type + '-' + field[0] + '">' + escapeHtml(field[1]) + '</label><textarea id="field-' + type + '-' + field[0] + '" data-kind="field" data-field="' + field[0] + '">' + escapeHtml(draft[field[0]] || '') + '</textarea><div class="field-help">' + escapeHtml(field[2]) + '</div></div>';
+  }).join('');
+}
+
+function renderReviewSubmitStep(type, draft) {
+  const validation = validateReviewDraft(draft, type);
+  const progress = calculateClientProgress(draft, type);
+  const label = type === 'manager' ? 'manager review' : 'self-evaluation';
+  let readiness = '';
+  if (!validation.errors.length) readiness += '<div class="readiness-item success">✓ All required ratings and comments are complete.</div>';
+  validation.errors.forEach(function(error) { readiness += '<div class="readiness-item error">! ' + escapeHtml(error.message) + '</div>'; });
+  validation.warnings.forEach(function(warning) { readiness += '<div class="readiness-item warning">△ ' + escapeHtml(warning.message) + '</div>'; });
+  return '<div class="editor-section-header"><h2>Review and Submit</h2><p>Check the evaluation before sealing it. Once submitted, the original independent response cannot be edited.</p></div>' +
+    '<div class="card" style="box-shadow:none"><div class="card-header"><div><h3>Submission readiness</h3><p>' + progress.percent + '% complete · ' + validation.errors.length + ' blocking issue(s) · ' + validation.warnings.length + ' recommendation(s)</p></div>' + statusPill(validation.errors.length ? 'Needs attention' : 'Ready to submit', validation.errors.length ? 'amber' : 'green') + '</div><div class="readiness-list">' + readiness + '</div>' +
+    '<div class="warning-banner"><strong>Submission seals your ' + label + '.</strong> It remains private from the other participant until both evaluations are submitted and the review meeting is opened.</div>' +
+    '<div class="button-row"><button class="button secondary" onclick="manualSaveReview(\'' + type + '\')">Save draft</button><button class="button primary" onclick="requestSubmitReview(\'' + type + '\')">Submit and Seal</button></div></div>';
+}
+
+function ratingSelectHtml(id, selected, kind, factorId) {
+  let html = '<select id="' + escapeAttr(id) + '" data-kind="' + kind + '"' + (factorId ? ' data-factor-id="' + escapeAttr(factorId) + '"' : '') + '><option value="">Select</option>';
+  state.ratings.forEach(function(rating) { html += '<option value="' + rating.value + '"' + (String(selected) === String(rating.value) ? ' selected' : '') + '>' + rating.value + ' — ' + escapeHtml(rating.label) + '</option>'; });
+  return html + '<option value="N/A"' + (String(selected) === 'N/A' ? ' selected' : '') + '>N/A — Not Applicable / Not Observed</option></select>';
+}
+
+function bindEditorInputs(type) {
+  const target = document.getElementById('editorStepContent');
+  if (!target) return;
+  target.querySelectorAll('input,select,textarea').forEach(function(input) {
+    input.addEventListener('input', function() { updateDraftFromInput(type, input); });
+    input.addEventListener('change', function() { updateDraftFromInput(type, input); });
+  });
+}
+
+function updateDraftFromInput(type, input) {
+  const draft = editorState[type].draft;
+  const kind = input.dataset.kind;
+  if (kind === 'rating' || kind === 'comments') {
+    const factorId = input.dataset.factorId;
+    let item = (draft.ratings || []).find(function(entry) { return entry.factorId === factorId; });
+    if (!item) { item = { factorId: factorId, rating: '', comments: '' }; draft.ratings = draft.ratings || []; draft.ratings.push(item); }
+    if (kind === 'rating') item.rating = input.value;
+    if (kind === 'comments') item.comments = input.value;
+  } else if (kind === 'overallRating') {
+    draft.overallRating = input.value;
+  } else if (kind === 'field') {
+    draft[input.dataset.field] = input.value;
+  }
+  markReviewDirty(type);
+  editorState[type].validation = validateReviewDraft(draft, type);
+  applyInlineValidation(type);
+  updateEditorProgress(type);
+}
+
+function markReviewDirty(type) {
+  const model = editorState[type];
+  model.dirty = true;
+  saveLocalDraft(type);
+  setSaveIndicator('unsaved', 'Unsaved changes');
+  clearTimeout(model.autosaveTimer);
+  model.autosaveTimer = setTimeout(function() { autosaveReview(type); }, autosaveDelayMs);
+}
+
+function saveLocalDraft(type) {
+  if (!currentCycle || !editorState[type].draft) return;
+  try {
+    localStorage.setItem(draftStorageKey(type), JSON.stringify({ savedAt: new Date().toISOString(), data: editorState[type].draft }));
+  } catch (error) {}
+}
+
+function draftStorageKey(type) {
+  return currentCycle ? 'aitheras-review-draft:' + currentCycle.cycleId + ':' + type : '';
+}
+
+async function autosaveReview(type) {
+  const model = editorState[type];
+  if (!model.dirty || model.saving || !navigator.onLine || !currentCycle) return;
+  model.saving = true;
+  setSaveIndicator('saving', 'Saving draft…');
+  try {
+    const result = await server('autosaveReview', currentCycle.cycleId, REVIEW_TYPES[type], deepClone(model.draft));
+    model.dirty = false;
+    model.saving = false;
+    model.lastSavedAt = result.savedAtIso;
+    model.draft.lastSavedAt = result.savedAtIso;
+    localStorage.removeItem(draftStorageKey(type));
+    setSaveIndicator('saved', 'Saved ' + result.savedAt);
+    syncCycleSummaryFromDraft(type, result);
+    updateEditorFooterStatus(type);
+  } catch (error) {
+    model.saving = false;
+    setSaveIndicator('error', 'Save failed — retrying');
+    showToast('warning', 'Draft not synced', 'Your work is stored locally and will retry automatically. ' + errorMessage(error));
+    model.autosaveTimer = setTimeout(function() { autosaveReview(type); }, 15000);
+  }
+}
+
+async function manualSaveReview(type) {
+  flushVisibleDraftToState();
+  const model = editorState[type];
+  setSaveIndicator('saving', 'Saving draft…');
+  try {
+    const method = type === 'manager' ? 'saveManagerReview' : 'saveSelfEvaluation';
+    const result = await server(method, currentCycle.cycleId, deepClone(model.draft), false);
+    model.dirty = false;
+    model.lastSavedAt = result.savedAtIso;
+    model.draft.lastSavedAt = result.savedAtIso;
+    localStorage.removeItem(draftStorageKey(type));
+    setSaveIndicator('saved', 'Saved ' + result.savedAt);
+    syncCycleSummaryFromDraft(type, result);
+    showToast('success', 'Draft saved', result.message);
+    updateEditorFooterStatus(type);
+  } catch (error) {
+    setSaveIndicator('error', 'Save failed');
+    showToast('error', 'Could not save draft', errorMessage(error));
+  }
+}
+
+function syncCycleSummaryFromDraft(type, result) {
+  if (!state || !currentCycle) return;
+  const summary = (state.cycles || []).find(function(item) { return item.cycleId === currentCycle.cycleId; });
+  if (!summary) return;
+  const progress = calculateClientProgress(editorState[type].draft, type);
+  if (type === 'manager') {
+    summary.managerProgress = progress;
+    summary.managerReviewStatus = 'Draft';
+    summary.actionKey = 'manager-review';
+    summary.actionLabel = 'Continue Manager Review';
+  } else {
+    summary.selfProgress = progress;
+    summary.selfEvaluationStatus = 'Draft';
+    summary.actionKey = 'self-evaluation';
+    summary.actionLabel = 'Continue Self-Evaluation';
+  }
+  summary.actionTone = 'primary';
+  summary.actionRequired = true;
+  summary.updatedAt = result.savedAt;
+  summary.updatedAtIso = result.savedAtIso;
+  renderDashboard();
+  renderReviewsView();
+  renderSignaturesView();
+  rebuildNotifications();
+}
+
+function requestSubmitReview(type) {
+  flushVisibleDraftToState();
+  const validation = validateReviewDraft(editorState[type].draft, type);
+  editorState[type].validation = validation;
+  editorState[type].showErrors = true;
+  if (validation.errors.length) {
+    const first = validation.errors[0];
+    editorState[type].step = first.step;
+    renderReviewEditor(type, document.getElementById('cycleTabContent'));
+    setTimeout(function() { scrollToField(first.fieldId); }, 80);
+    showToast('error', 'Review is not ready', validation.errors.length + ' required item(s) still need attention.');
+    return;
+  }
+
+  const warningHtml = validation.warnings.length ? '<div class="warning-banner"><strong>Recommended improvements</strong><ul>' + validation.warnings.map(function(item) { return '<li>' + escapeHtml(item.message) + '</li>'; }).join('') + '</ul></div>' : '<div class="success-banner">All required information is complete.</div>';
+  openModal({
+    title: 'Submit and seal this evaluation?',
+    body: warningHtml + '<p>Once submitted, the original independent evaluation cannot be edited. It will remain private until the review meeting is opened.</p>',
+    confirmLabel: 'Submit and Seal',
+    tone: 'primary',
+    onConfirm: function() { submitReview(type); }
+  });
+}
+
+async function submitReview(type) {
+  closeModal();
+  const model = editorState[type];
+  clearTimeout(model.autosaveTimer);
+  setSaveIndicator('saving', 'Submitting…');
+  try {
+    const method = type === 'manager' ? 'saveManagerReview' : 'saveSelfEvaluation';
+    const result = await server(method, currentCycle.cycleId, deepClone(model.draft), true);
+    model.dirty = false;
+    localStorage.removeItem(draftStorageKey(type));
+    showToast('success', 'Evaluation submitted', result.message);
+    await refreshApplication(currentCycle.cycleId, 'overview');
+  } catch (error) {
+    setSaveIndicator('error', 'Submission failed');
+    showToast('error', 'Could not submit evaluation', errorMessage(error));
+  }
+}
+
+function validateReviewDraft(draft, type) {
+  const errors = [];
+  const warnings = [];
+  const fieldErrors = {};
+  const byId = ratingsById(draft && draft.ratings);
+
+  state.factors.forEach(function(factor) {
+    const item = byId[factor.id] || { rating: '', comments: '' };
+    if (!item.rating) addValidationError(errors, fieldErrors, 'rating-' + type + '-' + factor.id, factor.label + ' requires a rating.', 0);
+    const numeric = Number(item.rating);
+    if (item.rating !== 'N/A' && [1,2,6,7].includes(numeric) && !String(item.comments || '').trim()) {
+      addValidationError(errors, fieldErrors, 'comments-' + type + '-' + factor.id, factor.label + ' requires supporting comments for a rating of ' + item.rating + '.', 0);
+    }
+  });
+
+  if (!String(draft.overallRating || '').trim()) addValidationError(errors, fieldErrors, 'overall-' + type, 'An overall performance rating is required.', 1);
+  if (!String(draft.overallComments || '').trim()) warnings.push({ message: 'Overall comments are blank.', step: 1 });
+  else if (String(draft.overallComments).trim().length < 30) warnings.push({ message: 'Overall comments are very brief; consider adding more context.', step: 1 });
+
+  const recommended = type === 'manager' ? [
+    ['areasForImprovement', 'Areas for Improvement'], ['actionSteps', 'Action Steps'], ['supervisorComments', 'Supervisor Comments']
+  ] : [
+    ['keyAccomplishments', 'Key Accomplishments'], ['areasForGrowth', 'Areas for Growth'], ['goalsForNextPeriod', 'Goals for the Next Review Period'], ['supportNeeded', 'Support or Training Needed']
+  ];
+  recommended.forEach(function(item) { if (!String(draft[item[0]] || '').trim()) warnings.push({ message: item[1] + ' is blank.', step: 2 }); });
+  return { errors: errors, warnings: warnings, fieldErrors: fieldErrors };
+}
+
+function addValidationError(errors, fieldErrors, fieldId, message, step) {
+  errors.push({ fieldId: fieldId, message: message, step: step });
+  fieldErrors[fieldId] = message;
+}
+
+function applyInlineValidation(type) {
+  const model = editorState[type];
+  const validation = model.validation || { fieldErrors: {} };
+  document.querySelectorAll('#editorStepContent .invalid').forEach(function(element) { element.classList.remove('invalid'); });
+  document.querySelectorAll('#editorStepContent .field-error').forEach(function(element) { element.classList.add('hidden'); element.textContent = ''; });
+  if (!model.showErrors) return;
+  Object.keys(validation.fieldErrors).forEach(function(fieldId) {
+    const input = document.getElementById(fieldId);
+    const error = document.getElementById('error-' + fieldId);
+    if (input) { input.classList.add('invalid'); const factor = input.closest('.factor-card'); if (factor) factor.classList.add('invalid'); }
+    if (error) { error.textContent = validation.fieldErrors[fieldId]; error.classList.remove('hidden'); }
+  });
+}
+
+function calculateClientProgress(draft, type) {
+  const validation = validateReviewDraft(draft, type);
+  const byId = ratingsById(draft.ratings);
+  let completed = state.factors.filter(function(factor) { return !!(byId[factor.id] || {}).rating; }).length;
+  let total = state.factors.length;
+  const fields = type === 'manager' ? ['overallRating','overallComments','areasForImprovement','actionSteps','supervisorComments'] : ['overallRating','overallComments','keyAccomplishments','areasForGrowth','goalsForNextPeriod','supportNeeded'];
+  fields.forEach(function(field) { total++; if (String(draft[field] || '').trim()) completed++; });
+  return { percent: Math.round(completed / total * 100), completed: completed, total: total, ratingsCompleted: state.factors.filter(function(factor) { return !!(byId[factor.id] || {}).rating; }).length, ratingsTotal: state.factors.length, errors: validation.errors, warnings: validation.warnings };
+}
+
+function isStepComplete(draft, type, step) {
+  const validation = validateReviewDraft(draft, type);
+  if (step === 0) return !validation.errors.some(function(item) { return item.step === 0; });
+  if (step === 1) return !validation.errors.some(function(item) { return item.step === 1; }) && String(draft.overallComments || '').trim();
+  if (step === 2) return !validation.warnings.some(function(item) { return item.step === 2; });
+  return !validation.errors.length;
+}
+
+function setEditorStep(type, step) {
+  flushVisibleDraftToState();
+  editorState[type].step = Math.max(0, Math.min(step, EDITOR_STEPS[type].length - 1));
+  renderReviewEditor(type, document.getElementById('cycleTabContent'));
+}
+
+function moveEditorStep(type, delta) { setEditorStep(type, editorState[type].step + delta); }
+
+function updateEditorProgress(type) {
+  const progress = calculateClientProgress(editorState[type].draft, type);
+  const number = document.getElementById('editorProgressNumber');
+  const fill = document.getElementById('editorProgressFill');
+  const meta = document.getElementById('editorProgressMeta');
+  if (number) number.textContent = progress.percent + '%';
+  if (fill) fill.style.width = progress.percent + '%';
+  if (meta) meta.textContent = progress.ratingsCompleted + ' of ' + progress.ratingsTotal + ' ratings · ' + progress.errors.length + ' required item(s) missing';
+}
+
+function editorSaveStatusText(type) {
+  const model = editorState[type];
+  if (model.saving) return 'Saving…';
+  if (model.dirty) return 'Unsaved changes';
+  if (model.lastSavedAt) return 'Last saved ' + formatLocalDateTime(model.lastSavedAt);
+  return 'Draft not yet saved';
+}
+
+function updateEditorFooterStatus(type) {
+  const target = document.getElementById('editorFooterStatus');
+  if (target) target.textContent = editorSaveStatusText(type);
+}
+
+function flushVisibleDraftToState() {
+  // Input listeners update draft state immediately; this function intentionally provides a stable hook before navigation.
+}
+
+function ratingsById(ratings) {
+  const byId = {};
+  (ratings || []).forEach(function(item) { byId[item.factorId] = item; });
+  return byId;
+}
+
+function renderReadOnlyReview(review, type) {
+  const byId = ratingsById(review.ratings);
+  let html = '<div class="table-wrap"><table><thead><tr><th>Factor</th><th>Rating</th><th>Comments</th></tr></thead><tbody>';
+  state.factors.forEach(function(factor) { const item = byId[factor.id] || {}; html += '<tr><td><strong>' + escapeHtml(factor.label) + '</strong></td><td>' + escapeHtml(ratingLabel(item.rating)) + '</td><td>' + escapeHtml(item.comments || '') + '</td></tr>'; });
+  html += '</tbody></table></div>';
+  const fields = type === 'manager' ? [
+    ['Overall Rating', ratingLabel(review.overallRating)], ['Overall Comments', review.overallComments], ['Areas for Improvement', review.areasForImprovement], ['Action Steps', review.actionSteps], ['Supervisor Comments', review.supervisorComments], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Manager Signed', review.managerSignedAt || 'Pending'], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
+  ] : [
+    ['Overall Rating', ratingLabel(review.overallRating)], ['Overall Comments', review.overallComments], ['Key Accomplishments', review.keyAccomplishments], ['Areas for Growth', review.areasForGrowth], ['Goals for Next Period', review.goalsForNextPeriod], ['Support or Training Needed', review.supportNeeded], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['Manager Signed', review.managerSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
+  ];
+  return html + '<div style="height:18px"></div><div class="summary-grid">' + fields.map(function(field) { return '<div class="summary-label">' + escapeHtml(field[0]) + '</div><div>' + escapeHtml(field[1] || '') + '</div>'; }).join('') + '</div>';
+}
+
+function initializeMeetingDraft(cycle) {
+  meetingDraft = deepClone(cycle.meeting || {});
+  meetingDirty = false;
+  try {
+    const stored = JSON.parse(localStorage.getItem(meetingStorageKey()) || 'null');
+    const serverTime = new Date(meetingDraft.lastSavedAt || 0).getTime();
+    const localTime = new Date(stored && stored.savedAt || 0).getTime();
+    if (stored && stored.data && localTime > serverTime) { meetingDraft = stored.data; meetingDirty = true; }
+  } catch (error) {}
+}
+
+function renderMeetingTab(target) {
+  const cycle = currentCycle;
+  if (cycle.status === 'Ready for Review Meeting') {
+    target.innerHTML = '<div class="card"><div class="empty-state"><div class="empty-state-icon">◉</div><strong>Both evaluations are ready</strong>The manager or HR can open the meeting when the discussion begins.' + (cycle.canStartMeeting ? '<div class="button-row" style="justify-content:center;margin-top:15px"><button class="button success" onclick="confirmStartMeeting()">Start Review Meeting</button></div>' : '') + '</div></div>';
+    return;
+  }
+  if (!['Review Meeting Open','Awaiting Signatures','Complete'].includes(cycle.status)) {
+    target.innerHTML = '<div class="card"><div class="empty-state"><strong>Meeting not available yet</strong>Both independent evaluations must be submitted before the meeting can begin.</div></div>';
+    return;
+  }
+
+  const editable = cycle.status === 'Review Meeting Open';
+  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Review Comparison</h2><p>Large rating differences are highlighted for discussion.</p></div></div>' + renderComparison(cycle) + '</div>' +
+    '<div class="card"><div class="card-header"><div><h2>Meeting Outcomes</h2><p>Document conclusions, goals, action steps, and employee comments.</p></div></div>' +
+    renderMeetingField('meetingManagerComments','Manager Final Comments',meetingDraft.managerFinalComments, editable && cycle.canEditManagerMeeting) +
+    renderMeetingField('meetingDevelopmentGoals','Development Goals',meetingDraft.developmentGoals, editable && cycle.canEditManagerMeeting) +
+    renderMeetingField('meetingActionSteps','Action Steps',meetingDraft.actionSteps, editable && cycle.canEditManagerMeeting) +
+    renderMeetingField('meetingEmployeeComments','Employee Comments After Discussion',meetingDraft.employeeComments, editable && cycle.canEditEmployeeMeeting) +
+    (editable && (cycle.canEditManagerMeeting || cycle.canEditEmployeeMeeting) ? '<div class="button-row"><button class="button secondary" onclick="manualSaveMeeting()">Save meeting notes</button>' + (cycle.canReleaseSignatures ? '<button class="button warning" onclick="openReleaseModal()">Finalize & Release for Signature</button>' : '') + '</div>' : '') + '</div>';
+  bindMeetingInputs();
+}
+
+function renderComparison(cycle) {
+  const manager = ratingsById(cycle.managerReview.ratings);
+  const employee = ratingsById(cycle.selfEvaluation.ratings);
+  let html = '<div class="table-wrap"><table class="comparison-table"><thead><tr><th>Factor</th><th>Employee</th><th>Manager</th><th>Gap</th><th></th></tr></thead><tbody>';
+  state.factors.forEach(function(factor, index) {
+    const e = (employee[factor.id] || {}).rating || '';
+    const m = (manager[factor.id] || {}).rating || '';
+    const diff = isNumericRating(e) && isNumericRating(m) ? Number(e) - Number(m) : '';
+    const display = diff === '' ? '—' : diff > 0 ? '+' + diff : String(diff);
+    html += '<tr><td><strong>' + escapeHtml(factor.label) + '</strong></td><td>' + escapeHtml(ratingLabel(e)) + '</td><td>' + escapeHtml(ratingLabel(m)) + '</td><td class="' + (Math.abs(Number(diff)) >= 2 ? 'difference-large' : '') + '">' + escapeHtml(display) + '</td><td><button class="button text" onclick="toggleComparisonDetail(' + index + ')">Comments</button></td></tr>' +
+      '<tr id="comparison-detail-' + index + '" class="hidden"><td colspan="5"><div class="comparison-detail"><div class="comparison-comment"><strong>Employee perspective</strong>' + escapeHtml((employee[factor.id] || {}).comments || 'No comments provided.') + '</div><div class="comparison-comment"><strong>Manager perspective</strong>' + escapeHtml((manager[factor.id] || {}).comments || 'No comments provided.') + '</div></div></td></tr>';
+  });
+  return html + '</tbody></table></div>';
+}
+
+function toggleComparisonDetail(index) { const row = document.getElementById('comparison-detail-' + index); if (row) row.classList.toggle('hidden'); }
+
+function renderMeetingField(id, label, value, editable) {
+  return '<div class="field" style="margin-bottom:15px"><label for="' + id + '">' + escapeHtml(label) + '</label><textarea id="' + id + '" ' + (editable ? '' : 'readonly') + '>' + escapeHtml(value || '') + '</textarea></div>';
+}
+
+function bindMeetingInputs() {
+  ['meetingManagerComments','meetingDevelopmentGoals','meetingActionSteps','meetingEmployeeComments'].forEach(function(id) {
+    const input = document.getElementById(id); if (!input || input.readOnly) return;
+    input.addEventListener('input', function() {
+      meetingDraft.managerFinalComments = valueOf('meetingManagerComments');
+      meetingDraft.developmentGoals = valueOf('meetingDevelopmentGoals');
+      meetingDraft.actionSteps = valueOf('meetingActionSteps');
+      meetingDraft.employeeComments = valueOf('meetingEmployeeComments');
+      meetingDirty = true;
+      try { localStorage.setItem(meetingStorageKey(), JSON.stringify({ savedAt: new Date().toISOString(), data: meetingDraft })); } catch (error) {}
+      setSaveIndicator('unsaved', 'Unsaved meeting notes');
+      clearTimeout(meetingAutosaveTimer);
+      meetingAutosaveTimer = setTimeout(autosaveMeeting, autosaveDelayMs);
+    });
+  });
+}
+
+async function autosaveMeeting() {
+  if (!meetingDirty || !navigator.onLine || !currentCycle || currentCycle.status !== 'Review Meeting Open') return;
+  setSaveIndicator('saving', 'Saving meeting notes…');
+  try {
+    const result = await server('autosaveMeetingOutcomes', currentCycle.cycleId, deepClone(meetingDraft));
+    meetingDirty = false; meetingDraft.lastSavedAt = result.savedAtIso; localStorage.removeItem(meetingStorageKey()); setSaveIndicator('saved', 'Saved ' + result.savedAt);
+  } catch (error) { setSaveIndicator('error', 'Meeting notes not synced'); showToast('warning','Meeting notes not synced','The browser copy is safe and will retry.'); meetingAutosaveTimer = setTimeout(autosaveMeeting,15000); }
+}
+
+async function manualSaveMeeting() {
+  try { const result = await server('saveMeetingOutcomes', currentCycle.cycleId, deepClone(meetingDraft)); meetingDirty = false; meetingDraft.lastSavedAt = result.savedAtIso; localStorage.removeItem(meetingStorageKey()); setSaveIndicator('saved','Saved ' + result.savedAt); showToast('success','Meeting notes saved',result.message); }
+  catch (error) { showToast('error','Could not save meeting notes',errorMessage(error)); }
+}
+
+function meetingStorageKey() { return currentCycle ? 'aitheras-meeting-draft:' + currentCycle.cycleId : ''; }
+
+function confirmStartMeeting() {
+  openModal({ title: 'Start the review meeting?', body: '<p>Opening the meeting will make the manager review and employee self-evaluation visible to both participants.</p><div class="info-banner">Only start the meeting when both participants are ready to discuss the reviews together.</div>', confirmLabel: 'Start Review Meeting', tone: 'success', onConfirm: startMeeting });
+}
+
+async function startMeeting() {
+  closeModal();
+  try { const result = await server('startReviewMeeting', currentCycle.cycleId); showToast('success','Review meeting opened',result.message); await refreshApplication(currentCycle.cycleId,'meeting'); }
+  catch (error) { showToast('error','Could not start meeting',errorMessage(error)); }
+}
+
+function openReleaseModal() {
+  openModal({
+    title: 'Finalize and release the review packet?',
+    body: '<p>Meeting outcomes will be locked and the manager and employee will each receive one signature request covering both documents.</p>',
+    confirmLabel: 'Release for Signature',
+    tone: 'warning',
+    checks: [
+      'Both evaluations were discussed during the review meeting.',
+      'The employee was given an opportunity to respond and add comments.',
+      'Development goals and action steps were reviewed.',
+      'The compensation decision has been recorded.',
+      'The final packet is ready to be signed.'
+    ],
+    onConfirm: releaseSignatures
+  });
+}
+
+async function releaseSignatures() {
+  closeModal();
+  try {
+    if (meetingDirty) {
+      const saved = await server('saveMeetingOutcomes', currentCycle.cycleId, deepClone(meetingDraft));
+      meetingDirty = false;
+      meetingDraft.lastSavedAt = saved.savedAtIso;
+      localStorage.removeItem(meetingStorageKey());
+    }
+    const result = await server('releaseReviewSignatures', currentCycle.cycleId);
+    showToast('success','Review packet released',result.message);
+    await refreshApplication(currentCycle.cycleId,'signatures');
+  } catch (error) {
+    showToast('error','Could not release review packet',errorMessage(error));
+  }
+}
+
+function renderSignaturesTab(target) {
+  const cycle = currentCycle;
+  const stateSig = cycle.signatureState || {};
+  const statusRows = [
+    ['Manager', stateSig.managerSigned ? 'Signed' : 'Pending'], ['Employee', stateSig.employeeSigned ? 'Signed' : 'Pending'], ['HR', stateSig.hrSigned ? 'Signed' : (stateSig.managerSigned && stateSig.employeeSigned ? 'Ready to sign' : 'Waiting for participants')]
+  ];
+  let taskHtml = '';
+  if (cycle.signatureTasks.length) {
+    const task = cycle.signatureTasks[0];
+    taskHtml = '<div class="card"><div class="card-header"><div><h2>Sign Performance Review Packet</h2><p>Your single signature will be applied to both final review documents.</p></div>' + statusPill('Action required','amber') + '</div><div class="warning-banner">You are signing as <strong>' + escapeHtml(task.role) + '</strong>. Your signature acknowledges that both documents were reviewed and discussed; it does not necessarily indicate agreement with every rating.</div><div class="signature-wrap"><canvas id="packetSignature"></canvas><div class="signature-actions"><button class="button text" onclick="clearSignature(\'packetSignature\')">Clear signature</button></div></div><div class="button-row" style="margin-top:14px"><button id="signPacketButton" class="button primary" onclick="submitSignature()">Sign Both Review Documents</button></div></div>';
+  }
+  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Signature Status</h2><p>The manager and employee may sign in either order. HR signs last.</p></div></div><div class="summary-grid">' + statusRows.map(function(row) { return '<div class="summary-label">' + row[0] + '</div><div>' + statusPill(row[1], row[1] === 'Signed' ? 'green' : row[1] === 'Ready to sign' ? 'amber' : '') + '</div>'; }).join('') + '</div></div>' + taskHtml +
+    (cycle.status === 'Complete' ? '<div class="card"><div class="success-banner"><strong>Review complete.</strong> The final signed documents are ready.</div><div class="button-row"><button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button><button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button></div></div>' : '');
+  if (cycle.signatureTasks.length) requestAnimationFrame(function() { initializeSignaturePad('packetSignature'); });
+}
+
+async function submitSignature() {
+  const pad = signaturePads.packetSignature;
+  if (!pad || pad.isEmpty) { showToast('error','Signature required','Draw your signature before continuing.'); return; }
+  const button = document.getElementById('signPacketButton'); setButtonBusy(button,true,'Recording signature…');
+  try { const result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature')); showToast('success','Signature recorded',result.message); await refreshApplication(currentCycle.cycleId,'signatures'); }
+  catch (error) { setButtonBusy(button,false,'Sign Both Review Documents'); showToast('error','Could not record signature',errorMessage(error)); }
+}
+
+function initializeSignaturePad(canvasId) {
+  const canvas = document.getElementById(canvasId); if (!canvas) return;
+  const context = canvas.getContext('2d'); let drawing = false, empty = true, pointerId = null;
+  const rect = canvas.getBoundingClientRect(); const ratio = Math.max(window.devicePixelRatio || 1,1);
+  canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(175 * ratio);
+  context.setTransform(ratio,0,0,ratio,0,0); context.lineWidth=2.25; context.lineCap='round'; context.lineJoin='round'; context.strokeStyle='#1d1721';
+  function point(event){ const r=canvas.getBoundingClientRect(); return {x:event.clientX-r.left,y:event.clientY-r.top}; }
+  canvas.addEventListener('pointerdown',function(event){ if(event.button!==undefined&&event.button!==0)return; event.preventDefault();drawing=true;pointerId=event.pointerId;try{canvas.setPointerCapture(pointerId);}catch(error){} const p=point(event);context.beginPath();context.moveTo(p.x,p.y);context.lineTo(p.x+.01,p.y+.01);context.stroke();empty=false; });
+  canvas.addEventListener('pointermove',function(event){ if(!drawing||event.pointerId!==pointerId)return;event.preventDefault();const p=point(event);context.lineTo(p.x,p.y);context.stroke(); });
+  function end(event){ if(!drawing)return;drawing=false;try{if(event&&canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);}catch(error){}pointerId=null;context.closePath(); }
+  canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);canvas.addEventListener('lostpointercapture',end);
+  signaturePads[canvasId]={clear:function(){context.clearRect(0,0,canvas.width,canvas.height);empty=true;},get isEmpty(){return empty;}};
+}
+
+function clearSignature(canvasId){if(signaturePads[canvasId])signaturePads[canvasId].clear();}
+
+function croppedSignature(canvasId){
+  const canvas=document.getElementById(canvasId),context=canvas.getContext('2d'),width=canvas.width,height=canvas.height,pixels=context.getImageData(0,0,width,height).data;
+  let minX=width,minY=height,maxX=-1,maxY=-1;
+  for(let y=0;y<height;y++){for(let x=0;x<width;x++){if(pixels[(y*width+x)*4+3]>10){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}}}
+  if(maxX<minX||maxY<minY)return canvas.toDataURL('image/png');
+  const pad=Math.round(10*Math.max(window.devicePixelRatio||1,1)),sx=Math.max(0,minX-pad),sy=Math.max(0,minY-pad),sr=Math.min(width,maxX+pad+1),sb=Math.min(height,maxY+pad+1),sw=sr-sx,sh=sb-sy,cropped=document.createElement('canvas');
+  cropped.width=sw;cropped.height=sh;cropped.getContext('2d').drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh);return cropped.toDataURL('image/png');
+}
+
+async function downloadPdf(type) {
+  try {
+    showToast('info','Preparing document','Your signed PDF is being prepared.');
+    const file = await server('getReviewPdf', currentCycle.cycleId, type);
+    const bytes = Uint8Array.from(atob(file.base64),function(c){return c.charCodeAt(0);});
+    const blob = new Blob([bytes],{type:file.mimeType}); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url;link.download=file.fileName;document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);
+  } catch(error) { showToast('error','Could not download document',errorMessage(error)); }
+}
+
+
+function openCompensationWorkflow(cycleId) {
+  const cycle = currentCycle && currentCycle.cycleId === cycleId
+    ? currentCycle
+    : (state.cycles || []).find(function(item) {
+        return item.cycleId === cycleId;
+      });
+  const url =
+    (currentCycle &&
+      currentCycle.cycleId === cycleId &&
+      currentCycle.v31 &&
+      currentCycle.v31.compensationAdjustmentUrl) ||
+    (state.v31 && state.v31.compensationAdjustmentUrl) ||
+    '';
+
+  if (!url) {
+    showToast(
+      'error',
+      'Compensation app not configured',
+      'HR must add the Compensation Adjustment app URL under Administration.'
+    );
+    return;
+  }
+
+  window.open(url, '_blank', 'noopener');
+
+  openModal({
+    title: 'Record the compensation decision',
+    body:
+      '<p>The Compensation Adjustment workflow opened in a new tab.</p>' +
+      '<p>After completing the review, record the outcome here so the performance review can move forward.</p>' +
+      '<div class="button-row" style="margin-top:16px">' +
+      '<button class="button primary" onclick="recordCompensationChoice(\'' +
+      escapeAttr(cycleId) +
+      '\',\'Adjustment Submitted\')">Adjustment Submitted</button>' +
+      '<button class="button outline" onclick="recordCompensationChoice(\'' +
+      escapeAttr(cycleId) +
+      '\',\'No Adjustment Recommended\')">No Adjustment Recommended</button>' +
+      '</div>',
+    confirmLabel: 'Close',
+    tone: 'outline',
+    onConfirm: closeModal
+  });
+}
+
+function recordCompensationChoice(cycleId, decision) {
+  const notesLabel =
+    decision === 'Adjustment Submitted'
+      ? 'Optional note, such as the request date or context'
+      : 'Optional note explaining why no adjustment is recommended';
+
+  openModal({
+    title: decision,
+    body:
+      '<p>This choice will be recorded in the performance review cycle.</p>' +
+      '<label for="compDecisionNotes">' +
+      escapeHtml(notesLabel) +
+      '</label>' +
+      '<textarea id="compDecisionNotes" placeholder="Optional"></textarea>',
+    confirmLabel: 'Record Decision',
+    tone:
+      decision === 'Adjustment Submitted'
+        ? 'primary'
+        : 'outline',
+    onConfirm: function() {
+      submitCompensationDecision(
+        cycleId,
+        decision,
+        valueOf('compDecisionNotes')
+      );
+    }
+  });
+}
+
+async function submitCompensationDecision(
+  cycleId,
+  decision,
+  notes
+) {
+  closeModal();
+
+  try {
+    const result = await server(
+      'recordCompensationDecision',
+      cycleId,
+      decision,
+      notes || ''
+    );
+
+    showToast(
+      'success',
+      'Compensation decision recorded',
+      result.message
+    );
+
+    if (
+      currentCycle &&
+      currentCycle.cycleId === cycleId
+    ) {
+      await loadCycle(cycleId, 'overview');
+    } else {
+      await refreshApplication('', '');
+    }
+  } catch (error) {
+    showToast(
+      'error',
+      'Could not record decision',
+      errorMessage(error)
+    );
+  }
+}
+
+function rebuildNotifications() {
+  const read = getReadNotificationSet();
+  notificationItems = [];
+
+  (state.cycles || []).forEach(function(cycle) {
+    if (cycle.actionRequired) {
+      const id =
+        cycle.cycleId +
+        ':' +
+        cycle.actionKey +
+        ':' +
+        cycle.updatedAtIso;
+
+      notificationItems.push({
+        id: id,
+        cycleId: cycle.cycleId,
+        action: cycle.actionKey,
+        title: cycle.actionLabel,
+        meta:
+          cycle.employeeName +
+          ' · ' +
+          cycle.reviewType,
+        unread: !read.has(id),
+        priority: 1,
+      });
+    }
+
+    if (
+      cycle.v31 &&
+      cycle.v31.compensationActionRequired
+    ) {
+      const id =
+        cycle.cycleId +
+        ':compensation:' +
+        cycle.updatedAtIso;
+
+      if (
+        !notificationItems.some(function(item) {
+          return item.id === id;
+        })
+      ) {
+        notificationItems.push({
+          id: id,
+          cycleId: cycle.cycleId,
+          action: 'compensation',
+          title: 'Compensation decision required',
+          meta:
+            cycle.employeeName +
+            ' · Open the adjustment workflow or record no adjustment',
+          unread: !read.has(id),
+          priority: 0,
+        });
+      }
+    }
+
+    if (
+      cycle.v31 &&
+      Number.isFinite(
+        Number(cycle.v31.daysUntilMeeting)
+      ) &&
+      Number(cycle.v31.daysUntilMeeting) <= 7 &&
+      Number(cycle.v31.daysUntilMeeting) >= 0 &&
+      cycle.status === 'Open for Input' &&
+      cycle.actionRequired
+    ) {
+      const id =
+        cycle.cycleId +
+        ':deadline:' +
+        cycle.reviewMeetingDateIso;
+
+      notificationItems.push({
+        id: id,
+        cycleId: cycle.cycleId,
+        action: cycle.actionKey,
+        title:
+          Number(cycle.v31.daysUntilMeeting) === 0
+            ? 'Review meeting is today'
+            : 'Review meeting in ' +
+              cycle.v31.daysUntilMeeting +
+              ' day(s)',
+        meta:
+          cycle.employeeName +
+          ' · Complete your assigned work before the meeting',
+        unread: !read.has(id),
+        priority: 0,
+      });
+    }
+
+    if (cycle.status === 'Complete') {
+      const id =
+        cycle.cycleId +
+        ':complete:' +
+        cycle.updatedAtIso;
+
+      notificationItems.push({
+        id: id,
+        cycleId: cycle.cycleId,
+        action: 'overview',
+        title: 'Review completed',
+        meta:
+          cycle.employeeName +
+          ' · Final documents available',
+        unread: !read.has(id),
+        priority: 3,
+      });
+    }
+  });
+
+  const helpId =
+    'v31-help:' +
+    (state.user && state.user.primaryRole
+      ? state.user.primaryRole
+      : 'User');
+
+  notificationItems.push({
+    id: helpId,
+    cycleId: '',
+    action: 'help',
+    title: 'Step-by-step help is available',
+    meta:
+      'Open the How-To Guide at any point in the review process',
+    unread: !read.has(helpId),
+    priority: 4,
+  });
+
+  notificationItems.sort(function(a, b) {
+    return a.priority - b.priority;
+  });
+
+  renderNotificationDrawer();
+}
+
+function renderNotificationDrawer() {
+  const unread = notificationItems.filter(function(item){return item.unread;}).length;
+  const badge=document.getElementById('notificationBadge');badge.textContent=unread;badge.classList.toggle('hidden',!unread);
+  const body=document.getElementById('notificationDrawerBody');
+  body.innerHTML=notificationItems.length?notificationItems.map(function(item){return '<button class="notification-item ' + (item.unread?'unread':'') + '" onclick="openNotification(\''+escapeAttr(item.id)+'\')"><span class="notification-dot"></span><span><span class="notification-title">'+escapeHtml(item.title)+'</span><span class="notification-meta">'+escapeHtml(item.meta)+'</span></span></button>';}).join(''):'<div class="empty-state"><strong>No notifications</strong>Action items and review updates will appear here.</div>';
+}
+
+function toggleNotifications(){const drawer=document.getElementById('notificationDrawer');const opening=!drawer.classList.contains('open');drawer.classList.toggle('open',opening);document.getElementById('drawerOverlay').classList.toggle('hidden',!opening);}
+function closeNotifications(){document.getElementById('notificationDrawer').classList.remove('open');document.getElementById('drawerOverlay').classList.add('hidden');}
+function openNotification(id){const item=notificationItems.find(function(entry){return entry.id===id;});if(!item)return;markNotificationRead(id);closeNotifications();if(item.action==='help'){navigate('help');return;}loadCycle(item.cycleId,item.action);}
+function markNotificationRead(id){const read=getReadNotificationSet();read.add(id);localStorage.setItem(notificationReadKey(),JSON.stringify(Array.from(read)));notificationItems.forEach(function(item){if(item.id===id)item.unread=false;});renderNotificationDrawer();}
+function markNotificationReadByCycle(cycleId,action){notificationItems.filter(function(item){return item.cycleId===cycleId&&(!action||item.action===action);}).forEach(function(item){markNotificationRead(item.id);});}
+function markAllNotificationsRead(){const read=getReadNotificationSet();notificationItems.forEach(function(item){read.add(item.id);item.unread=false;});localStorage.setItem(notificationReadKey(),JSON.stringify(Array.from(read)));renderNotificationDrawer();}
+function getReadNotificationSet(){try{return new Set(JSON.parse(localStorage.getItem(notificationReadKey())||'[]'));}catch(error){return new Set();}}
+function notificationReadKey(){return 'aitheras-review-notifications:'+(state&&state.currentUserEmail||'user');}
+
+function openModal(options) {
+  modalCallback = options.onConfirm || null;
+  document.getElementById('modalTitle').textContent = options.title || 'Confirm';
+  let body = options.body || '';
+  if (options.checks && options.checks.length) body += '<div id="modalChecklist">' + options.checks.map(function(check,index){return '<label class="modal-check"><input type="checkbox" onchange="updateModalConfirmation()"><span>'+escapeHtml(check)+'</span></label>';}).join('') + '</div>';
+  document.getElementById('modalBody').innerHTML = body;
+  const button=document.getElementById('modalConfirmButton');button.textContent=options.confirmLabel||'Confirm';button.className='button '+(options.tone||'primary');button.disabled=!!(options.checks&&options.checks.length);
+  document.getElementById('modalOverlay').classList.remove('hidden');
+}
+function updateModalConfirmation(){const checks=Array.from(document.querySelectorAll('#modalChecklist input'));document.getElementById('modalConfirmButton').disabled=checks.some(function(check){return!check.checked;});}
+function confirmModal(){const callback=modalCallback;modalCallback=null;if(callback)callback();}
+function closeModal(){document.getElementById('modalOverlay').classList.add('hidden');modalCallback=null;}
+
+function showToast(type,title,message,duration) {
+  const id='toast-'+Date.now()+'-'+Math.floor(Math.random()*1000);const icons={success:'✓',warning:'△',error:'!',info:'i'};
+  const container=document.getElementById('toastContainer');const toast=document.createElement('div');toast.id=id;toast.className='toast '+(type||'info');toast.innerHTML='<div class="toast-icon">'+(icons[type]||'i')+'</div><div><div class="toast-title">'+escapeHtml(title)+'</div><div class="toast-message">'+escapeHtml(message||'')+'</div></div><button class="toast-close" onclick="removeToast(\''+id+'\')">×</button>';container.appendChild(toast);setTimeout(function(){removeToast(id);},duration||5200);
+}
+function removeToast(id){const toast=document.getElementById(id);if(toast)toast.remove();}
+
+function setSaveIndicator(status,text){const indicator=document.getElementById('saveIndicator');indicator.className='save-indicator '+status;indicator.classList.remove('hidden');document.getElementById('saveIndicatorText').textContent=text;}
+function updateGlobalSaveIndicator(){
+  if (currentCycleTab === 'meeting' && currentCycle && currentCycle.status === 'Review Meeting Open') {
+    if (meetingDirty) setSaveIndicator('unsaved','Unsaved meeting notes');
+    else if (meetingDraft && meetingDraft.lastSavedAt) setSaveIndicator('saved','Saved '+formatLocalDateTime(meetingDraft.lastSavedAt));
+    else setSaveIndicator('saved','Autosave enabled');
+    return;
+  }
+  const model=currentCycleTab==='manager'?editorState.manager:currentCycleTab==='self'?editorState.self:null;
+  if(!model){document.getElementById('saveIndicator').classList.add('hidden');return;}
+  if(model.saving)setSaveIndicator('saving','Saving…');
+  else if(model.dirty)setSaveIndicator('unsaved','Unsaved changes');
+  else if(model.lastSavedAt)setSaveIndicator('saved','Saved '+formatLocalDateTime(model.lastSavedAt));
+  else setSaveIndicator('saved','Autosave enabled');
+}
+
+function handleOnlineStatus(){const offline=!navigator.onLine;document.getElementById('networkBanner').classList.toggle('hidden',!offline);if(!offline){if(editorState.manager.dirty)autosaveReview('manager');if(editorState.self.dirty)autosaveReview('self');if(meetingDirty)autosaveMeeting();}}
+function handleBeforeUnload(event){if(editorState.manager.dirty||editorState.self.dirty||meetingDirty){event.preventDefault();event.returnValue='';}}
+
+function showBootScreen(){document.getElementById('bootScreen').classList.remove('hidden');document.getElementById('appShell').classList.add('hidden');}
+function showCycleSkeleton(){const target=document.getElementById('cycleView');target.innerHTML='<div class="cycle-hero"><div class="skeleton-line" style="width:45%"></div><div class="skeleton-line" style="width:68%"></div><div class="skeleton-line" style="height:42px"></div></div><div class="card"><div class="skeleton-line" style="width:30%"></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line" style="width:80%"></div></div>';}
+function showFatalError(error){document.getElementById('bootScreen').classList.add('hidden');document.getElementById('appShell').classList.remove('hidden');document.getElementById('errorView').innerHTML='<div class="error-state"><div class="error-state-icon">!</div><h2>We could not load the review portal</h2><p>'+escapeHtml(errorMessage(error))+'</p><button class="button primary" onclick="refreshApplication(\'\',\'\')">Try again</button></div>';navigate('error');}
+function renderCycleError(error,cycleId,action){document.getElementById('cycleView').innerHTML='<div class="error-state"><div class="error-state-icon">!</div><h2>We could not open this review</h2><p>'+escapeHtml(errorMessage(error))+'</p><button class="button primary" onclick="loadCycle(\''+escapeAttr(cycleId)+'\',\''+escapeAttr(action||'overview')+'\')">Try again</button></div>';}
+
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');}
+function closeSidebar(){document.getElementById('sidebar').classList.remove('open');}
+
+function actionToTab(action,cycle){if(action==='manager-review'||action==='manager')return'manager';if(action==='self-evaluation'||action==='self')return'self';if(action==='meeting')return'meeting';if(action==='signature'||action==='signatures')return'signatures';if(action==='compensation')return'overview';return'overview';}
+function actionButtonClass(tone){if(tone==='warning')return'warning';if(tone==='success')return'success';if(tone==='secondary')return'outline';return'primary';}
+function statusPill(value,tone){return'<span class="status-pill '+(tone||statusTone(value))+'">'+escapeHtml(humanStatus(value))+'</span>';}
+function statusPillForDocument(value){return'<span class="status-pill '+documentStatusTone(value)+'">'+escapeHtml(humanDocumentStatus(value))+'</span>';}
+function statusTone(value){if(value==='Complete'||value==='Signed')return'green';if(value==='Awaiting Signatures'||value==='Action required'||value==='Ready to sign')return'amber';if(value==='Review Meeting Open')return'blue';if(value==='Ready for Review Meeting')return'purple';if(value==='Needs attention')return'amber';return'';}
+function documentStatusTone(value){if(value==='Complete')return'green';if(String(value).includes('Pending'))return'amber';if(value==='Submitted')return'purple';if(value==='Draft')return'blue';return'';}
+function humanStatus(value){const map={'Open for Input':'Drafting','Ready for Review Meeting':'Ready for Meeting','Review Meeting Open':'Meeting Open','Awaiting Signatures':'Awaiting Signatures','Complete':'Complete'};return map[value]||value||'';}
+function humanDocumentStatus(value){const map={'Not Started':'Not started','Draft':'In progress','Submitted':'Submitted and sealed','Pending Manager and Employee Signatures':'Waiting for manager and employee signatures','Pending Manager Signature':'Waiting for manager signature','Pending Employee Signature':'Waiting for employee signature','Pending HR Signature':'Waiting for HR signature','Complete':'Complete'};return map[value]||value||'';}
+function ratingLabel(value){if(!value)return'';if(value==='N/A')return'N/A';const item=state.ratings.find(function(r){return String(r.value)===String(value);});return item?item.value+' — '+item.label:String(value);}
+function isNumericRating(value){const n=Number(value);return value!==''&&value!=='N/A'&&Number.isInteger(n)&&n>=1&&n<=7;}
+function greetingPeriod(){const hour=new Date().getHours();return hour<12?'morning':hour<17?'afternoon':'evening';}
+function formatLocalDateTime(value){if(!value)return'';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
+function deepClone(value){return JSON.parse(JSON.stringify(value||{}));}
+function errorMessage(error){return error&&error.message?error.message:String(error||'Unknown error');}
+function scrollToField(id){const element=document.getElementById(id);if(element){element.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(function(){element.focus();},250);}}
+function setButtonBusy(button,busy,text){if(!button)return;button.disabled=busy;button.textContent=text;}
+function valueOf(id){const element=document.getElementById(id);return element?String(element.value||'').trim():'';}
+function setValue(id,value){const element=document.getElementById(id);if(element)element.value=value||'';}
+function toDateInput(value){if(!value)return'';const parts=String(value).split('/');if(parts.length!==3)return'';return parts[2]+'-'+String(parts[0]).padStart(2,'0')+'-'+String(parts[1]).padStart(2,'0');}
+function escapeHtml(value){return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');}
+function escapeAttr(value){return escapeHtml(value).replace(/`/g,'&#096;');}
+</script>
+</body>
+</html>
