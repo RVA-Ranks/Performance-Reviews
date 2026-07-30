@@ -16,7 +16,8 @@ Replace / add in the Apps Script project:
 | `Code.gs` | Full replace |
 | `Index.html` | Full replace |
 | `V31_Idempotency_Tests.gs` | Full replace |
-| `V31_Finalization_Tests.gs` | Add new file |
+| `V31_Finalization_Tests.gs` | Full replace |
+| `V31_Workflow_Notification_Tests.gs` | Add new file |
 | `appsscript.json` | Unchanged unless scopes already match |
 
 Then run `upgradeToV31()` (idempotent) to append new columns.
@@ -41,7 +42,13 @@ Calendar configuration (`setTag` / reminders) is best-effort after create:
 
 - Launch may complete at `Created` (event exists)
 - Config failure persists `Last Launch Error` and is **not** cleared by later email success
-- HR sees “not Configured” warning + **Retry Calendar Config** until status is `Configured`
+- HR uses **`retryReviewCalendarConfiguration(cycleId)`** (not Retry Launch) until `Configured`
+- Missing/inaccessible events use marker recovery, then explicit **`rebuildReviewCalendarEvent(cycleId)`**
+
+Manual create:
+
+- Duplicate active cycles (employee + type + period) are rejected
+- After the row commits, the API returns partial success when launch needs attention
 
 ## New finalization behavior
 
@@ -53,21 +60,35 @@ Awaiting Signatures → Finalizing → Complete
 
 - Manager PDF ID persisted
 - Self PDF ID persisted
-- Final distribution status = `Sent`
+- Final distribution status = `Sent` (with Attempt ID verified on commit)
 
 Artifact recovery:
 
 - PDFs: `{documentType} - {cycleId}.pdf`
-- Signatures: `{cycleId} - {sanitizedLabel}.png`
+- Signatures: `{cycleId} - {sanitizedLabel}.png` (duplicates require HR; newest is never auto-chosen)
+- HR PDF Unknown reconciliation: `reconcileFinalPdf(...)`
 
-HR recovery: `retryReviewFinalization(cycleId, { allowUnknownResend })`
+Signature captures use per-role claim/attempt IDs before Drive writes.
+
+## Workflow notifications
+
+Durable claim/commit states for:
+
+- Ready-for-meeting
+- Meeting-opened manager / employee
+- Manager / employee / HR signature requests
+
+HR retry: `retryWorkflowNotification(cycleId, componentKey, { allowUnknownResend })`
 
 ## Tests
 
 ```text
 runV31IdempotencyTests()
 runV31FinalizationTests()
+runV31WorkflowNotificationTests()
 ```
+
+Live Drive/Calendar/Mail/concurrency probes remain gated behind Preview sandbox flags.
 
 ## Repository topology
 

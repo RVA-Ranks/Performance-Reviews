@@ -68,10 +68,44 @@ const V31 = Object.freeze({
     'Self PDF Attempt ID',
     'Self PDF Started At',
     'Final Distribution Status',
+    'Final Distribution Attempt ID',
     'Final Distribution Started At',
     'Final Distribution Sent At',
     'Finalization Last Error',
     'Finalization Attempt Count',
+    'Manager Signature Status',
+    'Manager Signature Attempt ID',
+    'Manager Signature Started At',
+    'Employee Signature Status',
+    'Employee Signature Attempt ID',
+    'Employee Signature Started At',
+    'HR Signature Status',
+    'HR Signature Attempt ID',
+    'HR Signature Started At',
+    'Ready Notification Status',
+    'Ready Notification Attempt ID',
+    'Ready Notification Started At',
+    'Ready Notification Sent At',
+    'Meeting Manager Email Status',
+    'Meeting Manager Email Attempt ID',
+    'Meeting Manager Email Started At',
+    'Meeting Manager Email Sent At',
+    'Meeting Employee Email Status',
+    'Meeting Employee Email Attempt ID',
+    'Meeting Employee Email Started At',
+    'Meeting Employee Email Sent At',
+    'Manager Signature Email Status',
+    'Manager Signature Email Attempt ID',
+    'Manager Signature Email Started At',
+    'Manager Signature Email Sent At',
+    'Employee Signature Email Status',
+    'Employee Signature Email Attempt ID',
+    'Employee Signature Email Started At',
+    'Employee Signature Email Sent At',
+    'HR Signature Email Status',
+    'HR Signature Email Attempt ID',
+    'HR Signature Email Started At',
+    'HR Signature Email Sent At',
     'Compensation Decision',
     'Compensation Decision Notes',
     'Compensation Decision At',
@@ -385,12 +419,20 @@ function getV31CycleData_(cycle, email, isHr) {
     calendarConfigWarning: isHr
       ? hasCalendarConfigWarning_(cycle)
       : false,
+    calendarEventMissing: isHr
+      ? String(cycle['Last Launch Error'] || '').indexOf(
+          'Calendar event missing or inaccessible:'
+        ) === 0
+      : false,
     finalization: isHr
       ? getFinalizationSummary_(cycle)
       : null,
     needsFinalizationRetry:
       isHr &&
       String(cycle['Status']) === PR.CYCLE.FINALIZING,
+    notifications: isHr
+      ? getWorkflowNotificationSummary_(cycle)
+      : null,
     daysUntilMeeting: daysUntilMeeting,
 
     compensationRequired:
@@ -612,17 +654,27 @@ function buildV31Guidance_(
       actionLabel: 'Retry Launch',
     });
   } else if (isHr && hasCalendarConfigWarning_(cycle)) {
+    const missing =
+      String(cycle['Last Launch Error'] || '').indexOf(
+        'Calendar event missing or inaccessible:'
+      ) === 0;
+
     items.push({
       tone: 'warning',
-      title: 'Calendar event is not fully configured',
-      message:
-        'The shared calendar event exists, but tags/reminders are not Configured yet. Launch emails may already be complete. Use Retry Launch to finish calendar configuration without duplicating Sent emails.' +
-        (isCalendarConfigWarning_(cycle['Last Launch Error'])
-          ? ' Last error: ' +
-            String(cycle['Last Launch Error'])
-          : ''),
+      title: missing
+        ? 'Calendar event missing or inaccessible'
+        : 'Calendar event is not fully configured',
+      message: missing
+        ? 'The persisted calendar event could not be loaded and marker recovery found nothing. Use Rebuild Calendar Event only after confirming the original event is gone.'
+        : 'The shared calendar event exists, but tags/reminders are not Configured yet. Launch emails may already be complete. Use Retry Calendar Config to finish configuration without duplicating Sent emails.' +
+          (isCalendarConfigWarning_(cycle['Last Launch Error'])
+            ? ' Last error: ' +
+              String(cycle['Last Launch Error'])
+            : ''),
       action: 'overview',
-      actionLabel: 'Retry Calendar Config',
+      actionLabel: missing
+        ? 'Rebuild Calendar Event'
+        : 'Retry Calendar Config',
     });
   }
 
@@ -1796,6 +1848,8 @@ function applyV31DefaultsToCycle_(
     (cycle['Final Distribution Sent At']
       ? V31.DELIVERY.SENT
       : V31.DELIVERY.PENDING);
+  cycle['Final Distribution Attempt ID'] =
+    cycle['Final Distribution Attempt ID'] || '';
   cycle['Final Distribution Started At'] =
     cycle['Final Distribution Started At'] || '';
   cycle['Final Distribution Sent At'] =
@@ -1808,6 +1862,48 @@ function applyV31DefaultsToCycle_(
       ? 0
       : Number(cycle['Finalization Attempt Count'] || 0);
 
+  ensureDeliveryFieldDefaults_(cycle, [
+    ['Manager Signature Status', 'Manager Signature Attempt ID', 'Manager Signature Started At', ''],
+    ['Employee Signature Status', 'Employee Signature Attempt ID', 'Employee Signature Started At', ''],
+    ['HR Signature Status', 'HR Signature Attempt ID', 'HR Signature Started At', ''],
+    [
+      'Ready Notification Status',
+      'Ready Notification Attempt ID',
+      'Ready Notification Started At',
+      'Ready Notification Sent At',
+    ],
+    [
+      'Meeting Manager Email Status',
+      'Meeting Manager Email Attempt ID',
+      'Meeting Manager Email Started At',
+      'Meeting Manager Email Sent At',
+    ],
+    [
+      'Meeting Employee Email Status',
+      'Meeting Employee Email Attempt ID',
+      'Meeting Employee Email Started At',
+      'Meeting Employee Email Sent At',
+    ],
+    [
+      'Manager Signature Email Status',
+      'Manager Signature Email Attempt ID',
+      'Manager Signature Email Started At',
+      'Manager Signature Email Sent At',
+    ],
+    [
+      'Employee Signature Email Status',
+      'Employee Signature Email Attempt ID',
+      'Employee Signature Email Started At',
+      'Employee Signature Email Sent At',
+    ],
+    [
+      'HR Signature Email Status',
+      'HR Signature Email Attempt ID',
+      'HR Signature Email Started At',
+      'HR Signature Email Sent At',
+    ],
+  ]);
+
   cycle['Compensation Decision'] =
     cycle['Compensation Decision'] ||
     V31.COMPENSATION.PENDING;
@@ -1819,6 +1915,31 @@ function applyV31DefaultsToCycle_(
     cycle['Compensation Decision By'] || '';
 
   return backfillLegacyLaunchFields_(cycle);
+}
+
+/**
+ * Initialize Pending/Sent delivery triplets used by signature claims
+ * and workflow notification outbox fields.
+ */
+function ensureDeliveryFieldDefaults_(cycle, groups) {
+  groups.forEach(function (group) {
+    const statusField = group[0];
+    const attemptField = group[1];
+    const startedField = group[2];
+    const sentAtField = group[3];
+
+    if (sentAtField) {
+      cycle[sentAtField] = cycle[sentAtField] || '';
+    }
+
+    cycle[statusField] =
+      cycle[statusField] ||
+      (sentAtField && cycle[sentAtField]
+        ? V31.DELIVERY.SENT
+        : V31.DELIVERY.PENDING);
+    cycle[attemptField] = cycle[attemptField] || '';
+    cycle[startedField] = cycle[startedField] || '';
+  });
 }
 
 /**
@@ -2615,18 +2736,40 @@ function runCalendarLaunchStep_(cycleId, allowUnknownResend) {
     claim.cycle['Calendar Event ID'] &&
     claim.cycle['Calendar Status'] === V31.CALENDAR.CREATED
   ) {
-    try {
-      const settings = getSettings_();
-      const calendar = openReviewCalendar_(settings);
-      const event = calendar.getEventById(
-        claim.cycle['Calendar Event ID']
-      );
+    const resolved = resolveReviewCalendarEvent_(
+      claim.cycle,
+      false
+    );
 
-      if (event) {
-        configureCalendarLaunchStepBestEffort_(cycleId, event);
+    if (resolved.event) {
+      if (
+        resolved.recoveredId &&
+        resolved.recoveredId !==
+          String(claim.cycle['Calendar Event ID'] || '')
+      ) {
+        withLock_(function () {
+          const location = findCycle_(cycleId);
+          const fresh = location.object;
+          fresh['Calendar Event ID'] = resolved.recoveredId;
+          fresh['Updated At'] = new Date();
+          persistLaunchCycle_(location.rowNumber, fresh);
+        });
       }
-    } catch (lookupError) {
-      // Best effort only; Created remains sufficient for launch completion.
+
+      configureCalendarLaunchStepBestEffort_(
+        cycleId,
+        resolved.event
+      );
+    } else if (resolved.error) {
+      withLock_(function () {
+        const location = findCycle_(cycleId);
+        const fresh = location.object;
+        fresh['Last Launch Error'] =
+          'Calendar event missing or inaccessible: ' +
+          resolved.error;
+        fresh['Updated At'] = new Date();
+        persistLaunchCycle_(location.rowNumber, fresh);
+      });
     }
   }
 
@@ -2885,6 +3028,563 @@ function retryReviewLaunch(cycleId, options) {
         describeReviewLaunchStatus_(launched),
     launchComponents: after,
   };
+}
+
+/**
+ * Resolve a cycle's Calendar event by persisted ID, then by marker /
+ * tag recovery. Does not create a replacement event.
+ */
+function resolveReviewCalendarEvent_(cycle, persistLookupError) {
+  const settings = getSettings_();
+  const calendar = openReviewCalendar_(settings);
+  const cycleId = String(cycle['Cycle ID'] || '');
+  const knownId = String(cycle['Calendar Event ID'] || '');
+  let lookupError = '';
+
+  if (knownId) {
+    try {
+      const known = calendar.getEventById(knownId);
+
+      if (known) {
+        return {
+          event: known,
+          recoveredId: '',
+          error: '',
+          calendar: calendar,
+        };
+      }
+
+      lookupError =
+        'getEventById returned no event for the persisted ID.';
+    } catch (error) {
+      lookupError = String(error.message || error);
+    }
+  }
+
+  const meetingDate = v31Date_(cycle['Review Meeting Date']);
+  const recovered = findExistingReviewCalendarEvent_(
+    calendar,
+    cycleId,
+    meetingDate,
+    ''
+  );
+
+  if (recovered) {
+    return {
+      event: recovered,
+      recoveredId: recovered.getId(),
+      error: '',
+      calendar: calendar,
+    };
+  }
+
+  const message =
+    lookupError ||
+    (knownId
+      ? 'Persisted calendar event is missing and marker recovery found nothing.'
+      : 'No calendar event ID is stored and marker recovery found nothing.');
+
+  if (persistLookupError) {
+    // Caller decides whether to write; return the message either way.
+  }
+
+  return {
+    event: null,
+    recoveredId: '',
+    error: message,
+    calendar: calendar,
+  };
+}
+
+/**
+ * HR-only: configure tags/reminders on the existing launch calendar
+ * event. Never sends launch emails and never creates a second event.
+ */
+function retryReviewCalendarConfiguration(cycleId) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may retry calendar configuration.'
+    );
+  }
+
+  const location = findCycle_(cycleId);
+  let cycle = applyV31DefaultsToCycle_(
+    location.object,
+    location.object['Cycle Source'] || 'Manual'
+  );
+
+  const resolved = resolveReviewCalendarEvent_(cycle, true);
+
+  if (!resolved.event) {
+    withLock_(function () {
+      const freshLocation = findCycle_(cycleId);
+      const fresh = freshLocation.object;
+      fresh['Last Launch Error'] =
+        'Calendar event missing or inaccessible: ' +
+        resolved.error;
+      fresh['Updated At'] = new Date();
+      persistLaunchCycle_(freshLocation.rowNumber, fresh);
+    });
+
+    return {
+      ok: false,
+      missingEvent: true,
+      message:
+        'Event missing or inaccessible. Use Rebuild Calendar Event if HR confirms the original event is gone.',
+      lastLaunchError:
+        'Calendar event missing or inaccessible: ' +
+        resolved.error,
+      launchComponents: getReviewLaunchComponentSummary_(
+        findCycle_(cycleId).object
+      ),
+    };
+  }
+
+  if (resolved.recoveredId) {
+    withLock_(function () {
+      const freshLocation = findCycle_(cycleId);
+      const fresh = freshLocation.object;
+      fresh['Calendar Event ID'] = resolved.recoveredId;
+      fresh['Calendar Status'] =
+        fresh['Calendar Status'] === V31.CALENDAR.CONFIGURED
+          ? V31.CALENDAR.CONFIGURED
+          : V31.CALENDAR.CREATED;
+      fresh['Updated At'] = new Date();
+      persistLaunchCycle_(freshLocation.rowNumber, fresh);
+    });
+  }
+
+  configureCalendarLaunchStepBestEffort_(
+    cycleId,
+    resolved.event
+  );
+
+  cycle = findCycle_(cycleId).object;
+  const configured =
+    String(cycle['Calendar Status']) === V31.CALENDAR.CONFIGURED;
+
+  audit_(
+    cycleId,
+    'Calendar configuration retried',
+    email,
+    V31.CALENDAR.CREATED,
+    String(cycle['Calendar Status'] || ''),
+    JSON.stringify({
+      recoveredId: resolved.recoveredId || '',
+      configured: configured,
+    })
+  );
+
+  return {
+    ok: configured,
+    missingEvent: false,
+    message: configured
+      ? 'Calendar tags and reminders are configured.'
+      : 'Calendar configuration still needs attention: ' +
+        String(cycle['Last Launch Error'] || 'unknown error'),
+    launchComponents: getReviewLaunchComponentSummary_(cycle),
+  };
+}
+
+/**
+ * HR-only: explicitly rebuild a missing calendar event. Does not send
+ * launch emails. Use only after Retry Calendar Config reports missing.
+ */
+function rebuildReviewCalendarEvent(cycleId) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may rebuild a review calendar event.'
+    );
+  }
+
+  const location = findCycle_(cycleId);
+  const cycle = applyV31DefaultsToCycle_(
+    location.object,
+    location.object['Cycle Source'] || 'Manual'
+  );
+
+  const existing = resolveReviewCalendarEvent_(cycle, false);
+
+  if (existing.event) {
+    if (existing.recoveredId) {
+      withLock_(function () {
+        const freshLocation = findCycle_(cycleId);
+        const fresh = freshLocation.object;
+        fresh['Calendar Event ID'] = existing.recoveredId;
+        fresh['Calendar Status'] = V31.CALENDAR.CREATED;
+        fresh['Updated At'] = new Date();
+        persistLaunchCycle_(freshLocation.rowNumber, fresh);
+      });
+    }
+
+    configureCalendarLaunchStepBestEffort_(
+      cycleId,
+      existing.event
+    );
+
+    return {
+      ok: true,
+      rebuilt: false,
+      message:
+        'An existing event was recovered. Configuration was retried instead of creating a duplicate.',
+      launchComponents: getReviewLaunchComponentSummary_(
+        findCycle_(cycleId).object
+      ),
+    };
+  }
+
+  const attemptId = Utilities.getUuid();
+
+  withLock_(function () {
+    const freshLocation = findCycle_(cycleId);
+    const fresh = freshLocation.object;
+    fresh['Calendar Status'] = V31.CALENDAR.CREATING;
+    fresh['Calendar Attempt ID'] = attemptId;
+    fresh['Calendar Started At'] = new Date();
+    fresh['Calendar Event ID'] = '';
+    fresh['Updated At'] = new Date();
+    persistLaunchCycle_(freshLocation.rowNumber, fresh);
+  });
+
+  let event = null;
+  let error = null;
+
+  try {
+    event = createReviewCalendarEvent_(
+      findCycle_(cycleId).object
+    );
+  } catch (err) {
+    error = err;
+  }
+
+  commitCalendarCreatedStep_(cycleId, attemptId, event, error);
+
+  if (error) {
+    throw new Error(
+      'Calendar rebuild failed: ' + String(error.message || error)
+    );
+  }
+
+  configureCalendarLaunchStepBestEffort_(cycleId, event);
+
+  audit_(
+    cycleId,
+    'Calendar event rebuilt',
+    email,
+    '',
+    String(findCycle_(cycleId).object['Calendar Event ID'] || ''),
+    ''
+  );
+
+  return {
+    ok: true,
+    rebuilt: true,
+    message:
+      'A replacement calendar event was created and configuration was attempted.',
+    launchComponents: getReviewLaunchComponentSummary_(
+      findCycle_(cycleId).object
+    ),
+  };
+}
+
+/**
+ * Claim -> send outside lock -> commit for a durable workflow
+ * notification component (ready / meeting / signature request).
+ */
+function deliverWorkflowNotification_(
+  cycleId,
+  component,
+  sendFn,
+  options
+) {
+  const opts = options || {};
+  const allowUnknownResend = !!opts.allowUnknownResend;
+
+  const claim = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] || 'Manual'
+    );
+
+    const decision = decideLaunchComponentAction_(
+      String(cycle[component.statusField] || V31.DELIVERY.PENDING),
+      !!cycle[component.sentAtField],
+      cycle[component.startedField],
+      V31.DELIVERY.SENDING,
+      allowUnknownResend
+    );
+
+    if (decision.action === 'skip') {
+      return {
+        action: 'skip',
+        reason: decision.reason,
+        cycle: cycle,
+      };
+    }
+
+    if (decision.action === 'mark-unknown') {
+      cycle[component.statusField] = V31.DELIVERY.UNKNOWN;
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+
+      return {
+        action: 'skip',
+        reason: 'unknown',
+        cycle: cycle,
+      };
+    }
+
+    const attemptId = Utilities.getUuid();
+
+    cycle[component.statusField] = V31.DELIVERY.SENDING;
+    cycle[component.attemptField] = attemptId;
+    cycle[component.startedField] = new Date();
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+
+    return {
+      action: 'claim',
+      attemptId: attemptId,
+      cycle: cycle,
+    };
+  });
+
+  if (claim.action !== 'claim') {
+    return claim;
+  }
+
+  try {
+    sendFn(claim.cycle);
+
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      if (
+        String(cycle[component.attemptField] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
+
+      cycle[component.statusField] = V31.DELIVERY.SENT;
+      cycle[component.sentAtField] = new Date();
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    return { action: 'sent', cycle: findCycle_(cycleId).object };
+  } catch (error) {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      if (
+        String(cycle[component.attemptField] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
+
+      cycle[component.statusField] = V31.DELIVERY.UNKNOWN;
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    return {
+      action: 'error',
+      error: error,
+      cycle: findCycle_(cycleId).object,
+    };
+  }
+}
+
+function getWorkflowNotificationComponent_(key) {
+  const map = {
+    ready: {
+      key: 'ready',
+      label: 'Ready-for-meeting notification',
+      statusField: 'Ready Notification Status',
+      attemptField: 'Ready Notification Attempt ID',
+      startedField: 'Ready Notification Started At',
+      sentAtField: 'Ready Notification Sent At',
+    },
+    meetingManager: {
+      key: 'meetingManager',
+      label: 'Meeting-opened manager email',
+      statusField: 'Meeting Manager Email Status',
+      attemptField: 'Meeting Manager Email Attempt ID',
+      startedField: 'Meeting Manager Email Started At',
+      sentAtField: 'Meeting Manager Email Sent At',
+    },
+    meetingEmployee: {
+      key: 'meetingEmployee',
+      label: 'Meeting-opened employee email',
+      statusField: 'Meeting Employee Email Status',
+      attemptField: 'Meeting Employee Email Attempt ID',
+      startedField: 'Meeting Employee Email Started At',
+      sentAtField: 'Meeting Employee Email Sent At',
+    },
+    signatureManager: {
+      key: 'signatureManager',
+      label: 'Manager signature request',
+      statusField: 'Manager Signature Email Status',
+      attemptField: 'Manager Signature Email Attempt ID',
+      startedField: 'Manager Signature Email Started At',
+      sentAtField: 'Manager Signature Email Sent At',
+    },
+    signatureEmployee: {
+      key: 'signatureEmployee',
+      label: 'Employee signature request',
+      statusField: 'Employee Signature Email Status',
+      attemptField: 'Employee Signature Email Attempt ID',
+      startedField: 'Employee Signature Email Started At',
+      sentAtField: 'Employee Signature Email Sent At',
+    },
+    signatureHr: {
+      key: 'signatureHr',
+      label: 'HR signature request',
+      statusField: 'HR Signature Email Status',
+      attemptField: 'HR Signature Email Attempt ID',
+      startedField: 'HR Signature Email Started At',
+      sentAtField: 'HR Signature Email Sent At',
+    },
+  };
+
+  if (!map[key]) {
+    throw new Error('Unknown workflow notification: ' + key);
+  }
+
+  return map[key];
+}
+
+/**
+ * HR-only: retry a single durable workflow notification recipient.
+ */
+function retryWorkflowNotification(
+  cycleId,
+  componentKey,
+  options
+) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may retry workflow notification emails.'
+    );
+  }
+
+  const component = getWorkflowNotificationComponent_(
+    componentKey
+  );
+  const result = deliverWorkflowNotification_(
+    cycleId,
+    component,
+    function (cycle) {
+      sendWorkflowNotificationBody_(componentKey, cycle);
+    },
+    options || { allowUnknownResend: true }
+  );
+
+  audit_(
+    cycleId,
+    'Workflow notification retried',
+    email,
+    componentKey,
+    result.action,
+    JSON.stringify({
+      allowUnknownResend: !!(options && options.allowUnknownResend),
+    })
+  );
+
+  if (result.action === 'error') {
+    throw new Error(
+      component.label +
+        ' is Delivery Unknown after send failure: ' +
+        String(result.error.message || result.error)
+    );
+  }
+
+  return {
+    ok: true,
+    action: result.action,
+    message:
+      result.action === 'sent'
+        ? component.label + ' sent.'
+        : component.label +
+          ' was not resent (' +
+          (result.reason || result.action) +
+          ').',
+    notifications: getWorkflowNotificationSummary_(
+      findCycle_(cycleId).object
+    ),
+  };
+}
+
+function getWorkflowNotificationSummary_(cycle) {
+  const keys = [
+    'ready',
+    'meetingManager',
+    'meetingEmployee',
+    'signatureManager',
+    'signatureEmployee',
+    'signatureHr',
+  ];
+
+  const summary = {};
+
+  keys.forEach(function (key) {
+    const component = getWorkflowNotificationComponent_(key);
+    summary[key] = String(
+      cycle[component.statusField] || V31.DELIVERY.PENDING
+    );
+  });
+
+  summary.hasUnknown = keys.some(function (key) {
+    return summary[key] === V31.DELIVERY.UNKNOWN;
+  });
+
+  return summary;
+}
+
+function sendWorkflowNotificationBody_(componentKey, cycle) {
+  if (componentKey === 'ready') {
+    sendReadyForMeetingEmailBody_(cycle);
+    return;
+  }
+
+  if (componentKey === 'meetingManager') {
+    sendMeetingOpenedRecipientEmail_(cycle, 'manager');
+    return;
+  }
+
+  if (componentKey === 'meetingEmployee') {
+    sendMeetingOpenedRecipientEmail_(cycle, 'employee');
+    return;
+  }
+
+  if (componentKey === 'signatureManager') {
+    sendCombinedSignatureEmailBody_(cycle, PR.ROLE.MANAGER);
+    return;
+  }
+
+  if (componentKey === 'signatureEmployee') {
+    sendCombinedSignatureEmailBody_(cycle, PR.ROLE.EMPLOYEE);
+    return;
+  }
+
+  if (componentKey === 'signatureHr') {
+    sendCombinedSignatureEmailBody_(cycle, PR.ROLE.HR);
+  }
 }
 
 function openReviewCalendar_(settings) {

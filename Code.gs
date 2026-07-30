@@ -396,6 +396,21 @@ function createReviewCycle(payload) {
   const cycleId = Utilities.getUuid();
 
   const row = withLock_(function () {
+    const duplicate = findDuplicateActiveManualCycle_(
+      clean.employeeEmail,
+      clean.reviewType,
+      parseDateInput_(clean.reviewPeriodStart),
+      parseDateInput_(clean.reviewPeriodEnd)
+    );
+
+    if (duplicate) {
+      throw new Error(
+        'An active review cycle already exists for this employee, review type, and period (' +
+          duplicate['Cycle ID'] +
+          '). Open that cycle and use Retry Launch instead of creating another.'
+      );
+    }
+
     const created = {
       'Cycle ID': cycleId,
       'Created At': now,
@@ -465,15 +480,81 @@ function createReviewCycle(payload) {
     return created;
   });
 
-  // External Calendar/Mail must not hold the global script lock.
-  launchReviewCycleCommunications_(row, false);
+  // After the row is committed, never present creation as a total failure.
+  let launchError = '';
+  let launched = row;
+
+  try {
+    launched = launchReviewCycleCommunications_(row, false);
+  } catch (error) {
+    launchError = String(error.message || error);
+    launched = findCycle_(cycleId).object;
+  }
+
+  const launchComplete = isReviewLaunchComplete_(launched);
 
   return {
     ok: true,
+    cycleCreated: true,
+    launchComplete: launchComplete,
     cycleId: cycleId,
-    message:
-      'The review cycle was created, HR and both participants were notified, and one shared calendar event was added.',
+    message: launchComplete
+      ? 'The review cycle was created, HR and both participants were notified, and one shared calendar event was added.'
+      : 'Review created, but launch requires attention.' +
+        (launchError ? ' ' + launchError : ' ' + describeReviewLaunchStatus_(launched)),
+    launchComponents: getReviewLaunchComponentSummary_(launched),
   };
+}
+
+/**
+ * Reject a second active manual cycle for the same employee, type, and
+ * period window. Complete cycles do not block a later period reuse.
+ */
+function findDuplicateActiveManualCycle_(
+  employeeEmail,
+  reviewType,
+  periodStart,
+  periodEnd
+) {
+  const wantedEmail = normalizeEmail_(employeeEmail);
+  const wantedType = String(reviewType || '');
+  const startMs = periodStart ? new Date(periodStart).getTime() : NaN;
+  const endMs = periodEnd ? new Date(periodEnd).getTime() : NaN;
+
+  if (!wantedEmail || !wantedType || Number.isNaN(startMs) || Number.isNaN(endMs)) {
+    return null;
+  }
+
+  const cycles = getAllObjects_(PR.SHEETS.CYCLES);
+
+  for (let i = 0; i < cycles.length; i++) {
+    const cycle = cycles[i];
+
+    if (String(cycle['Status']) === PR.CYCLE.COMPLETE) {
+      continue;
+    }
+
+    if (normalizeEmail_(cycle['Employee Email']) !== wantedEmail) {
+      continue;
+    }
+
+    if (String(cycle['Review Type'] || '') !== wantedType) {
+      continue;
+    }
+
+    const existingStart = cycle['Review Period Start']
+      ? new Date(cycle['Review Period Start']).getTime()
+      : NaN;
+    const existingEnd = cycle['Review Period End']
+      ? new Date(cycle['Review Period End']).getTime()
+      : NaN;
+
+    if (existingStart === startMs && existingEnd === endMs) {
+      return cycle;
+    }
+  }
+
+  return null;
 }
 
 function saveManagerReview(cycleId, payload, submit) {
@@ -517,7 +598,7 @@ function saveIndependentReview_(
   submit,
   source
 ) {
-  return withLock_(function () {
+  const saved = withLock_(function () {
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
     const cycle = location.object;
@@ -586,13 +667,6 @@ function saveIndependentReview_(
       );
     }
 
-    if (
-      submit &&
-      String(cycle['Status']) === PR.CYCLE.READY
-    ) {
-      sendReadyForMeetingEmail_(cycle);
-    }
-
     return {
       ok: true,
       status: newStatus,
@@ -603,8 +677,29 @@ function saveIndependentReview_(
         : source === 'autosave'
         ? 'Draft autosaved.'
         : type + ' draft saved.',
+      notifyReady:
+        submit && String(cycle['Status']) === PR.CYCLE.READY,
     };
   });
+
+  if (saved.notifyReady) {
+    deliverWorkflowNotification_(
+      cycleId,
+      getWorkflowNotificationComponent_('ready'),
+      function (cycle) {
+        sendReadyForMeetingEmailBody_(cycle);
+      },
+      {}
+    );
+  }
+
+  return {
+    ok: saved.ok,
+    status: saved.status,
+    savedAt: saved.savedAt,
+    savedAtIso: saved.savedAtIso,
+    message: saved.message,
+  };
 }
 
 function startReviewMeeting(cycleId) {
@@ -648,7 +743,7 @@ function startReviewMeeting(cycleId) {
     return stored;
   });
 
-  sendMeetingOpenedEmails_(cycle);
+  sendMeetingOpenedEmails_(cycleId);
 
   return {
     ok: true,
@@ -790,8 +885,8 @@ function releaseReviewSignatures(cycleId) {
     return stored;
   });
 
-  sendCombinedSignatureEmail_(cycle, PR.ROLE.MANAGER);
-  sendCombinedSignatureEmail_(cycle, PR.ROLE.EMPLOYEE);
+  sendCombinedSignatureEmail_(cycleId, PR.ROLE.MANAGER);
+  sendCombinedSignatureEmail_(cycleId, PR.ROLE.EMPLOYEE);
 
   return {
     ok: true,
@@ -875,7 +970,10 @@ function signReviewCycle(cycleId, signatureDataUrl) {
 
   const claim = withLock_(function () {
     const location = findCycle_(cycleId);
-    const cycle = location.object;
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] || 'Manual'
+    );
 
     if (String(cycle['Status']) !== PR.CYCLE.SIGNATURES) {
       throw new Error(
@@ -915,21 +1013,104 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       );
     }
 
-    return { role: role, cycle: cycle };
+    const fields = getSignatureClaimFields_(role);
+    const decision = decideLaunchComponentAction_(
+      String(cycle[fields.statusField] || V31.DELIVERY.PENDING),
+      state[
+        role === PR.ROLE.MANAGER
+          ? 'managerSigned'
+          : role === PR.ROLE.EMPLOYEE
+          ? 'employeeSigned'
+          : 'hrSigned'
+      ],
+      cycle[fields.startedField],
+      V31.DELIVERY.SENDING,
+      false
+    );
+
+    if (decision.action === 'skip' && decision.reason === 'in-progress') {
+      throw new Error(
+        role + ' signature capture is already in progress.'
+      );
+    }
+
+    if (decision.action === 'skip' && decision.reason === 'unknown') {
+      throw new Error(
+        role +
+          ' signature is Delivery Unknown because multiple signature images may exist. HR must reconcile before retrying.'
+      );
+    }
+
+    if (decision.action === 'mark-unknown') {
+      cycle[fields.statusField] = V31.DELIVERY.UNKNOWN;
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+      throw new Error(
+        role +
+          ' signature claim went stale. HR must reconcile before another attempt.'
+      );
+    }
+
+    const attemptId = Utilities.getUuid();
+
+    cycle[fields.statusField] = V31.DELIVERY.SENDING;
+    cycle[fields.attemptField] = attemptId;
+    cycle[fields.startedField] = new Date();
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+
+    return { role: role, attemptId: attemptId, fields: fields };
   });
 
-  // Drive write happens outside the global lock.
-  const signatureId = saveSignature_(
-    cycleId,
-    'Combined Review Packet - ' + claim.role,
-    signatureDataUrl
-  );
+  let signatureId = '';
+
+  try {
+    signatureId = saveSignature_(
+      cycleId,
+      'Combined Review Packet - ' + claim.role,
+      signatureDataUrl
+    );
+  } catch (error) {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      if (
+        String(cycle[claim.fields.attemptField] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
+
+      cycle[claim.fields.statusField] = V31.DELIVERY.UNKNOWN;
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    throw error;
+  }
 
   const signed = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
     const now = new Date();
     const state = getCombinedSignatureState_(cycle);
+
+    if (
+      String(cycle[claim.fields.attemptField] || '') !==
+      String(claim.attemptId)
+    ) {
+      return {
+        role: claim.role,
+        cycle: cycle,
+        updatedState: state,
+        alreadySigned: true,
+        superseded: true,
+      };
+    }
 
     if (String(cycle['Status']) !== PR.CYCLE.SIGNATURES) {
       throw new Error(
@@ -939,6 +1120,8 @@ function signReviewCycle(cycleId, signatureDataUrl) {
 
     if (claim.role === PR.ROLE.MANAGER) {
       if (state.managerSigned) {
+        cycle[claim.fields.statusField] = V31.DELIVERY.SENT;
+        writeCycle_(location.rowNumber, cycle);
         return {
           role: claim.role,
           cycle: cycle,
@@ -953,6 +1136,8 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       cycle['SELF Manager Signed At'] = now;
     } else if (claim.role === PR.ROLE.EMPLOYEE) {
       if (state.employeeSigned) {
+        cycle[claim.fields.statusField] = V31.DELIVERY.SENT;
+        writeCycle_(location.rowNumber, cycle);
         return {
           role: claim.role,
           cycle: cycle,
@@ -967,6 +1152,8 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       cycle['SELF Employee Signed At'] = now;
     } else {
       if (state.hrSigned) {
+        cycle[claim.fields.statusField] = V31.DELIVERY.SENT;
+        writeCycle_(location.rowNumber, cycle);
         return {
           role: claim.role,
           cycle: cycle,
@@ -987,6 +1174,7 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       cycle['SELF HR Signed At'] = now;
     }
 
+    cycle[claim.fields.statusField] = V31.DELIVERY.SENT;
     updateCombinedSignatureStatuses_(cycle);
     cycle['Updated At'] = now;
 
@@ -1016,10 +1204,10 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     signed.updatedState.managerSigned &&
     signed.updatedState.employeeSigned
   ) {
-    sendCombinedSignatureEmail_(signed.cycle, PR.ROLE.HR);
+    sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
   }
 
-  if (signed.role === PR.ROLE.HR) {
+  if (signed.role === PR.ROLE.HR && !signed.alreadySigned) {
     const finalizeResult = finalizeReviewCycle_(cycleId);
 
     return {
@@ -1038,6 +1226,30 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       signed.updatedState.employeeSigned
         ? ' HR has been notified to sign last.'
         : ' The other participant may now sign from the same review cycle.'),
+  };
+}
+
+function getSignatureClaimFields_(role) {
+  if (role === PR.ROLE.MANAGER) {
+    return {
+      statusField: 'Manager Signature Status',
+      attemptField: 'Manager Signature Attempt ID',
+      startedField: 'Manager Signature Started At',
+    };
+  }
+
+  if (role === PR.ROLE.EMPLOYEE) {
+    return {
+      statusField: 'Employee Signature Status',
+      attemptField: 'Employee Signature Attempt ID',
+      startedField: 'Employee Signature Started At',
+    };
+  }
+
+  return {
+    statusField: 'HR Signature Status',
+    attemptField: 'HR Signature Attempt ID',
+    startedField: 'HR Signature Started At',
   };
 }
 
@@ -2234,23 +2446,13 @@ function buildReviewPdfFileName_(cycleId, documentType) {
  * cycle/document before regenerating another copy.
  */
 function findExistingReviewPdfId_(cycleId, documentType) {
-  const settings = getSettings_();
-  const folder = DriveApp.getFolderById(
-    settings.REVIEW_FOLDER_ID
-  );
-  const wanted = buildReviewPdfFileName_(
+  const matches = listMatchingReviewPdfArtifacts_(
     cycleId,
     documentType
   );
-  const matches = [];
-  const files = folder.getFilesByName(wanted);
-
-  while (files.hasNext()) {
-    matches.push(files.next());
-  }
 
   if (matches.length === 1) {
-    return matches[0].getId();
+    return matches[0].id;
   }
 
   if (matches.length > 1) {
@@ -2264,6 +2466,206 @@ function findExistingReviewPdfId_(cycleId, documentType) {
   }
 
   return '';
+}
+
+function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
+  const settings = getSettings_();
+  const folder = DriveApp.getFolderById(
+    settings.REVIEW_FOLDER_ID
+  );
+  const wanted = buildReviewPdfFileName_(
+    cycleId,
+    documentType
+  );
+  const matches = [];
+  const files = folder.getFilesByName(wanted);
+
+  while (files.hasNext()) {
+    const file = files.next();
+    matches.push({
+      id: file.getId(),
+      name: file.getName(),
+      updatedAt: file.getLastUpdated()
+        ? file.getLastUpdated().toISOString()
+        : '',
+    });
+  }
+
+  return matches;
+}
+
+/**
+ * HR-only reconciliation for Manager/Self PDF Delivery Unknown states.
+ * Never silently regenerates when artifacts are ambiguous.
+ */
+function reconcileFinalPdf(
+  cycleId,
+  documentType,
+  action,
+  options
+) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may reconcile final PDFs.');
+  }
+
+  const opts = options || {};
+  const fields = getFinalPdfFields_(documentType);
+
+  if (action === 'cancel') {
+    return {
+      ok: true,
+      message:
+        documentType +
+        ' left as Delivery Unknown. No Drive changes were made.',
+      finalization: getFinalizationSummary_(
+        findCycle_(cycleId).object
+      ),
+    };
+  }
+
+  if (action === 'useFileId' || action === 'chooseFile') {
+    const fileId = String(opts.fileId || '').trim();
+
+    if (!fileId) {
+      throw new Error('Choose a Drive file ID to attach.');
+    }
+
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      cycle[fields.idField] = fileId;
+      cycle[fields.statusField] = V31.DELIVERY.SENT;
+      cycle['Finalization Last Error'] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    audit_(
+      cycleId,
+      'Final PDF reconciled with existing file',
+      email,
+      documentType,
+      fileId,
+      action
+    );
+
+    return {
+      ok: true,
+      message: documentType + ' PDF ID attached from Drive.',
+      finalization: getFinalizationSummary_(
+        findCycle_(cycleId).object
+      ),
+    };
+  }
+
+  if (action === 'regenerate') {
+    const matches = listMatchingReviewPdfArtifacts_(
+      cycleId,
+      documentType
+    );
+
+    if (matches.length > 1) {
+      throw new Error(
+        'Multiple matching PDF files exist. Choose one file instead of regenerating.'
+      );
+    }
+
+    if (matches.length === 1 && !opts.confirmOverwrite) {
+      throw new Error(
+        'A matching PDF already exists (' +
+          matches[0].id +
+          '). Use that file ID, or pass confirmOverwrite after review.'
+      );
+    }
+
+    if (matches.length === 0 && !opts.confirmMissing) {
+      throw new Error(
+        'Confirm no Drive file exists (confirmMissing) before regenerating a Delivery Unknown PDF.'
+      );
+    }
+
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      cycle[fields.idField] = '';
+      cycle[fields.statusField] = V31.DELIVERY.PENDING;
+      cycle[fields.attemptField] = '';
+      cycle[fields.startedField] = '';
+      cycle['Finalization Last Error'] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    ensureFinalPdfComponent_(
+      cycleId,
+      fields.label,
+      fields.idField,
+      fields.statusField,
+      documentType
+    );
+
+    audit_(
+      cycleId,
+      'Final PDF regenerated after HR confirmation',
+      email,
+      documentType,
+      String(findCycle_(cycleId).object[fields.idField] || ''),
+      action
+    );
+
+    return {
+      ok: true,
+      message: documentType + ' PDF regenerated.',
+      finalization: getFinalizationSummary_(
+        findCycle_(cycleId).object
+      ),
+    };
+  }
+
+  throw new Error(
+    'Unsupported PDF reconciliation action. Use useFileId, chooseFile, regenerate, or cancel.'
+  );
+}
+
+function getFinalPdfFields_(documentType) {
+  if (documentType === PR.TYPE.MANAGER) {
+    return {
+      label: 'Manager Review',
+      idField: 'Manager Review PDF ID',
+      statusField: 'Manager PDF Status',
+      attemptField: 'Manager PDF Attempt ID',
+      startedField: 'Manager PDF Started At',
+    };
+  }
+
+  if (documentType === PR.TYPE.SELF) {
+    return {
+      label: 'Self-Evaluation',
+      idField: 'Self Evaluation PDF ID',
+      statusField: 'Self PDF Status',
+      attemptField: 'Self PDF Attempt ID',
+      startedField: 'Self PDF Started At',
+    };
+  }
+
+  throw new Error('Unsupported PDF document type.');
+}
+
+function listFinalPdfCandidates(cycleId, documentType) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may list final PDF candidates.');
+  }
+
+  return {
+    ok: true,
+    files: listMatchingReviewPdfArtifacts_(cycleId, documentType),
+  };
 }
 
 function ensureFinalDistribution_(cycleId, allowUnknownResend) {
@@ -2312,13 +2714,16 @@ function ensureFinalDistribution_(cycleId, allowUnknownResend) {
       );
     }
 
+    const attemptId = Utilities.getUuid();
+
     cycle['Final Distribution Status'] = V31.DELIVERY.SENDING;
+    cycle['Final Distribution Attempt ID'] = attemptId;
     cycle['Final Distribution Started At'] = new Date();
     cycle['Updated At'] = new Date();
     writeCycle_(location.rowNumber, cycle);
     SpreadsheetApp.flush();
 
-    return { skip: false, cycle: cycle };
+    return { skip: false, cycle: cycle, attemptId: attemptId };
   });
 
   if (claim.skip) {
@@ -2331,6 +2736,14 @@ function ensureFinalDistribution_(cycleId, allowUnknownResend) {
     withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
+
+      if (
+        String(cycle['Final Distribution Attempt ID'] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
+
       cycle['Final Distribution Status'] = V31.DELIVERY.SENT;
       cycle['Final Distribution Sent At'] = new Date();
       cycle['Finalization Last Error'] = '';
@@ -2342,6 +2755,13 @@ function ensureFinalDistribution_(cycleId, allowUnknownResend) {
     withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
+
+      if (
+        String(cycle['Final Distribution Attempt ID'] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
 
       // Ambiguous: MailApp may have accepted the message.
       cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
@@ -2374,20 +2794,27 @@ function isDeliveryClaimStale_(startedAt) {
 }
 
 function getFinalizationSummary_(cycle) {
+  const managerPdf =
+    String(cycle['Manager PDF Status'] || '') ||
+    (cycle['Manager Review PDF ID']
+      ? V31.DELIVERY.SENT
+      : V31.DELIVERY.PENDING);
+  const selfPdf =
+    String(cycle['Self PDF Status'] || '') ||
+    (cycle['Self Evaluation PDF ID']
+      ? V31.DELIVERY.SENT
+      : V31.DELIVERY.PENDING);
+  const distribution = String(
+    cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
+  );
+
   return {
-    managerPdf:
-      String(cycle['Manager PDF Status'] || '') ||
-      (cycle['Manager Review PDF ID']
-        ? V31.DELIVERY.SENT
-        : V31.DELIVERY.PENDING),
-    selfPdf:
-      String(cycle['Self PDF Status'] || '') ||
-      (cycle['Self Evaluation PDF ID']
-        ? V31.DELIVERY.SENT
-        : V31.DELIVERY.PENDING),
-    distribution: String(
-      cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
-    ),
+    managerPdf: managerPdf,
+    selfPdf: selfPdf,
+    distribution: distribution,
+    managerPdfUnknown: managerPdf === V31.DELIVERY.UNKNOWN,
+    selfPdfUnknown: selfPdf === V31.DELIVERY.UNKNOWN,
+    distributionUnknown: distribution === V31.DELIVERY.UNKNOWN,
     managerPdfId: String(cycle['Manager Review PDF ID'] || ''),
     selfPdfId: String(cycle['Self Evaluation PDF ID'] || ''),
     lastError: String(cycle['Finalization Last Error'] || ''),
@@ -2982,6 +3409,17 @@ function sendCycleCreatedEmails_(cycle) {
 }
 
 function sendReadyForMeetingEmail_(cycle) {
+  deliverWorkflowNotification_(
+    cycle['Cycle ID'],
+    getWorkflowNotificationComponent_('ready'),
+    function (fresh) {
+      sendReadyForMeetingEmailBody_(fresh);
+    },
+    {}
+  );
+}
+
+function sendReadyForMeetingEmailBody_(cycle) {
   const url =
     getWebAppUrl_() +
     '?cycleId=' +
@@ -2999,26 +3437,72 @@ function sendReadyForMeetingEmail_(cycle) {
   );
 }
 
-function sendMeetingOpenedEmails_(cycle) {
+function sendMeetingOpenedEmails_(cycleId) {
+  deliverWorkflowNotification_(
+    cycleId,
+    getWorkflowNotificationComponent_('meetingManager'),
+    function (cycle) {
+      sendMeetingOpenedRecipientEmail_(cycle, 'manager');
+    },
+    {}
+  );
+
+  deliverWorkflowNotification_(
+    cycleId,
+    getWorkflowNotificationComponent_('meetingEmployee'),
+    function (cycle) {
+      sendMeetingOpenedRecipientEmail_(cycle, 'employee');
+    },
+    {}
+  );
+}
+
+function sendMeetingOpenedRecipientEmail_(cycle, recipient) {
   const url =
     getWebAppUrl_() +
     '?cycleId=' +
     encodeURIComponent(cycle['Cycle ID']) +
     '&action=meeting';
 
+  const to =
+    recipient === 'employee'
+      ? cycle['Employee Email']
+      : uniqueEmails_([
+          cycle['Manager Email'],
+          cycle['HR Email'],
+        ]).join(',');
+
   sendHtmlEmail_(
-    uniqueEmails_([
-      cycle['Manager Email'],
-      cycle['Employee Email'],
-      cycle['HR Email'],
-    ]).join(','),
+    to,
     'Review meeting opened: ' + cycle['Employee Name'],
     '<p>The review meeting has been opened.</p><p>The manager review and self-evaluation are now visible to both participants.</p>' +
       emailButton_(url, 'Open Review Meeting')
   );
 }
 
-function sendCombinedSignatureEmail_(cycle, role) {
+function sendCombinedSignatureEmail_(cycleIdOrCycle, role) {
+  const cycleId =
+    typeof cycleIdOrCycle === 'string'
+      ? cycleIdOrCycle
+      : cycleIdOrCycle['Cycle ID'];
+  const key =
+    role === PR.ROLE.MANAGER
+      ? 'signatureManager'
+      : role === PR.ROLE.EMPLOYEE
+      ? 'signatureEmployee'
+      : 'signatureHr';
+
+  deliverWorkflowNotification_(
+    cycleId,
+    getWorkflowNotificationComponent_(key),
+    function (cycle) {
+      sendCombinedSignatureEmailBody_(cycle, role);
+    },
+    {}
+  );
+}
+
+function sendCombinedSignatureEmailBody_(cycle, role) {
   let to;
   let name;
 
@@ -3589,6 +4073,7 @@ function buildSignatureFileName_(cycleId, label) {
 
 /**
  * Recover an existing signature image before writing a replacement.
+ * Multiple matches are an HR reconciliation case — never silently pick.
  */
 function findExistingSignatureFileId_(folder, fileName) {
   const matches = [];
@@ -3603,16 +4088,11 @@ function findExistingSignatureFileId_(folder, fileName) {
   }
 
   if (matches.length > 1) {
-    // Prefer the most recently updated artifact and leave extras for
-    // HR cleanup rather than blocking the signer.
-    matches.sort(function (left, right) {
-      return (
-        right.getLastUpdated().getTime() -
-        left.getLastUpdated().getTime()
-      );
-    });
-
-    return matches[0].getId();
+    throw new Error(
+      'Multiple signature images named "' +
+        fileName +
+        '" exist. HR must choose which signature file to keep before retrying.'
+    );
   }
 
   return '';

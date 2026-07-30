@@ -172,6 +172,12 @@ function runV31IdempotencyTests() {
       testDeterministicArtifactFileNames_
     )
   );
+  results.push(
+    runIdemCase_(
+      'workflow notification and signature claim headers are migrated',
+      testWorkflowAndSignatureHeadersPresent_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -1119,4 +1125,24 @@ function testDeterministicArtifactFileNames_() {
       'C-100 - MGR_Employee.png',
     'Signature filename must include cycle ID and sanitized label'
   );
+}
+
+function testWorkflowAndSignatureHeadersPresent_() {
+  [
+    'Final Distribution Attempt ID',
+    'Ready Notification Status',
+    'Meeting Manager Email Status',
+    'Meeting Employee Email Status',
+    'Manager Signature Email Status',
+    'Employee Signature Email Status',
+    'HR Signature Email Status',
+    'Manager Signature Status',
+    'Employee Signature Status',
+    'HR Signature Status',
+  ].forEach(function (header) {
+    assertIdem_(
+      V31.CYCLE_HEADERS.indexOf(header) >= 0,
+      'Missing migrated header: ' + header
+    );
+  });
 }

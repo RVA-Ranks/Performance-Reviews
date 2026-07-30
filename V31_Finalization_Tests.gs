@@ -66,6 +66,12 @@ function runV31FinalizationTests() {
       testPdfFileNameUsesCycleId_
     )
   );
+  results.push(
+    runFinalCase_(
+      'final distribution attempt identity is required in headers',
+      testFinalDistributionAttemptIdHeader_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -313,5 +319,14 @@ function testPdfFileNameUsesCycleId_() {
   assertFinal_(
     name.indexOf('Employee') < 0,
     'PDF recovery name must not rely on employee display name'
+  );
+}
+
+function testFinalDistributionAttemptIdHeader_() {
+  assertFinal_(
+    V31.CYCLE_HEADERS.indexOf(
+      'Final Distribution Attempt ID'
+    ) >= 0,
+    'Final Distribution Attempt ID must exist for commit verification'
   );
 }
