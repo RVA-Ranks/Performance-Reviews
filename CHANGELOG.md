@@ -1,5 +1,13 @@
 # V3.1 Changelog
 
+## Automation recovery and administrative surface
+
+- Eligible stale workflow-notification `Sending` claims now transition to `Delivery Unknown` without automatic resend and are surfaced to HR with their attempt IDs
+- Bulk outbox drains skip clean historical cycles and include Delivery Unknown-only cycles in diagnostics
+- Editor-only upgrade, migration, and test runners are now private Apps Script functions
+- Added designated automation-owner enforcement, persisted trigger identity metadata, and cross-account trigger cleanup warnings
+- Moved one-time signature-migration notification delivery outside the global lock
+
 ## Phase 2 — Crash-safe per-component launch side effects
 
 - Added independent Status/Attempt ID/Started At fields for Calendar, Manager email, Employee email, and HR email so each component's in-flight state survives a crash without risking a duplicate send

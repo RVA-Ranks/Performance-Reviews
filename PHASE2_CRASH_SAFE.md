@@ -18,7 +18,7 @@
 | `V31_Finalization_Tests.gs` | Full replace |
 | `V31_Workflow_Notification_Tests.gs` | Full replace |
 
-Then run `upgradeToV31()`.
+Then run `upgradeToV31_()` from the intended automation-owner account.
 
 ## Authorization / Preview
 
@@ -29,7 +29,7 @@ Then run `upgradeToV31()`.
 ## Tests
 
 ```text
-runV31IdempotencyTests()
-runV31FinalizationTests()
-runV31WorkflowNotificationTests()
+runV31IdempotencyTests_()
+runV31FinalizationTests_()
+runV31WorkflowNotificationTests_()
 ```

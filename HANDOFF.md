@@ -840,7 +840,7 @@ Major groups:
 
 ### Setup and deployment
 
-- `setupReviewSystem()`
+- `setupReviewSystem_()`
 - `doGet(e)`
 - Sheet setup and formatting
 - Template generation
@@ -901,7 +901,7 @@ Manual cycle creation in V3.1 is intended to use the same launch package as auto
 
 ### Upgrade
 
-- `upgradeToV31()`
+- `upgradeToV31_()`
 - `ensureV31DataModel_()`
 
 The upgrade is intended to be idempotent and starts automation in Preview mode.
@@ -933,7 +933,8 @@ The upgrade is intended to be idempotent and starts automation in Preview mode.
 
 ### Daily automation
 
-- `runReviewAutomation()`
+- `runReviewAutomationTrigger_()`
+- `runReviewAutomationCore_()`
 - `findReviewAutomationCandidates_(windowDays)`
 - `createAutomatedReviewCycle_(candidate)`
 
@@ -1455,7 +1456,7 @@ Legacy cycles that already have `Automation Notice Sent At` plus a Calendar Even
 
 Manual and automated launches share this orchestration. The HR resend control remains an intentional audited resend and does not clear completion timestamps.
 
-Run `runV31IdempotencyTests()` before trusting Live mode.
+Run `runV31IdempotencyTests_()` before trusting Live mode.
 
 ---
 
@@ -1599,7 +1600,7 @@ Post-review hardening also landed:
 - Calendar tag recovery before creating a second event
 - Tests drive `orchestrateReviewLaunchSteps_` with stubbed adapters
 
-Keep automation in Preview until Workspace retry tests and `runV31IdempotencyTests()` pass. Do not enable Live until those checks succeed.
+Keep automation in Preview until Workspace retry tests and `runV31IdempotencyTests_()` pass. Do not enable Live until those checks succeed.
 
 ## Priority 2: Add automated date tests
 

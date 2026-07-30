@@ -3,7 +3,7 @@
  * Workflow notification + recovery helper tests (DROP-IN).
  *
  * Run from the Apps Script editor:
- *   runV31WorkflowNotificationTests()
+ *   runV31WorkflowNotificationTests_()
  *
  * Live Drive/Calendar/Mail/concurrency probes stay off unless
  * V31_WORKFLOW_TEST.ENABLE_LIVE_PROBES is set true in a sandbox.
@@ -13,7 +13,7 @@ const V31_WORKFLOW_TEST = Object.freeze({
   ENABLE_LIVE_PROBES: false,
 });
 
-function runV31WorkflowNotificationTests() {
+function runV31WorkflowNotificationTests_() {
   const results = [];
 
   results.push(
@@ -62,6 +62,12 @@ function runV31WorkflowNotificationTests() {
     runWorkflowCase_(
       'notification summary flags eligible Pending attention',
       testWorkflowNotificationNeedsAttention_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'stale eligible Sending is routed to Delivery Unknown',
+      testStaleSendingNotificationRecovery_
     )
   );
   results.push(
@@ -557,6 +563,88 @@ function testWorkflowNotificationNeedsAttention_() {
   );
 }
 
+function testStaleSendingNotificationRecovery_() {
+  const component = getWorkflowNotificationComponent_('ready');
+  const staleCycle = workflowLifecycleCycle_(PR.CYCLE.READY);
+  staleCycle[component.statusField] = V31.DELIVERY.SENDING;
+  staleCycle[component.attemptField] = 'stale-ready-attempt';
+  staleCycle[component.startedField] = new Date(
+    Date.now() - V31.SENDING_STALE_MS - 60 * 1000
+  );
+
+  const staleSummary =
+    getWorkflowNotificationSummary_(staleCycle);
+  const decision = decideLaunchComponentAction_(
+    staleCycle[component.statusField],
+    false,
+    staleCycle[component.startedField],
+    V31.DELIVERY.SENDING,
+    false
+  );
+
+  assertWorkflow_(
+    staleSummary.needsAttention === true &&
+      staleSummary.components.ready.staleSending === true,
+    'Eligible stale Sending must be visible to HR'
+  );
+  assertWorkflow_(
+    workflowCycleNeedsOutboxInspection_(staleCycle) === true,
+    'Bulk outbox must inspect eligible stale Sending'
+  );
+  assertWorkflow_(
+    shouldDispatchWorkflowNotification_(
+      staleCycle,
+      component
+    ) === true,
+    'Single-cycle dispatcher must include stale Sending'
+  );
+  assertWorkflow_(
+    decision.action === 'mark-unknown',
+    'Stale Sending must transition to Delivery Unknown without resend'
+  );
+
+  const freshCycle = workflowLifecycleCycle_(PR.CYCLE.READY);
+  freshCycle[component.statusField] = V31.DELIVERY.SENDING;
+  freshCycle[component.startedField] = new Date();
+  const freshSummary =
+    getWorkflowNotificationSummary_(freshCycle);
+
+  assertWorkflow_(
+    freshSummary.components.ready.staleSending === false &&
+      freshSummary.needsAttention === false,
+    'Fresh Sending must remain in progress'
+  );
+  assertWorkflow_(
+    workflowCycleNeedsOutboxInspection_(freshCycle) === false,
+    'Bulk outbox must not inspect a fresh Sending claim'
+  );
+  assertWorkflow_(
+    shouldDispatchWorkflowNotification_(
+      freshCycle,
+      component
+    ) === false,
+    'Single-cycle dispatcher must leave fresh Sending alone'
+  );
+
+  const cleanComplete = workflowLifecycleCycle_(
+    PR.CYCLE.COMPLETE
+  );
+  getWorkflowNotificationKeys_().forEach(function (key) {
+    const item = getWorkflowNotificationComponent_(key);
+    cleanComplete[item.statusField] = V31.DELIVERY.SENT;
+  });
+  assertWorkflow_(
+    workflowCycleNeedsOutboxInspection_(cleanComplete) === false,
+    'Clean completed history must be skipped'
+  );
+
+  cleanComplete[component.statusField] = V31.DELIVERY.UNKNOWN;
+  assertWorkflow_(
+    workflowCycleNeedsOutboxInspection_(cleanComplete) === true,
+    'Past Delivery Unknown requires one supersession inspection'
+  );
+}
+
 function testDuplicateActiveCycleBlockingSet_() {
   const blocking = [
     PR.CYCLE.OPEN,
@@ -672,6 +760,33 @@ function testOutboxAuthorizationSurface_() {
   assertWorkflow_(
     typeof runReviewAutomationTrigger_ === 'function',
     'trigger entry must be private (_)'
+  );
+  assertWorkflow_(
+    typeof upgradeToV31_ === 'function' &&
+      typeof upgradeToSingleReviewSignatureWorkflow_ ===
+        'function',
+    'upgrade and migration entry points must be private (_)'
+  );
+  assertWorkflow_(
+    typeof runV31IdempotencyTests_ === 'function' &&
+      typeof runV31FinalizationTests_ === 'function' &&
+      typeof runV31WorkflowNotificationTests_ === 'function',
+    'test suite entry points must be private (_)'
+  );
+  assertWorkflow_(
+    Object.prototype.hasOwnProperty.call(
+      V31.SETTINGS_DEFAULTS,
+      'AUTOMATION_OWNER_EMAIL'
+    ) &&
+      Object.prototype.hasOwnProperty.call(
+        V31.SETTINGS_DEFAULTS,
+        'AUTOMATION_TRIGGER_UNIQUE_ID'
+      ) &&
+      Object.prototype.hasOwnProperty.call(
+        V31.SETTINGS_DEFAULTS,
+        'AUTOMATION_TRIGGER_INSTALLED_AT'
+      ),
+    'automation owner and trigger identity settings must be migrated'
   );
 }
 

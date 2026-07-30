@@ -227,11 +227,11 @@ const PR = Object.freeze({
 
 /* ============================== SETUP ==================================== */
 
-function setupReviewSystem() {
+function setupReviewSystem_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) {
     throw new Error(
-      'Create a blank Google Sheet, open Extensions → Apps Script, and run setupReviewSystem() from that bound project.'
+      'Create a blank Google Sheet, open Extensions → Apps Script, and run setupReviewSystem_() from that bound project.'
     );
   }
 
@@ -911,10 +911,13 @@ function releaseReviewSignatures(cycleId) {
  * Run once after installing V2 if a test cycle was already in the signature
  * stage. Existing manager or employee signatures are copied to both documents.
  */
-function upgradeToSingleReviewSignatureWorkflow() {
-  return withLock_(function () {
+function upgradeToSingleReviewSignatureWorkflow_() {
+  assertAutomationOwner_(getSettings_());
+
+  const migration = withLock_(function () {
     const cycles = getAllObjects_(PR.SHEETS.CYCLES);
     let updated = 0;
+    const notifications = [];
 
     cycles.forEach(function (record) {
       if (String(record['Status']) !== PR.CYCLE.SIGNATURES) {
@@ -933,11 +936,17 @@ function upgradeToSingleReviewSignatureWorkflow() {
       const state = getCombinedSignatureState_(cycle);
 
       if (!state.managerSigned) {
-        sendCombinedSignatureEmail_(cycle, PR.ROLE.MANAGER);
+        notifications.push({
+          cycleId: cycle['Cycle ID'],
+          role: PR.ROLE.MANAGER,
+        });
       }
 
       if (!state.employeeSigned) {
-        sendCombinedSignatureEmail_(cycle, PR.ROLE.EMPLOYEE);
+        notifications.push({
+          cycleId: cycle['Cycle ID'],
+          role: PR.ROLE.EMPLOYEE,
+        });
       }
 
       if (
@@ -945,7 +954,10 @@ function upgradeToSingleReviewSignatureWorkflow() {
         state.employeeSigned &&
         !state.hrSigned
       ) {
-        sendCombinedSignatureEmail_(cycle, PR.ROLE.HR);
+        notifications.push({
+          cycleId: cycle['Cycle ID'],
+          role: PR.ROLE.HR,
+        });
       }
 
       audit_(
@@ -960,12 +972,26 @@ function upgradeToSingleReviewSignatureWorkflow() {
       updated++;
     });
 
-    SpreadsheetApp.getUi().alert(
-      'Single-signature workflow upgrade complete.\n\n' +
-        'Cycles updated: ' +
-        updated
+    return {
+      updated: updated,
+      notifications: notifications,
+    };
+  });
+
+  migration.notifications.forEach(function (notification) {
+    sendCombinedSignatureEmail_(
+      notification.cycleId,
+      notification.role
     );
   });
+
+  SpreadsheetApp.getUi().alert(
+    'Single-signature workflow upgrade complete.\n\n' +
+      'Cycles updated: ' +
+      migration.updated
+  );
+
+  return migration;
 }
 
 /* =============================== SIGNING ================================= */
@@ -4146,7 +4172,7 @@ function getSpreadsheet_() {
 
   if (!id) {
     throw new Error(
-      'Run setupReviewSystem() before using the app.'
+      'Run setupReviewSystem_() before using the app.'
     );
   }
 

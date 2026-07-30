@@ -7,7 +7,7 @@ Use fake employee names and AITHERAS test accounts.
 - [ ] Back up the current V3 code.
 - [ ] Add `V31_Automation.gs`.
 - [ ] Replace `Code.gs`, `Index.html`, and `appsscript.json`.
-- [ ] Run `upgradeToV31()`.
+- [ ] Run `upgradeToV31_()` from the intended automation-owner account.
 - [ ] Approve Calendar and trigger permissions.
 - [ ] Confirm `ReviewAutomationLog` was created.
 - [ ] Confirm `EmployeeAssignments` has `Review Automation`.
@@ -171,9 +171,9 @@ Confirm exactly one workflow email is sent to each role:
 
 ## K. Launch idempotency (Phase 1)
 
-Run `runV31IdempotencyTests()` in the Apps Script editor first.
+Run `runV31IdempotencyTests_()` in the Apps Script editor first.
 
-- [ ] `upgradeToV31()` / `ensureV31DataModel_()` adds new launch columns without reordering existing ones
+- [ ] `upgradeToV31_()` / `ensureV31DataModel_()` adds new launch columns without reordering existing ones
 - [ ] Re-running the upgrade does not duplicate columns or lose cycle data
 - [ ] Existing completed cycles (Automation Notice Sent At + Calendar Event ID) are treated as complete
 - [ ] Calendar succeeds, manager email fails → event ID persisted; retry does not create another event
@@ -191,4 +191,30 @@ Run `runV31IdempotencyTests()` in the Apps Script editor first.
 - [ ] HR sees **Retry Launch** when `launchComplete` is false; **Resend Instructions** when complete
 - [ ] `retryReviewLaunch` finishes only pending components and does not clear completed timestamps
 - [ ] Crash after Calendar create but before ID write: retry recovers tagged event instead of creating a second
-- [ ] `runV31IdempotencyTests()` passes orchestrator-stub and incomplete-manual-target cases
+- [ ] `runV31IdempotencyTests_()` passes orchestrator-stub and incomplete-manual-target cases
+
+## Live Workspace acceptance (sandbox only)
+
+Keep `AUTOMATION_MODE=Preview` until every probe below passes. Use separate
+AITHERAS HR, manager, and employee accounts and record cycle IDs, attempt IDs,
+trigger IDs, timestamps, and audit rows.
+
+- [ ] Set an eligible Ready notification to `Sending` with a started time more
+  than 15 minutes old. Drain that cycle and confirm no Mail send occurs, status
+  becomes `Delivery Unknown`, the attempt ID remains, and HR sees attention.
+- [ ] Repeat with a fresh `Sending` timestamp and confirm it remains untouched.
+- [ ] Run two simultaneous drains against one controlled unresolved cycle;
+  confirm one authoritative claim/result and no duplicate recipient email.
+- [ ] Inspect **My Triggers** under every administrator account. Confirm a
+  non-owner cannot install or migrate, manually clear cross-account legacy
+  triggers, and retain one owner-controlled `runReviewAutomationTrigger_`.
+- [ ] Interrupt Calendar handling after event creation, then recover by cycle
+  marker and confirm no second Calendar event is created.
+- [ ] Create duplicate deterministic PDF and signature artifacts in the sandbox
+  Drive folders. Confirm HR reconciliation is required and no newest-file
+  heuristic silently selects one.
+- [ ] Send a controlled Mail notification, force the subsequent Sheet commit to
+  fail or replace its attempt ID, and confirm the result is Delivery Unknown
+  rather than Sent.
+- [ ] Run the single-signature migration while a second account autosaves;
+  confirm Mail delivery occurs after the migration lock is released.

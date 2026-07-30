@@ -3,13 +3,13 @@
  * Finalization resumability tests (DROP-IN).
  *
  * Run from the Apps Script editor:
- *   runV31FinalizationTests()
+ *   runV31FinalizationTests_()
  *
  * These tests exercise pure finalization helpers and state gates.
  * They do not create Drive PDFs or send mail unless LIVE probes are enabled.
  */
 
-function runV31FinalizationTests() {
+function runV31FinalizationTests_() {
   const results = [];
 
   results.push(

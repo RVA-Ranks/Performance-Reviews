@@ -3,7 +3,7 @@
  * Launch-idempotency tests (DROP-IN).
  *
  * Run from the Apps Script editor:
- *   runV31IdempotencyTests()
+ *   runV31IdempotencyTests_()
  *
  * These tests exercise pure launch-state helpers and a simulated
  * orchestration harness. They do not send live email or create
@@ -19,7 +19,7 @@ const V31_IDEM_TEST = Object.freeze({
 /**
  * Entry point — run this from the Apps Script editor.
  */
-function runV31IdempotencyTests() {
+function runV31IdempotencyTests_() {
   const results = [];
 
   results.push(

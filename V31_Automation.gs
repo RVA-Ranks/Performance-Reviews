@@ -29,6 +29,9 @@ const V31 = Object.freeze({
     COMPENSATION_DECISION_REQUIRED: 'TRUE',
     HELP_CENTER_ENABLED: 'TRUE',
     AUTOMATION_LAST_RUN: '',
+    AUTOMATION_OWNER_EMAIL: '',
+    AUTOMATION_TRIGGER_UNIQUE_ID: '',
+    AUTOMATION_TRIGGER_INSTALLED_AT: '',
   },
 
   ASSIGNMENT_HEADERS: [
@@ -159,7 +162,9 @@ const V31 = Object.freeze({
 
 /* =========================== DATA MODEL / UPGRADE ======================== */
 
-function upgradeToV31() {
+function upgradeToV31_() {
+  ensureAutomationOwnerConfigured_();
+  assertAutomationOwner_(getSettings_());
   ensureV31DataModel_();
   const triggerMigration = migrateLegacyReviewAutomationTrigger_();
 
@@ -828,6 +833,12 @@ function getReviewAutomationAdminData() {
 
 function getAutomationAdminData_() {
   const settings = getSettings_();
+  const effectiveEmail = normalizeEmail_(
+    Session.getEffectiveUser().getEmail()
+  );
+  const ownerEmail = normalizeEmail_(
+    settings.AUTOMATION_OWNER_EMAIL
+  );
 
   return {
     mode: String(settings.AUTOMATION_MODE || 'Preview'),
@@ -866,6 +877,18 @@ function getAutomationAdminData_() {
       ),
     triggerInstalled:
       hasReviewAutomationTrigger_(),
+    automationOwnerEmail: ownerEmail,
+    effectiveAutomationUser: effectiveEmail,
+    triggerUniqueId: String(
+      settings.AUTOMATION_TRIGGER_UNIQUE_ID || ''
+    ),
+    triggerInstalledAt: String(
+      settings.AUTOMATION_TRIGGER_INSTALLED_AT || ''
+    ),
+    triggerOwnerMatches:
+      !!ownerEmail && ownerEmail === effectiveEmail,
+    triggerOwnerWarning:
+      'Apps Script triggers are visible only to the account that installed them. Other editors must remove any legacy triggers from My Triggers.',
     lastRun: String(settings.AUTOMATION_LAST_RUN || ''),
     preview: findReviewAutomationCandidates_(
       Number(settings.REVIEW_NOTICE_DAYS || 28)
@@ -1037,6 +1060,10 @@ function setReviewAutomationMode(mode) {
       throw new Error('Unsupported automation mode.');
     }
 
+    if (mode === 'Live') {
+      assertAutomationOwner_(getSettings_());
+    }
+
     const settingsSheet = getSpreadsheet_().getSheetByName(
       PR.SHEETS.SETTINGS
     );
@@ -1121,18 +1148,22 @@ function runReviewAutomationNow() {
     };
   }
 
+  assertAutomationOwner_(settings);
   return runReviewAutomationCore_();
 }
 
 function installReviewAutomationTrigger_() {
+  const settings = getSettings_();
+  assertAutomationOwner_(settings);
   removeReviewAutomationTriggers_();
 
-  const settings = getSettings_();
   const hour = Number(
     settings.AUTOMATION_TRIGGER_HOUR || 8
   );
 
-  ScriptApp.newTrigger('runReviewAutomationTrigger_')
+  const trigger = ScriptApp.newTrigger(
+    'runReviewAutomationTrigger_'
+  )
     .timeBased()
     .atHour(hour)
     .nearMinute(0)
@@ -1142,6 +1173,20 @@ function installReviewAutomationTrigger_() {
         'America/New_York'
     )
     .create();
+
+  const settingsSheet = getSpreadsheet_().getSheetByName(
+    PR.SHEETS.SETTINGS
+  );
+  setSetting_(
+    settingsSheet,
+    'AUTOMATION_TRIGGER_UNIQUE_ID',
+    trigger.getUniqueId()
+  );
+  setSetting_(
+    settingsSheet,
+    'AUTOMATION_TRIGGER_INSTALLED_AT',
+    new Date().toISOString()
+  );
 }
 
 function removeReviewAutomationTriggers_() {
@@ -1155,6 +1200,23 @@ function removeReviewAutomationTriggers_() {
       ScriptApp.deleteTrigger(trigger);
     }
   });
+
+  const settingsSheet = getSpreadsheet_().getSheetByName(
+    PR.SHEETS.SETTINGS
+  );
+
+  if (settingsSheet) {
+    setSetting_(
+      settingsSheet,
+      'AUTOMATION_TRIGGER_UNIQUE_ID',
+      ''
+    );
+    setSetting_(
+      settingsSheet,
+      'AUTOMATION_TRIGGER_INSTALLED_AT',
+      ''
+    );
+  }
 }
 
 function hasReviewAutomationTrigger_() {
@@ -1168,12 +1230,73 @@ function hasReviewAutomationTrigger_() {
   );
 }
 
+function getEffectiveAutomationUserEmail_() {
+  return normalizeEmail_(
+    Session.getEffectiveUser().getEmail()
+  );
+}
+
+function ensureAutomationOwnerConfigured_() {
+  const settings = getSettings_();
+  const configured = normalizeEmail_(
+    settings.AUTOMATION_OWNER_EMAIL
+  );
+
+  if (configured) {
+    return configured;
+  }
+
+  const effectiveEmail = getEffectiveAutomationUserEmail_();
+
+  if (!effectiveEmail) {
+    throw new Error(
+      'Unable to determine the effective automation owner.'
+    );
+  }
+
+  setSetting_(
+    getSpreadsheet_().getSheetByName(PR.SHEETS.SETTINGS),
+    'AUTOMATION_OWNER_EMAIL',
+    effectiveEmail
+  );
+
+  return effectiveEmail;
+}
+
+function assertAutomationOwner_(settings) {
+  const currentSettings = settings || getSettings_();
+  const ownerEmail = normalizeEmail_(
+    currentSettings.AUTOMATION_OWNER_EMAIL
+  );
+  const effectiveEmail = getEffectiveAutomationUserEmail_();
+
+  if (!ownerEmail) {
+    throw new Error(
+      'AUTOMATION_OWNER_EMAIL is not configured. Run upgradeToV31_ from the intended deployment-owner account.'
+    );
+  }
+
+  if (effectiveEmail !== ownerEmail) {
+    throw new Error(
+      'Only the designated automation owner (' +
+        ownerEmail +
+        ') may install or migrate triggers. Current effective user: ' +
+        (effectiveEmail || 'unknown') +
+        '.'
+    );
+  }
+
+  return ownerEmail;
+}
+
 /**
  * Replace legacy runReviewAutomation triggers with the private handler.
- * Live keeps exactly one daily trigger; Preview/Paused keep none.
+ * Trigger uniqueness can be enforced only for the configured owner.
+ * Other editors must clear their own triggers from My Triggers.
  */
 function migrateLegacyReviewAutomationTrigger_() {
   const settings = getSettings_();
+  assertAutomationOwner_(settings);
   const mode = String(
     settings.AUTOMATION_MODE || 'Preview'
   );
@@ -1204,13 +1327,16 @@ function migrateLegacyReviewAutomationTrigger_() {
   });
 
   let installed = false;
+  let currentTriggerId = '';
 
   if (mode === 'Live' && !foundCurrent) {
     const hour = Number(
       settings.AUTOMATION_TRIGGER_HOUR || 8
     );
 
-    ScriptApp.newTrigger('runReviewAutomationTrigger_')
+    const trigger = ScriptApp.newTrigger(
+      'runReviewAutomationTrigger_'
+    )
       .timeBased()
       .atHour(hour)
       .nearMinute(0)
@@ -1220,8 +1346,38 @@ function migrateLegacyReviewAutomationTrigger_() {
           'America/New_York'
       )
       .create();
+    currentTriggerId = trigger.getUniqueId();
     installed = true;
+  } else if (mode === 'Live' && foundCurrent) {
+    const current = ScriptApp.getProjectTriggers().filter(
+      function (trigger) {
+        return (
+          trigger.getHandlerFunction() ===
+          'runReviewAutomationTrigger_'
+        );
+      }
+    )[0];
+    currentTriggerId = current ? current.getUniqueId() : '';
   }
+
+  const settingsSheet = getSpreadsheet_().getSheetByName(
+    PR.SHEETS.SETTINGS
+  );
+  setSetting_(
+    settingsSheet,
+    'AUTOMATION_TRIGGER_UNIQUE_ID',
+    mode === 'Live' ? currentTriggerId : ''
+  );
+  setSetting_(
+    settingsSheet,
+    'AUTOMATION_TRIGGER_INSTALLED_AT',
+    mode === 'Live'
+      ? String(
+          settings.AUTOMATION_TRIGGER_INSTALLED_AT ||
+            new Date().toISOString()
+        )
+      : ''
+  );
 
   return {
     ok: true,
@@ -1235,7 +1391,8 @@ function migrateLegacyReviewAutomationTrigger_() {
       ' legacy and ' +
       removedDuplicate +
       ' duplicate trigger(s); current trigger ' +
-      (mode === 'Live' ? 'installed/retained' : 'disabled'),
+      (mode === 'Live' ? 'installed/retained' : 'disabled') +
+      '. Other editor accounts must clear their own triggers manually.',
   };
 }
 
@@ -1260,6 +1417,7 @@ function claimAutomationCycleForRetry_(existingCycleId) {
 }
 
 function runReviewAutomationTrigger_() {
+  assertAutomationOwner_(getSettings_());
   return runReviewAutomationCore_();
 }
 
@@ -1296,6 +1454,7 @@ function runReviewAutomationCore_() {
     };
   }
 
+  assertAutomationOwner_(settings);
   const outbox = dispatchPendingWorkflowNotificationsForAllCycles_();
 
   const candidates =
@@ -3551,11 +3710,20 @@ function deliverWorkflowNotification_(
       if (component.errorField) {
         cycle[component.errorField] =
           component.label +
-          ' claim went stale before send confirmation.';
+          ' claim went stale before send confirmation. Attempt ID: ' +
+          String(cycle[component.attemptField] || 'not recorded');
       }
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
+      audit_(
+        cycleId,
+        'Workflow notification delivery unknown',
+        Session.getEffectiveUser().getEmail(),
+        component.key,
+        V31.DELIVERY.UNKNOWN,
+        String(cycle[component.errorField] || '')
+      );
 
       return {
         action: 'skip',
@@ -3893,7 +4061,8 @@ function markSupersededWorkflowNotifications_(cycleId) {
 
       if (component.errorField) {
         cycle[component.errorField] =
-          previousStatus === V31.DELIVERY.UNKNOWN
+          previousStatus === V31.DELIVERY.UNKNOWN ||
+          previousStatus === V31.DELIVERY.SENDING
             ? 'Superseded after the workflow advanced. Prior delivery remained unconfirmed; no late resend was attempted.'
             : 'Superseded because the workflow advanced past this notification stage.';
       }
@@ -3925,8 +4094,22 @@ function markSupersededWorkflowNotifications_(cycleId) {
   });
 }
 
+function shouldDispatchWorkflowNotification_(cycle, component) {
+  const status = String(
+    cycle[component.statusField] || V31.DELIVERY.PENDING
+  );
+
+  return (
+    status === V31.DELIVERY.PENDING ||
+    status === V31.DELIVERY.FAILED ||
+    (status === V31.DELIVERY.SENDING &&
+      isDeliveryClaimStale_(cycle[component.startedField]))
+  );
+}
+
 /**
- * Drain eligible Pending/Failed workflow notifications for one cycle.
+ * Drain eligible workflow notifications for one cycle.
+ * Fresh Sending is left alone; stale Sending becomes Delivery Unknown.
  * Private — not callable from google.script.run.
  */
 function dispatchPendingWorkflowNotifications_(cycleId) {
@@ -3953,14 +4136,7 @@ function dispatchPendingWorkflowNotifications_(cycleId) {
       return;
     }
 
-    const status = String(
-      cycle[component.statusField] || V31.DELIVERY.PENDING
-    );
-
-    if (
-      status !== V31.DELIVERY.PENDING &&
-      status !== V31.DELIVERY.FAILED
-    ) {
+    if (!shouldDispatchWorkflowNotification_(cycle, component)) {
       return;
     }
 
@@ -3983,7 +4159,11 @@ function dispatchPendingWorkflowNotifications_(cycleId) {
 
     if (result.action === 'sent') {
       totals.sent++;
-    } else if (result.action === 'unknown') {
+    } else if (
+      result.action === 'unknown' ||
+      result.reason === 'unknown' ||
+      result.reason === 'attempt-replaced-before-commit'
+    ) {
       totals.deliveryUnknown++;
       totals.skipped++;
     } else if (result.action === 'error') {
@@ -3997,7 +4177,7 @@ function dispatchPendingWorkflowNotifications_(cycleId) {
   });
 
   return {
-    ok: true,
+    ok: totals.failed === 0,
     cycleId: cycleId,
     results: results,
     totals: totals,
@@ -4005,6 +4185,58 @@ function dispatchPendingWorkflowNotifications_(cycleId) {
       findCycle_(cycleId).object
     ),
   };
+}
+
+/**
+ * Use a batch snapshot only to decide whether a fresh locked inspection
+ * is necessary. This snapshot is never written back.
+ */
+function workflowCycleNeedsOutboxInspection_(cycle) {
+  const supportedStatuses = [
+    PR.CYCLE.READY,
+    PR.CYCLE.MEETING,
+    PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
+    PR.CYCLE.COMPLETE,
+    PR.CYCLE.CANCELLED,
+  ];
+
+  if (
+    supportedStatuses.indexOf(String(cycle['Status'] || '')) < 0
+  ) {
+    return false;
+  }
+
+  return getWorkflowNotificationKeys_().some(function (key) {
+    const disposition =
+      getWorkflowNotificationDisposition_(cycle, key);
+
+    if (disposition === 'future') {
+      return false;
+    }
+
+    const component = getWorkflowNotificationComponent_(key);
+    const status = String(
+      cycle[component.statusField] || V31.DELIVERY.PENDING
+    );
+    const staleSending =
+      status === V31.DELIVERY.SENDING &&
+      isDeliveryClaimStale_(cycle[component.startedField]);
+
+    if (disposition === 'eligible') {
+      return shouldDispatchWorkflowNotification_(
+        cycle,
+        component
+      );
+    }
+
+    return (
+      status === V31.DELIVERY.PENDING ||
+      status === V31.DELIVERY.FAILED ||
+      status === V31.DELIVERY.UNKNOWN ||
+      staleSending
+    );
+  });
 }
 
 /**
@@ -4023,6 +4255,7 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
   ];
   const totals = {
     scanned: 0,
+    inspected: 0,
     eligible: 0,
     sent: 0,
     skipped: 0,
@@ -4033,11 +4266,16 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
   const details = [];
 
   cycles.forEach(function (cycle) {
-    if (active.indexOf(String(cycle['Status'] || '')) < 0) {
+    totals.scanned++;
+
+    if (
+      active.indexOf(String(cycle['Status'] || '')) < 0 ||
+      !workflowCycleNeedsOutboxInspection_(cycle)
+    ) {
       return;
     }
 
-    totals.scanned++;
+    totals.inspected++;
 
     try {
       const result = dispatchPendingWorkflowNotifications_(
@@ -4057,6 +4295,7 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
       if (
         Number(rowTotals.sent || 0) ||
         Number(rowTotals.superseded || 0) ||
+        Number(rowTotals.deliveryUnknown || 0) ||
         Number(rowTotals.failed || 0)
       ) {
         details.push({
@@ -4086,6 +4325,7 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
   return {
     ok: totals.failed === 0,
     scanned: totals.scanned,
+    inspected: totals.inspected,
     eligible: totals.eligible,
     sent: totals.sent,
     skipped: totals.skipped,
@@ -4297,15 +4537,20 @@ function getWorkflowNotificationSummary_(cycle) {
       cycle[component.statusField] || V31.DELIVERY.PENDING
     );
     const eligible = isWorkflowNotificationEligible_(cycle, key);
+    const staleSending =
+      status === V31.DELIVERY.SENDING &&
+      isDeliveryClaimStale_(cycle[component.startedField]);
     const unresolved =
       status === V31.DELIVERY.PENDING ||
       status === V31.DELIVERY.FAILED ||
-      status === V31.DELIVERY.UNKNOWN;
+      status === V31.DELIVERY.UNKNOWN ||
+      staleSending;
 
     summary[key] = status;
     summary.components[key] = {
       status: status,
       eligible: eligible,
+      staleSending: staleSending,
       lastError: String(
         (component.errorField && cycle[component.errorField]) || ''
       ),
@@ -4318,7 +4563,10 @@ function getWorkflowNotificationSummary_(cycle) {
   });
 
   summary.hasUnknown = keys.some(function (key) {
-    return summary[key] === V31.DELIVERY.UNKNOWN;
+    return (
+      summary[key] === V31.DELIVERY.UNKNOWN ||
+      summary.components[key].staleSending
+    );
   });
   summary.eligibleUnresolved = eligibleUnresolved;
   summary.needsAttention = eligibleUnresolved.length > 0;

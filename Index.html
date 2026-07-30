@@ -1626,6 +1626,8 @@ function renderAutomationPanel(automation) {
     ? 'Daily trigger installed'
     : 'No daily trigger installed';
   const compensationConfigured = !!automation.compensationAdjustmentUrl;
+  const automationOwner = automation.automationOwnerEmail || 'Not configured';
+  const ownerMatches = !!automation.triggerOwnerMatches;
 
   return '<div class="automation-hero">' +
     '<div class="card"><div class="card-header"><div><h2>Review Automation</h2><p>Automatically launches six-month and annual reviews four weeks before the employee anniversary.</p></div><span class="automation-mode ' +
@@ -1646,6 +1648,14 @@ function renderAutomationPanel(automation) {
     (automation.lastRun ? ' · Last run ' + escapeHtml(formatLocalDateTime(automation.lastRun)) : '') +
     '</span></div>' +
     '<div class="automation-check"><span>' +
+    (ownerMatches ? '✓' : '!') +
+    '</span><span><strong>Automation owner:</strong> ' +
+    escapeHtml(automationOwner) +
+    (automation.effectiveAutomationUser ? ' · Effective user ' + escapeHtml(automation.effectiveAutomationUser) : '') +
+    '<br><span class="field-help">' +
+    escapeHtml(automation.triggerOwnerWarning || '') +
+    '</span></span></div>' +
+    '<div class="automation-check"><span>' +
     (compensationConfigured ? '✓' : '!') +
     '</span><span><strong>Compensation app:</strong> ' +
     (compensationConfigured ? 'Connected' : 'URL still needs to be added below') +
@@ -1653,7 +1663,7 @@ function renderAutomationPanel(automation) {
     '<div class="button-row" style="margin-top:17px">' +
     (mode === 'Live'
       ? '<button class="button warning" onclick="confirmPauseAutomation()">Pause Automation</button><button class="button success" onclick="runAutomationNow()">Run Now</button>'
-      : '<button class="button success" onclick="confirmEnableAutomation()">Enable Live Automation</button>') +
+      : '<button class="button success" onclick="confirmEnableAutomation()" ' + (ownerMatches ? '' : 'disabled title="Only the configured automation owner may enable Live mode."') + '>Enable Live Automation</button>') +
     '<button class="button outline" onclick="refreshAutomationPreview()">Refresh Preview</button></div></div>' +
     '<div class="card"><div class="card-header"><div><h2>Next Scheduled Reviews</h2><p>Preview only. No emails are sent from this table.</p></div></div>' +
     '<div id="automationPreview">' + renderAutomationPreviewTable(automation.preview || []) + '</div></div></div>' +

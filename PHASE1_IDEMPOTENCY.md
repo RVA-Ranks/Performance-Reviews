@@ -17,7 +17,7 @@
    - Add or replace `V31_Idempotency_Tests` with `V31_Idempotency_Tests.gs`.
    - Replace `Index.html` if you want the HR Retry Launch control.
 4. Confirm project time zone remains `America/New_York`.
-5. From the deployment-owner account, run `upgradeToV31()` (safe to re-run).
+5. From the deployment-owner account, run `upgradeToV31_()` (safe to re-run).
 6. Confirm `ReviewCycles` gained these columns without reordering existing ones:
    - Calendar Status
    - Manager Email Sent At
@@ -26,7 +26,7 @@
    - Launch Completed At
    - Last Launch Error
    - Launch Attempt Count
-7. Run `runV31IdempotencyTests()` and confirm all cases pass in Logs.
+7. Run `runV31IdempotencyTests_()` and confirm all cases pass in Logs.
 8. Keep `AUTOMATION_MODE` = **Preview**.
 9. Only after Preview + partial-failure Workspace tests pass, consider Live.
 

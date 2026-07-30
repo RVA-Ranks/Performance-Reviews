@@ -121,11 +121,16 @@ In the existing Apps Script project:
 
 Run:
 
-`upgradeToV31()`
+`upgradeToV31_()`
 
 Approve the new permissions.
 
 V3.1 adds Calendar access and permission to create the daily installable trigger.
+Run the upgrade from the designated deployment-owner account. The upgrade
+persists that effective user as `AUTOMATION_OWNER_EMAIL`; only that account may
+install or migrate automation triggers. Apps Script cannot see triggers owned
+by other editors, so every former administrator must also remove legacy review
+automation triggers from **My Triggers**.
 
 The upgrade adds:
 
@@ -218,8 +223,8 @@ After the V3.1 baseline is deployed:
 2. Add or replace script file `V31_Idempotency_Tests` with `V31_Idempotency_Tests.gs`.
 3. Replace `Index.html` only if deploying the HR **Retry Launch** control (narrow compatibility change).
 4. Leave `Code.gs` unchanged.
-5. Run `upgradeToV31()` again (idempotent) so new launch columns are appended.
-6. Run `runV31IdempotencyTests()` from the Apps Script editor and confirm all cases pass.
+5. Run `upgradeToV31_()` again (idempotent) from the intended automation-owner account so new launch columns are appended.
+6. Run `runV31IdempotencyTests_()` from the Apps Script editor and confirm all cases pass.
 7. Keep `AUTOMATION_MODE` in **Preview** until partial-failure Workspace tests pass.
 
 Launch reliability rules now in effect:

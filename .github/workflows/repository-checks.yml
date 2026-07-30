@@ -164,9 +164,9 @@ jobs:
             "saveManagerReview"
             "saveSelfEvaluation"
             "signReviewCycle"
-            "runReviewAutomation"
+            "runReviewAutomationTrigger_"
             "runReviewAutomationNow"
-            "upgradeToV31"
+            "upgradeToV31_"
             "retryReviewLaunch"
             "retryReviewFinalization"
           )
@@ -188,19 +188,27 @@ jobs:
           set -euo pipefail
 
           if ! grep -Eq \
-            'function[[:space:]]+runV31IdempotencyTests[[:space:]]*\(' \
+            'function[[:space:]]+runV31IdempotencyTests_[[:space:]]*\(' \
             V31_Idempotency_Tests.gs; then
             echo \
-              "::error file=V31_Idempotency_Tests.gs::Missing runV31IdempotencyTests()."
+              "::error file=V31_Idempotency_Tests.gs::Missing runV31IdempotencyTests_()."
             exit 1
           fi
 
           if [[ -f V31_Finalization_Tests.gs ]]; then
             if ! grep -Eq \
-              'function[[:space:]]+runV31FinalizationTests[[:space:]]*\(' \
+              'function[[:space:]]+runV31FinalizationTests_[[:space:]]*\(' \
               V31_Finalization_Tests.gs; then
               echo \
-                "::error file=V31_Finalization_Tests.gs::Missing runV31FinalizationTests()."
+                "::error file=V31_Finalization_Tests.gs::Missing runV31FinalizationTests_()."
               exit 1
             fi
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+runV31WorkflowNotificationTests_[[:space:]]*\(' \
+            V31_Workflow_Notification_Tests.gs; then
+            echo \
+              "::error file=V31_Workflow_Notification_Tests.gs::Missing runV31WorkflowNotificationTests_()."
+            exit 1
           fi
