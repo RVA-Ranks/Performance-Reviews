@@ -1,5 +1,32 @@
 # V3.1 Changelog
 
+## Phase 2 — Crash-safe per-component launch side effects
+
+- Added independent Status/Attempt ID/Started At fields for Calendar, Manager email, Employee email, and HR email so each component's in-flight state survives a crash without risking a duplicate send
+- Replaced the single-lock launch loop with short claim/commit locks per component (`claimLaunchEmailStep_` / `commitLaunchEmailStep_`, `claimCalendarCreateStep_` / `commitCalendarCreatedStep_`); Calendar/Mail calls never run while a lock is held
+- Added a `Delivery Unknown` state: a claim that goes stale (no confirmed result within `SENDING_STALE_MS`) is marked Unknown instead of being auto-resent, requiring explicit HR reconciliation
+- Added `reconcileLaunchDelivery(cycleId, component, action)` (HR-only) to mark a Delivery Unknown component as delivered or force a reconciled resend
+- Replaced `resendReviewLaunchEmails(cycleId)` with `resendReviewLaunchEmails(cycleId, recipients)`, auditing a per-recipient outcome for each of manager/employee/HR independently
+- Calendar events now embed an `[AITHERAS_REVIEW_CYCLE_ID:...]` marker in the description in addition to the Calendar tag, and recovery search widened to a ±7 day window and now also matches by description marker or a known event ID
+- Calendar event creation returns as soon as the event exists; tag/reminder configuration happens in a separate best-effort step so a crash right after creation still leaves a discoverable, guest-invited event
+- `runReviewAutomation` no longer holds the global lock for the whole candidate loop — only the row claim/create is locked; Calendar/Mail side effects for each candidate run outside any lock
+- `retryReviewLaunch` and `resendReviewLaunchEmails`/`reconcileLaunchDelivery` no longer wrap the launch in an outer lock, since every external action already claims its own short lock
+- `isReviewLaunchComplete_` / `isReviewLaunchComponentsComplete_` now recognize per-component Sent/Created statuses (not just legacy Sent At timestamps), so a cycle can be recognized complete without ever setting the single legacy notice timestamp
+- HR-visible cycle data now exposes per-component statuses and Delivery Unknown flags (`getV31CycleData_`, `getReviewLaunchComponentSummary_`)
+- Updated `V31_Idempotency_Tests.gs` for the new per-component architecture: added pure tests for the claim/skip/mark-unknown decision matrix and Calendar recovery-by-marker; removed the prior adapter-injection tests for the now-removed single-pass `orchestrateReviewLaunchSteps_(stored, persistFn, adapters)` signature
+
+## Phase 2b — Resumable finalization
+
+- Added cycle status `Finalizing` between `Awaiting Signatures` and `Complete`
+- HR signature no longer marks the cycle Complete before PDFs and distribution finish
+- Manager PDF, Self PDF, and final distribution each have independent Status fields and short claim/commit locks
+- Ambiguous final email delivery becomes `Delivery Unknown` and requires explicit HR `allowUnknownResend`
+- Added `retryReviewFinalization(cycleId)` and HR UI **Retry Finalization**
+- Added plain-text `body` alongside every `htmlBody` email payload
+- Removed `HtmlService.XFrameOptionsMode.ALLOWALL` (now DEFAULT)
+- Added `V31_Finalization_Tests.gs`
+- Added `.github/workflows/repository-checks.yml` and `REPO_TOPOLOGY.md`
+
 ## Phase 1 — Launch idempotency (post-baseline)
 
 - Added per-step launch fields: Calendar Status, Manager/Employee/HR Email Sent At, Launch Completed At, Last Launch Error, Launch Attempt Count

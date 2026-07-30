@@ -937,18 +937,25 @@ The upgrade is intended to be idempotent and starts automation in Preview mode.
 - `findReviewAutomationCandidates_(windowDays)`
 - `createAutomatedReviewCycle_(candidate)`
 
-### Calendar and communications
+### Calendar and communications (crash-safe, per-component)
 
-- `launchReviewCycleCommunications_(...)`
-- `orchestrateReviewLaunchSteps_(...)`
+- `launchReviewCycleCommunications_(cycle, automated, options)`
+- `orchestrateReviewLaunchSteps_(cycleId, options)`
+- `decideLaunchComponentAction_(...)` — pure claim/skip/mark-unknown decision
+- `claimLaunchEmailStep_(...)` / `commitLaunchEmailStep_(...)` / `runLaunchEmailStep_(...)`
+- `claimCalendarCreateStep_(...)` / `commitCalendarCreatedStep_(...)` / `runCalendarLaunchStep_(...)`
+- `configureCalendarLaunchStepBestEffort_(cycleId, event)`
+- `maybeCompleteReviewLaunch_(cycleId)`
+- `claimLaunchAttempt_(cycleId, source)`
 - `resolveAutomationLaunchTarget_(...)`
 - `persistLaunchCycle_(rowNumber, cycle)`
-- `createReviewCalendarEvent_(cycle)`
-- `findExistingReviewCalendarEventByTag_(...)`
+- `createReviewCalendarEvent_(cycle)` / `configureReviewCalendarEvent_(event, cycle, settings)`
+- `findExistingReviewCalendarEvent_(calendar, cycleId, meetingDate, knownEventId)`
+- `buildCalendarCycleMarker_(cycleId)` / `eventMatchesCycleId_(event, cycleId, knownEventId)`
 - `buildReviewCalendarDescription_(cycle)`
-- `sendV31LaunchEmails_(cycle)`
-- `retryReviewLaunch(cycleId)`
-- `resendReviewLaunchEmails(cycleId)`
+- `retryReviewLaunch(cycleId, options)`
+- `resendReviewLaunchEmails(cycleId, recipients)` / `resendReviewLaunchRecipient_(cycle, recipient)`
+- `reconcileLaunchDelivery(cycleId, component, action)` — HR-only Delivery Unknown reconciliation
 
 ### Logging and dates
 

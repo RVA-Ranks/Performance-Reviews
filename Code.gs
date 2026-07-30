@@ -25,6 +25,7 @@ const PR = Object.freeze({
     READY: 'Ready for Review Meeting',
     MEETING: 'Review Meeting Open',
     SIGNATURES: 'Awaiting Signatures',
+    FINALIZING: 'Finalizing',
     COMPLETE: 'Complete',
     CANCELLED: 'Cancelled',
   },
@@ -331,7 +332,7 @@ function doGet(e) {
   return template
     .evaluate()
     .setTitle('AITHERAS Performance Reviews')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
 }
 
 /* ============================= BOOTSTRAP ================================= */
@@ -377,25 +378,25 @@ function getReviewCycle(cycleId) {
 /* ============================= CYCLE CRUD ================================ */
 
 function createReviewCycle(payload) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
-    const settings = getSettings_();
+  const email = getCurrentUserEmail_();
+  const settings = getSettings_();
 
-    assertDomain_(email, settings.ALLOWED_DOMAIN);
+  assertDomain_(email, settings.ALLOWED_DOMAIN);
 
-    if (!isHrUser_(email)) {
-      throw new Error('Only HR may create a review cycle.');
-    }
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may create a review cycle.');
+  }
 
-    const clean = validateCyclePayload_(
-      payload,
-      settings.ALLOWED_DOMAIN
-    );
-    const hrRecord = getHrRecord_(email);
-    const now = new Date();
-    const cycleId = Utilities.getUuid();
+  const clean = validateCyclePayload_(
+    payload,
+    settings.ALLOWED_DOMAIN
+  );
+  const hrRecord = getHrRecord_(email);
+  const now = new Date();
+  const cycleId = Utilities.getUuid();
 
-    const row = {
+  const row = withLock_(function () {
+    const created = {
       'Cycle ID': cycleId,
       'Created At': now,
       'Updated At': now,
@@ -441,12 +442,12 @@ function createReviewCycle(payload) {
       'Completed At': '',
     };
 
-    applyV31DefaultsToCycle_(row, 'Manual');
+    applyV31DefaultsToCycle_(created, 'Manual');
 
     appendObject_(
       PR.SHEETS.CYCLES,
       PR.CYCLE_HEADERS.concat(V31.CYCLE_HEADERS),
-      row
+      created
     );
 
     audit_(
@@ -461,15 +462,18 @@ function createReviewCycle(payload) {
       })
     );
 
-    launchReviewCycleCommunications_(row, false);
-
-    return {
-      ok: true,
-      cycleId: cycleId,
-      message:
-        'The review cycle was created, HR and both participants were notified, and one shared calendar event was added.',
-    };
+    return created;
   });
+
+  // External Calendar/Mail must not hold the global script lock.
+  launchReviewCycleCommunications_(row, false);
+
+  return {
+    ok: true,
+    cycleId: cycleId,
+    message:
+      'The review cycle was created, HR and both participants were notified, and one shared calendar event was added.',
+  };
 }
 
 function saveManagerReview(cycleId, payload, submit) {
@@ -862,10 +866,10 @@ function upgradeToSingleReviewSignatureWorkflow() {
  * HR may sign only after both participants have signed.
  */
 function signReviewCycle(cycleId, signatureDataUrl) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
-    validateSignatureDataUrl_(signatureDataUrl);
+  const email = getCurrentUserEmail_();
+  validateSignatureDataUrl_(signatureDataUrl);
 
+  const signed = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
 
@@ -935,6 +939,7 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     cycle['Updated At'] = now;
 
     writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
 
     audit_(
       cycleId,
@@ -945,57 +950,41 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       ''
     );
 
-    const updatedState = getCombinedSignatureState_(cycle);
+    return {
+      role: role,
+      cycle: cycle,
+      updatedState: getCombinedSignatureState_(cycle),
+    };
+  });
 
-    if (
-      role !== PR.ROLE.HR &&
-      updatedState.managerSigned &&
-      updatedState.employeeSigned
-    ) {
-      sendCombinedSignatureEmail_(cycle, PR.ROLE.HR);
-    }
+  if (
+    signed.role !== PR.ROLE.HR &&
+    signed.updatedState.managerSigned &&
+    signed.updatedState.employeeSigned
+  ) {
+    sendCombinedSignatureEmail_(signed.cycle, PR.ROLE.HR);
+  }
 
-    if (role === PR.ROLE.HR) {
-      const managerPdfId = generateReviewPdf_(
-        cycleId,
-        PR.TYPE.MANAGER
-      );
-      const selfPdfId = generateReviewPdf_(
-        cycleId,
-        PR.TYPE.SELF
-      );
-
-      const refreshed = findCycle_(cycleId);
-      const completedCycle = refreshed.object;
-
-      completedCycle['Manager Review PDF ID'] = managerPdfId;
-      completedCycle['Self Evaluation PDF ID'] = selfPdfId;
-      completedCycle['Manager Review Status'] = PR.DOC.COMPLETE;
-      completedCycle['Self Evaluation Status'] = PR.DOC.COMPLETE;
-      completedCycle['Status'] = PR.CYCLE.COMPLETE;
-      completedCycle['Completed At'] = new Date();
-      completedCycle['Updated At'] = new Date();
-
-      writeCycle_(refreshed.rowNumber, completedCycle);
-      sendCompletedPacket_(completedCycle);
-
-      return {
-        ok: true,
-        message:
-          'Your signature was recorded. Both review documents are complete and the final PDFs were emailed.',
-      };
-    }
+  if (signed.role === PR.ROLE.HR) {
+    const finalizeResult = finalizeReviewCycle_(cycleId);
 
     return {
       ok: true,
-      message:
-        role +
-        ' signature recorded for both review documents.' +
-        (updatedState.managerSigned && updatedState.employeeSigned
-          ? ' HR has been notified to sign last.'
-          : ' The other participant may now sign from the same review cycle.'),
+      message: finalizeResult.message,
+      finalization: finalizeResult,
     };
-  });
+  }
+
+  return {
+    ok: true,
+    message:
+      signed.role +
+      ' signature recorded for both review documents.' +
+      (signed.updatedState.managerSigned &&
+      signed.updatedState.employeeSigned
+        ? ' HR has been notified to sign last.'
+        : ' The other participant may now sign from the same review cycle.'),
+  };
 }
 
 function getCombinedSignatureState_(cycle) {
@@ -1018,7 +1007,13 @@ function updateCombinedSignatureStatuses_(cycle) {
   if (state.managerSigned && state.employeeSigned && state.hrSigned) {
     cycle['Manager Review Status'] = PR.DOC.COMPLETE;
     cycle['Self Evaluation Status'] = PR.DOC.COMPLETE;
-    cycle['Status'] = PR.CYCLE.COMPLETE;
+    // Do not set Complete here — PDF/distribution use Finalizing.
+    if (
+      String(cycle['Status']) !== PR.CYCLE.COMPLETE &&
+      String(cycle['Status']) !== PR.CYCLE.FINALIZING
+    ) {
+      cycle['Status'] = PR.CYCLE.FINALIZING;
+    }
     return;
   }
 
@@ -1596,6 +1591,7 @@ function buildLifecycle_(cycle) {
       complete: [
         PR.CYCLE.MEETING,
         PR.CYCLE.SIGNATURES,
+        PR.CYCLE.FINALIZING,
         PR.CYCLE.COMPLETE,
       ].includes(status),
       current: status === PR.CYCLE.READY,
@@ -1603,16 +1599,27 @@ function buildLifecycle_(cycle) {
     {
       key: 'meeting',
       label: 'Review Meeting',
-      complete: [PR.CYCLE.SIGNATURES, PR.CYCLE.COMPLETE].includes(
-        status
-      ),
+      complete: [
+        PR.CYCLE.SIGNATURES,
+        PR.CYCLE.FINALIZING,
+        PR.CYCLE.COMPLETE,
+      ].includes(status),
       current: status === PR.CYCLE.MEETING,
     },
     {
       key: 'signatures',
       label: 'Signatures',
-      complete: status === PR.CYCLE.COMPLETE,
+      complete: [
+        PR.CYCLE.FINALIZING,
+        PR.CYCLE.COMPLETE,
+      ].includes(status),
       current: status === PR.CYCLE.SIGNATURES,
+    },
+    {
+      key: 'finalizing',
+      label: 'Finalizing',
+      complete: status === PR.CYCLE.COMPLETE,
+      current: status === PR.CYCLE.FINALIZING,
     },
     {
       key: 'complete',
@@ -1829,6 +1836,402 @@ function updateCycleReadiness_(cycle) {
   ) {
     cycle['Status'] = PR.CYCLE.READY;
   }
+}
+
+/* ============================ FINALIZATION =============================== */
+
+/**
+ * Resume PDF generation and final distribution after all signatures.
+ * Uses short locks around claim/result persistence; never holds the
+ * global lock during Drive/Mail calls.
+ */
+function finalizeReviewCycle_(cycleId, options) {
+  const opts = options || {};
+  const allowUnknownResend = !!opts.allowUnknownResend;
+
+  const claimed = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] || 'Manual'
+    );
+    const state = getCombinedSignatureState_(cycle);
+
+    if (!state.hrSigned || !state.managerSigned || !state.employeeSigned) {
+      throw new Error(
+        'Finalization requires manager, employee, and HR signatures.'
+      );
+    }
+
+    if (String(cycle['Status']) === PR.CYCLE.COMPLETE) {
+      return { alreadyComplete: true, cycle: cycle, rowNumber: location.rowNumber };
+    }
+
+    if (
+      String(cycle['Status']) !== PR.CYCLE.FINALIZING &&
+      String(cycle['Status']) !== PR.CYCLE.SIGNATURES
+    ) {
+      throw new Error(
+        'This review cycle is not ready for finalization.'
+      );
+    }
+
+    cycle['Status'] = PR.CYCLE.FINALIZING;
+    cycle['Finalization Attempt Count'] =
+      Number(cycle['Finalization Attempt Count'] || 0) + 1;
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+
+    return {
+      alreadyComplete: false,
+      cycle: cycle,
+      rowNumber: location.rowNumber,
+    };
+  });
+
+  if (claimed.alreadyComplete) {
+    return {
+      ok: true,
+      alreadyComplete: true,
+      message: 'This review is already complete.',
+      components: getFinalizationSummary_(claimed.cycle),
+    };
+  }
+
+  try {
+    ensureFinalPdfComponent_(
+      cycleId,
+      'Manager',
+      'Manager Review PDF ID',
+      'Manager PDF Status',
+      PR.TYPE.MANAGER
+    );
+    ensureFinalPdfComponent_(
+      cycleId,
+      'Self',
+      'Self Evaluation PDF ID',
+      'Self PDF Status',
+      PR.TYPE.SELF
+    );
+    ensureFinalDistribution_(cycleId, allowUnknownResend);
+
+    const completed = withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      if (
+        !cycle['Manager Review PDF ID'] ||
+        !cycle['Self Evaluation PDF ID'] ||
+        String(cycle['Final Distribution Status']) !==
+          V31.DELIVERY.SENT
+      ) {
+        throw new Error(
+          'Finalization components are incomplete: ' +
+            describeFinalizationStatus_(cycle)
+        );
+      }
+
+      cycle['Status'] = PR.CYCLE.COMPLETE;
+      cycle['Completed At'] = cycle['Completed At'] || new Date();
+      cycle['Manager Review Status'] = PR.DOC.COMPLETE;
+      cycle['Self Evaluation Status'] = PR.DOC.COMPLETE;
+      cycle['Finalization Last Error'] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+
+      return cycle;
+    });
+
+    return {
+      ok: true,
+      alreadyComplete: false,
+      message:
+        'Final PDFs were generated and the completed packet was emailed.',
+      components: getFinalizationSummary_(completed),
+    };
+  } catch (error) {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      cycle['Status'] = PR.CYCLE.FINALIZING;
+      cycle['Finalization Last Error'] = String(
+        error.message || error
+      );
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    throw error;
+  }
+}
+
+function retryReviewFinalization(cycleId, options) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may retry review finalization.'
+    );
+  }
+
+  const result = finalizeReviewCycle_(cycleId, options || {});
+
+  audit_(
+    cycleId,
+    'Review finalization retried',
+    email,
+    PR.CYCLE.FINALIZING,
+    result.alreadyComplete
+      ? PR.CYCLE.COMPLETE
+      : result.ok
+        ? PR.CYCLE.COMPLETE
+        : PR.CYCLE.FINALIZING,
+    JSON.stringify(result.components || {})
+  );
+
+  return result;
+}
+
+function ensureFinalPdfComponent_(
+  cycleId,
+  label,
+  idField,
+  statusField,
+  documentType
+) {
+  const before = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+
+    if (cycle[idField]) {
+      if (String(cycle[statusField]) !== V31.DELIVERY.SENT) {
+        cycle[statusField] = V31.DELIVERY.SENT;
+        cycle['Updated At'] = new Date();
+        writeCycle_(location.rowNumber, cycle);
+        SpreadsheetApp.flush();
+      }
+
+      return { skip: true };
+    }
+
+    const status = String(cycle[statusField] || V31.DELIVERY.PENDING);
+
+    if (status === V31.DELIVERY.SENDING) {
+      if (!isDeliveryClaimStale_(cycle['Updated At'])) {
+        throw new Error(
+          label + ' PDF generation is already in progress.'
+        );
+      }
+
+      cycle[statusField] = V31.DELIVERY.UNKNOWN;
+      cycle['Finalization Last Error'] =
+        label +
+        ' PDF claim went stale before an ID was persisted.';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+
+      throw new Error(
+        label +
+          ' PDF is Delivery Unknown. HR must reconcile before automatic retry continues.'
+      );
+    }
+
+    if (status === V31.DELIVERY.UNKNOWN) {
+      throw new Error(
+        label +
+          ' PDF is Delivery Unknown. Confirm whether a Drive file already exists, then retry with reconciliation.'
+      );
+    }
+
+    cycle[statusField] = V31.DELIVERY.SENDING;
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+
+    return { skip: false };
+  });
+
+  if (before.skip) {
+    return;
+  }
+
+  try {
+    const pdfId = generateReviewPdf_(cycleId, documentType);
+
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      cycle[idField] = pdfId;
+      cycle[statusField] = V31.DELIVERY.SENT;
+      cycle['Finalization Last Error'] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+  } catch (error) {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      if (!cycle[idField]) {
+        cycle[statusField] = V31.DELIVERY.FAILED;
+        cycle['Finalization Last Error'] = String(
+          error.message || error
+        );
+        cycle['Updated At'] = new Date();
+        writeCycle_(location.rowNumber, cycle);
+        SpreadsheetApp.flush();
+      }
+    });
+
+    throw error;
+  }
+}
+
+function ensureFinalDistribution_(cycleId, allowUnknownResend) {
+  const claim = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const status = String(
+      cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
+    );
+
+    if (status === V31.DELIVERY.SENT) {
+      return { skip: true };
+    }
+
+    if (
+      !cycle['Manager Review PDF ID'] ||
+      !cycle['Self Evaluation PDF ID']
+    ) {
+      throw new Error(
+        'Both PDF IDs are required before final distribution.'
+      );
+    }
+
+    if (status === V31.DELIVERY.SENDING) {
+      if (!isDeliveryClaimStale_(cycle['Final Distribution Started At'])) {
+        throw new Error(
+          'Final distribution is already in progress.'
+        );
+      }
+
+      cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
+      cycle['Finalization Last Error'] =
+        'Final distribution claim went stale after send may have occurred.';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+
+      throw new Error(
+        'Final distribution is Delivery Unknown. HR must explicitly reconcile before resending.'
+      );
+    }
+
+    if (status === V31.DELIVERY.UNKNOWN && !allowUnknownResend) {
+      throw new Error(
+        'Final distribution is Delivery Unknown. Pass allowUnknownResend after confirming recipients did not receive the packet.'
+      );
+    }
+
+    cycle['Final Distribution Status'] = V31.DELIVERY.SENDING;
+    cycle['Final Distribution Started At'] = new Date();
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+
+    return { skip: false, cycle: cycle };
+  });
+
+  if (claim.skip) {
+    return;
+  }
+
+  try {
+    sendCompletedPacket_(claim.cycle);
+
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      cycle['Final Distribution Status'] = V31.DELIVERY.SENT;
+      cycle['Final Distribution Sent At'] = new Date();
+      cycle['Finalization Last Error'] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+  } catch (error) {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      // Ambiguous: MailApp may have accepted the message.
+      cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
+      cycle['Finalization Last Error'] = String(
+        error.message || error
+      );
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    throw new Error(
+      'Final distribution is Delivery Unknown after send failure: ' +
+        String(error.message || error)
+    );
+  }
+}
+
+function isDeliveryClaimStale_(startedAt) {
+  const started = startedAt ? new Date(startedAt) : null;
+
+  if (!started || Number.isNaN(started.getTime())) {
+    return true;
+  }
+
+  return (
+    Date.now() - started.getTime() >
+    Number(V31.SENDING_STALE_MS || 900000)
+  );
+}
+
+function getFinalizationSummary_(cycle) {
+  return {
+    managerPdf:
+      String(cycle['Manager PDF Status'] || '') ||
+      (cycle['Manager Review PDF ID']
+        ? V31.DELIVERY.SENT
+        : V31.DELIVERY.PENDING),
+    selfPdf:
+      String(cycle['Self PDF Status'] || '') ||
+      (cycle['Self Evaluation PDF ID']
+        ? V31.DELIVERY.SENT
+        : V31.DELIVERY.PENDING),
+    distribution: String(
+      cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
+    ),
+    managerPdfId: String(cycle['Manager Review PDF ID'] || ''),
+    selfPdfId: String(cycle['Self Evaluation PDF ID'] || ''),
+    lastError: String(cycle['Finalization Last Error'] || ''),
+    attemptCount: Number(
+      cycle['Finalization Attempt Count'] || 0
+    ),
+    status: String(cycle['Status'] || ''),
+  };
+}
+
+function describeFinalizationStatus_(cycle) {
+  const summary = getFinalizationSummary_(cycle);
+
+  return [
+    'Manager PDF: ' + summary.managerPdf,
+    'Self PDF: ' + summary.selfPdf,
+    'Distribution: ' + summary.distribution,
+  ].join('; ');
 }
 
 /* =============================== PDF ===================================== */
@@ -2488,6 +2891,11 @@ function sendCombinedSignatureEmail_(cycle, role) {
 }
 
 function sendCompletedPacket_(cycle) {
+  const htmlBody =
+    '<p>The performance review cycle for <strong>' +
+    htmlEscape_(cycle['Employee Name']) +
+    '</strong> is complete.</p><p>The signed manager review and employee self-evaluation are attached.</p>';
+
   MailApp.sendEmail({
     to: uniqueEmails_([
       cycle['Manager Email'],
@@ -2497,10 +2905,8 @@ function sendCompletedPacket_(cycle) {
     subject:
       'Completed performance review: ' +
       cycle['Employee Name'],
-    htmlBody:
-      '<p>The performance review cycle for <strong>' +
-      htmlEscape_(cycle['Employee Name']) +
-      '</strong> is complete.</p><p>The signed manager review and employee self-evaluation are attached.</p>',
+    body: htmlToPlainText_(htmlBody),
+    htmlBody: htmlBody,
     attachments: [
       DriveApp.getFileById(
         cycle['Manager Review PDF ID']
@@ -2509,15 +2915,15 @@ function sendCompletedPacket_(cycle) {
         cycle['Self Evaluation PDF ID']
       ).getBlob(),
     ],
-    name: 'AITHERAS HR',
+    name: PR.SETTINGS_DEFAULTS.APP_NAME || 'AITHERAS HR',
   });
 
   audit_(
     cycle['Cycle ID'],
     'Completed review packet emailed',
     cycle['HR Email'],
-    PR.CYCLE.COMPLETE,
-    PR.CYCLE.COMPLETE,
+    PR.CYCLE.FINALIZING,
+    PR.CYCLE.FINALIZING,
     ''
   );
 }
@@ -2526,9 +2932,28 @@ function sendHtmlEmail_(to, subject, htmlBody) {
   MailApp.sendEmail({
     to: to,
     subject: subject,
+    body: htmlToPlainText_(htmlBody),
     htmlBody: htmlBody,
-    name: 'AITHERAS HR',
+    name: PR.SETTINGS_DEFAULTS.APP_NAME || 'AITHERAS HR',
   });
+}
+
+function htmlToPlainText_(htmlBody) {
+  return String(htmlBody || '')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
+    .replace(/<\s*li\s*>/gi, '- ')
+    .replace(/<\s*\/li\s*>/gi, '\n')
+    .replace(/<\s*\/?(ul|ol)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function emailButton_(url, label) {

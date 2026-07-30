@@ -102,18 +102,6 @@ function runV31IdempotencyTests() {
   );
   results.push(
     runIdemCase_(
-      'orchestrator stubs: calendar then manager fail resumes correctly',
-      testOrchestratorCalendarThenManagerFail_
-    )
-  );
-  results.push(
-    runIdemCase_(
-      'orchestrator stubs: flush persist called after each step',
-      testOrchestratorPersistsEachStep_
-    )
-  );
-  results.push(
-    runIdemCase_(
       'incomplete manual period cycle is selected for retry',
       testIncompleteManualPeriodRetryTarget_
     )
@@ -126,8 +114,50 @@ function runV31IdempotencyTests() {
   );
   results.push(
     runIdemCase_(
-      'calendar tag recovery prefers existing tagged event',
+      'calendar tag recovery prefers existing tagged or marked event',
       testCalendarTagRecoveryPreference_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'decideLaunchComponentAction_ claims Pending and Failed states',
+      testDecideLaunchComponentActionClaimsPendingAndFailed_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'decideLaunchComponentAction_ skips Sent and non-stale in-progress',
+      testDecideLaunchComponentActionSkipsDoneAndInProgress_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'decideLaunchComponentAction_ marks a stale claim Delivery Unknown',
+      testDecideLaunchComponentActionMarksStaleUnknown_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'decideLaunchComponentAction_ requires explicit allow to reclaim Unknown',
+      testDecideLaunchComponentActionUnknownRequiresAllow_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'eventMatchesCycleId_ matches by tag, description marker, or known ID',
+      testEventMatchesCycleIdMatchesByTagMarkerOrId_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'component summary exposes Delivery Unknown flags for HR',
+      testComponentSummaryExposesUnknownFlags_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'status-based components complete the launch without legacy notice',
+      testStatusBasedComponentsCompleteLaunch_
     )
   );
 
@@ -698,197 +728,6 @@ function testResendDoesNotClearTimestamps_() {
   );
 }
 
-/**
- * In-memory adapters that exercise orchestrateReviewLaunchSteps_
- * (the same path production launchReviewCycleCommunications_ uses).
- */
-function buildStubLaunchAdapters_(options) {
-  const opts = options || {};
-  const calls = {
-    calendar: 0,
-    manager: 0,
-    employee: 0,
-    hr: 0,
-  };
-
-  return {
-    calls: calls,
-    adapters: {
-      createCalendar: function (cycle) {
-        calls.calendar++;
-        if (opts.failAt === 'calendar') {
-          throw new Error('Simulated calendar fail');
-        }
-        if (opts.existingTaggedEventId) {
-          return {
-            getId: function () {
-              return opts.existingTaggedEventId;
-            },
-          };
-        }
-        return {
-          getId: function () {
-            return 'evt-orch-' + cycle['Cycle ID'];
-          },
-        };
-      },
-      sendManager: function () {
-        calls.manager++;
-        if (opts.failAt === 'manager') {
-          throw new Error('Simulated manager fail');
-        }
-      },
-      sendEmployee: function () {
-        calls.employee++;
-        if (opts.failAt === 'employee') {
-          throw new Error('Simulated employee fail');
-        }
-      },
-      sendHr: function () {
-        calls.hr++;
-        if (opts.failAt === 'hr') {
-          throw new Error('Simulated HR fail');
-        }
-      },
-    },
-  };
-}
-
-function runOrchestratedAttempt_(cycle, failAt) {
-  const snapshot = Object.assign({}, cycle);
-  const persistLog = [];
-  const stub = buildStubLaunchAdapters_({
-    failAt: failAt,
-  });
-
-  try {
-    const result = orchestrateReviewLaunchSteps_(
-      snapshot,
-      function (row) {
-        persistLog.push({
-          calendarId: String(
-            row['Calendar Event ID'] || ''
-          ),
-          manager: !!row['Manager Email Sent At'],
-          employee: !!row['Employee Email Sent At'],
-          hr: !!row['HR Email Sent At'],
-          complete: !!row['Launch Completed At'],
-          attempt: Number(
-            row['Launch Attempt Count'] || 0
-          ),
-          error: String(
-            row['Last Launch Error'] || ''
-          ),
-        });
-      },
-      stub.adapters
-    );
-
-    return {
-      ok: true,
-      cycle: result.cycle,
-      actions: result.actions,
-      calls: stub.calls,
-      persistLog: persistLog,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      cycle: snapshot,
-      actions: [],
-      calls: stub.calls,
-      persistLog: persistLog,
-      error: String(error.message || error),
-    };
-  }
-}
-
-function testOrchestratorCalendarThenManagerFail_() {
-  const first = runOrchestratedAttempt_(
-    sampleLaunchCycle_(),
-    'manager'
-  );
-
-  assertIdem_(!first.ok, 'First attempt should fail');
-  assertIdem_(
-    first.calls.calendar === 1,
-    'Calendar adapter must run once'
-  );
-  assertIdem_(
-    first.calls.manager === 1,
-    'Manager adapter must run once before fail'
-  );
-  assertIdem_(
-    first.calls.employee === 0 &&
-      first.calls.hr === 0,
-    'Later emails must not run'
-  );
-  assertIdem_(
-    !!first.cycle['Calendar Event ID'],
-    'Calendar ID must be persisted before manager fail'
-  );
-  assertIdem_(
-    !first.cycle['Manager Email Sent At'],
-    'Manager timestamp must remain blank after fail'
-  );
-
-  const second = runOrchestratedAttempt_(
-    first.cycle,
-    null
-  );
-
-  assertIdem_(second.ok, 'Retry should succeed');
-  assertIdem_(
-    second.calls.calendar === 0,
-    'Retry must not recreate calendar'
-  );
-  assertIdem_(
-    second.actions.join(',') ===
-      'manager,employee,hr,complete',
-    'Retry should resume at manager through complete'
-  );
-}
-
-function testOrchestratorPersistsEachStep_() {
-  const run = runOrchestratedAttempt_(
-    sampleLaunchCycle_(),
-    null
-  );
-
-  assertIdem_(run.ok, 'Full orchestrated launch should succeed');
-  assertIdem_(
-    run.persistLog.length >= 5,
-    'Expected attempt + each component + complete persists'
-  );
-
-  const afterCalendar = run.persistLog.find(
-    function (row) {
-      return row.calendarId && !row.manager;
-    }
-  );
-  const afterManager = run.persistLog.find(
-    function (row) {
-      return row.manager && !row.employee;
-    }
-  );
-  const afterComplete = run.persistLog[
-    run.persistLog.length - 1
-  ];
-
-  assertIdem_(
-    !!afterCalendar,
-    'Must persist immediately after calendar'
-  );
-  assertIdem_(
-    !!afterManager,
-    'Must persist immediately after manager email'
-  );
-  assertIdem_(
-    afterComplete.complete === true,
-    'Final persist must include Launch Completed At'
-  );
-}
-
 function testIncompleteManualPeriodRetryTarget_() {
   const incompleteManual = sampleLaunchCycle_({
     'Cycle ID': 'manual-incomplete',
@@ -941,32 +780,273 @@ function testCompletePeriodSkipsCreate_() {
   );
 }
 
-function testCalendarTagRecoveryPreference_() {
-  // Mirrors createReviewCalendarEvent_ recovery: if a tagged event
-  // already exists, adapters should return that ID rather than create.
-  const cycle = sampleLaunchCycle_();
-  const stub = buildStubLaunchAdapters_({
-    existingTaggedEventId: 'evt-recovered-tag',
-  });
-  const persistLog = [];
-
-  const result = orchestrateReviewLaunchSteps_(
-    cycle,
-    function (row) {
-      persistLog.push(
-        String(row['Calendar Event ID'] || '')
-      );
+/**
+ * Fake CalendarApp-style event used to test the pure recovery helpers
+ * without touching a real Calendar.
+ */
+function fakeCalendarEvent_(id, tag, description) {
+  return {
+    getId: function () {
+      return id;
     },
-    stub.adapters
+    getTag: function (key) {
+      return key === 'AITHERAS_REVIEW_CYCLE_ID' ? tag || '' : '';
+    },
+    getDescription: function () {
+      return description || '';
+    },
+  };
+}
+
+function testCalendarTagRecoveryPreference_() {
+  // Mirrors createReviewCalendarEvent_ recovery: an event tagged (or
+  // marked in its description) with this cycle's ID must be preferred
+  // over creating a new one.
+  const cycleId = 'test-cycle-recover';
+  const tagged = fakeCalendarEvent_(
+    'evt-recovered-tag',
+    cycleId,
+    ''
+  );
+  const untagged = fakeCalendarEvent_(
+    'evt-unrelated',
+    '',
+    'Some other event'
+  );
+  const markedOnly = fakeCalendarEvent_(
+    'evt-recovered-marker',
+    '',
+    'Notes\n' + buildCalendarCycleMarker_(cycleId) + '\nMore notes'
+  );
+
+  const fakeCalendar = {
+    getEvents: function () {
+      return [untagged, tagged, markedOnly];
+    },
+    getEventById: function () {
+      return null;
+    },
+  };
+
+  const meetingDate = new Date(2026, 7, 15);
+  const recovered = findExistingReviewCalendarEvent_(
+    fakeCalendar,
+    cycleId,
+    meetingDate
   );
 
   assertIdem_(
-    result.cycle['Calendar Event ID'] ===
-      'evt-recovered-tag',
-    'Recovered tagged event ID must be persisted'
+    !!recovered && recovered.getId() === 'evt-recovered-tag',
+    'Must recover the first event matching by tag before description'
+  );
+
+  const fakeCalendarMarkerOnly = {
+    getEvents: function () {
+      return [untagged, markedOnly];
+    },
+    getEventById: function () {
+      return null;
+    },
+  };
+
+  const recoveredByMarker = findExistingReviewCalendarEvent_(
+    fakeCalendarMarkerOnly,
+    cycleId,
+    meetingDate
+  );
+
+  assertIdem_(
+    !!recoveredByMarker &&
+      recoveredByMarker.getId() === 'evt-recovered-marker',
+    'Must recover by description marker when no tag matches'
+  );
+}
+
+function testEventMatchesCycleIdMatchesByTagMarkerOrId_() {
+  const cycleId = 'cycle-match-1';
+
+  assertIdem_(
+    eventMatchesCycleId_(
+      fakeCalendarEvent_('evt-1', cycleId, ''),
+      cycleId
+    ),
+    'Must match by Calendar tag'
+  );
+
+  assertIdem_(
+    eventMatchesCycleId_(
+      fakeCalendarEvent_(
+        'evt-2',
+        '',
+        'intro\n' + buildCalendarCycleMarker_(cycleId)
+      ),
+      cycleId
+    ),
+    'Must match by description marker'
+  );
+
+  assertIdem_(
+    eventMatchesCycleId_(
+      fakeCalendarEvent_('evt-known', '', ''),
+      cycleId,
+      'evt-known'
+    ),
+    'Must match by known persisted event ID'
+  );
+
+  assertIdem_(
+    !eventMatchesCycleId_(
+      fakeCalendarEvent_('evt-3', 'other-cycle', 'no marker here'),
+      cycleId
+    ),
+    'Must not match an unrelated event'
+  );
+}
+
+function testDecideLaunchComponentActionClaimsPendingAndFailed_() {
+  const pendingDecision = decideLaunchComponentAction_(
+    V31.DELIVERY.PENDING,
+    false,
+    '',
+    V31.DELIVERY.SENDING,
+    false
+  );
+  const failedDecision = decideLaunchComponentAction_(
+    V31.DELIVERY.FAILED,
+    false,
+    '',
+    V31.DELIVERY.SENDING,
+    false
+  );
+
+  assertIdem_(
+    pendingDecision.action === 'claim',
+    'Pending must be claimable'
   );
   assertIdem_(
-    stub.calls.calendar === 1,
-    'Calendar recovery path still goes through createCalendar adapter once'
+    failedDecision.action === 'claim',
+    'Failed must be claimable (retryable automatically)'
+  );
+}
+
+function testDecideLaunchComponentActionSkipsDoneAndInProgress_() {
+  const doneDecision = decideLaunchComponentAction_(
+    V31.DELIVERY.SENT,
+    true,
+    '',
+    V31.DELIVERY.SENDING,
+    false
+  );
+  const inProgressDecision = decideLaunchComponentAction_(
+    V31.DELIVERY.SENDING,
+    false,
+    new Date(),
+    V31.DELIVERY.SENDING,
+    false
+  );
+
+  assertIdem_(
+    doneDecision.action === 'skip' &&
+      doneDecision.reason === 'sent',
+    'Already-sent component must be skipped, never re-sent'
+  );
+  assertIdem_(
+    inProgressDecision.action === 'skip' &&
+      inProgressDecision.reason === 'in-progress',
+    'A fresh in-progress claim must be skipped, not double-sent'
+  );
+}
+
+function testDecideLaunchComponentActionMarksStaleUnknown_() {
+  const staleStart = new Date(
+    Date.now() - (V31.SENDING_STALE_MS + 60000)
+  );
+  const staleDecision = decideLaunchComponentAction_(
+    V31.DELIVERY.SENDING,
+    false,
+    staleStart,
+    V31.DELIVERY.SENDING,
+    false
+  );
+
+  assertIdem_(
+    staleDecision.action === 'mark-unknown',
+    'A stale in-progress claim must be marked Delivery Unknown, not auto-resent'
+  );
+}
+
+function testDecideLaunchComponentActionUnknownRequiresAllow_() {
+  const blocked = decideLaunchComponentAction_(
+    V31.DELIVERY.UNKNOWN,
+    false,
+    '',
+    V31.DELIVERY.SENDING,
+    false
+  );
+  const allowed = decideLaunchComponentAction_(
+    V31.DELIVERY.UNKNOWN,
+    false,
+    '',
+    V31.DELIVERY.SENDING,
+    true
+  );
+
+  assertIdem_(
+    blocked.action === 'skip' && blocked.reason === 'unknown',
+    'Delivery Unknown must block automatic resend by default'
+  );
+  assertIdem_(
+    allowed.action === 'claim',
+    'Delivery Unknown may be reclaimed only with explicit allowUnknownResend'
+  );
+}
+
+function testComponentSummaryExposesUnknownFlags_() {
+  const summary = getReviewLaunchComponentSummary_(
+    sampleLaunchCycle_({
+      'Calendar Event ID': 'evt-1',
+      'Calendar Status': V31.CALENDAR.UNKNOWN,
+      'Manager Email Status': V31.DELIVERY.SENT,
+      'Manager Email Sent At': new Date(),
+      'Employee Email Status': V31.DELIVERY.UNKNOWN,
+      'HR Email Status': V31.DELIVERY.PENDING,
+    })
+  );
+
+  assertIdem_(
+    summary.calendarUnknown === true,
+    'Calendar Unknown must be reported'
+  );
+  assertIdem_(
+    summary.employeeEmailUnknown === true,
+    'Employee email Unknown must be reported'
+  );
+  assertIdem_(
+    summary.hasUnknown === true,
+    'hasUnknown must aggregate across all components'
+  );
+  assertIdem_(
+    summary.managerEmail === true &&
+      summary.managerEmailUnknown === false,
+    'Manager email Sent status must not be flagged Unknown'
+  );
+}
+
+function testStatusBasedComponentsCompleteLaunch_() {
+  const cycle = sampleLaunchCycle_({
+    'Calendar Event ID': 'evt-1',
+    'Calendar Status': V31.CALENDAR.CONFIGURED,
+    'Manager Email Status': V31.DELIVERY.SENT,
+    'Employee Email Status': V31.DELIVERY.SENT,
+    'HR Email Status': V31.DELIVERY.SENT,
+  });
+
+  assertIdem_(
+    isReviewLaunchComponentsComplete_(cycle),
+    'Status-based Sent fields (no Sent At) must count as component-complete'
+  );
+  assertIdem_(
+    isReviewLaunchComplete_(cycle),
+    'Configured calendar + three Sent statuses must be launch-complete without Launch Completed At or legacy notice'
   );
 }

@@ -1901,9 +1901,15 @@ function renderCycleHeaderActions(cycle) {
   if (cycle.canStartMeeting) html += '<button class="button success" onclick="confirmStartMeeting()">Start Review Meeting</button>';
   if (cycle.canReleaseSignatures) html += '<button class="button warning" onclick="openReleaseModal()">Finalize & Release</button>';
   if (cycle.isHr && cycle.v31 && cycle.status !== 'Complete') {
+    if (cycle.v31.needsFinalizationRetry || cycle.status === 'Finalizing') {
+      html += '<button class="button outline" onclick="retryFinalization()">Retry Finalization</button>';
+    }
     if (!cycle.v31.launchComplete) {
       html += '<button class="button outline" onclick="retryIncompleteLaunch()">Retry Launch</button>';
-    } else {
+      if (cycle.v31.launchHasUnknownDelivery) {
+        html += '<button class="button outline" onclick="openLaunchReconcileModal()">Reconcile Launch Delivery</button>';
+      }
+    } else if (cycle.status !== 'Finalizing') {
       html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
     }
   }
@@ -1915,7 +1921,7 @@ function renderCycleHeaderActions(cycle) {
 async function retryIncompleteLaunch() {
   openModal({
     title: 'Retry incomplete launch?',
-    body: '<p>This resumes only the unfinished launch steps (calendar and/or missing role emails). Completed steps are not repeated.</p>',
+    body: '<p>This resumes only unfinished launch steps. Steps already marked Sent are skipped. Delivery Unknown components are not automatically resent.</p>',
     confirmLabel: 'Retry Launch',
     tone: 'primary',
     onConfirm: async function() {
@@ -1931,16 +1937,70 @@ async function retryIncompleteLaunch() {
   });
 }
 
+async function retryFinalization() {
+  openModal({
+    title: 'Retry finalization?',
+    body: '<p>This resumes PDF generation and final packet distribution. Existing PDF IDs are reused. If final email delivery is unknown, confirm recipients did not already receive it before enabling a resend.</p><label style="display:block;margin-top:12px;"><input type="checkbox" id="allowUnknownFinalResend"> Allow resend if distribution is Delivery Unknown</label>',
+    confirmLabel: 'Retry Finalization',
+    tone: 'primary',
+    onConfirm: async function() {
+      const allowUnknown = !!(document.getElementById('allowUnknownFinalResend') && document.getElementById('allowUnknownFinalResend').checked);
+      closeModal();
+      try {
+        const result = await server('retryReviewFinalization', currentCycle.cycleId, { allowUnknownResend: allowUnknown });
+        showToast(result.ok ? 'success' : 'error', 'Finalization', result.message);
+        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+      } catch (error) {
+        showToast('error', 'Could not retry finalization', errorMessage(error));
+      }
+    }
+  });
+}
+
+async function openLaunchReconcileModal() {
+  openModal({
+    title: 'Reconcile ambiguous launch delivery',
+    body: '<p>Choose a Delivery Unknown component and either mark it Sent (already delivered) or explicitly resend that recipient only.</p>' +
+      '<label>Component<br><select id="reconcileComponent"><option value="manager">Manager email</option><option value="employee">Employee email</option><option value="hr">HR email</option><option value="calendar">Calendar</option></select></label>' +
+      '<label style="display:block;margin-top:12px;">Action<br><select id="reconcileAction"><option value="markSent">Mark as Sent / recovered</option><option value="resend">Resend this component</option></select></label>',
+    confirmLabel: 'Apply Reconciliation',
+    tone: 'warning',
+    onConfirm: async function() {
+      const component = document.getElementById('reconcileComponent').value;
+      const action = document.getElementById('reconcileAction').value;
+      closeModal();
+      try {
+        const result = await server('reconcileLaunchDelivery', currentCycle.cycleId, component, action);
+        showToast('success', 'Launch reconciled', result.message || 'Updated');
+        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+      } catch (error) {
+        showToast('error', 'Could not reconcile launch', errorMessage(error));
+      }
+    }
+  });
+}
+
 async function resendLaunchInstructions() {
   openModal({
     title: 'Resend launch instructions?',
-    body: '<p>HR, the manager, and the employee will each receive their original role-specific launch email again. The calendar event will not be duplicated.</p>',
-    confirmLabel: 'Resend Emails',
+    body: '<p>Select recipients. Each send is audited separately. The calendar event is not duplicated.</p>' +
+      '<label><input type="checkbox" id="resendMgr" checked> Manager</label><br>' +
+      '<label><input type="checkbox" id="resendEmp" checked> Employee</label><br>' +
+      '<label><input type="checkbox" id="resendHr" checked> HR</label>',
+    confirmLabel: 'Resend Selected',
     tone: 'primary',
     onConfirm: async function() {
+      const recipients = [];
+      if (document.getElementById('resendMgr').checked) recipients.push('manager');
+      if (document.getElementById('resendEmp').checked) recipients.push('employee');
+      if (document.getElementById('resendHr').checked) recipients.push('hr');
       closeModal();
+      if (!recipients.length) {
+        showToast('error', 'No recipients', 'Select at least one recipient.');
+        return;
+      }
       try {
-        const result = await server('resendReviewLaunchEmails', currentCycle.cycleId);
+        const result = await server('resendReviewLaunchEmails', currentCycle.cycleId, recipients);
         showToast('success', 'Instructions resent', result.message);
       } catch (error) {
         showToast('error', 'Could not resend instructions', errorMessage(error));
@@ -3055,7 +3115,7 @@ function statusPill(value,tone){return'<span class="status-pill '+(tone||statusT
 function statusPillForDocument(value){return'<span class="status-pill '+documentStatusTone(value)+'">'+escapeHtml(humanDocumentStatus(value))+'</span>';}
 function statusTone(value){if(value==='Complete'||value==='Signed')return'green';if(value==='Awaiting Signatures'||value==='Action required'||value==='Ready to sign')return'amber';if(value==='Review Meeting Open')return'blue';if(value==='Ready for Review Meeting')return'purple';if(value==='Needs attention')return'amber';return'';}
 function documentStatusTone(value){if(value==='Complete')return'green';if(String(value).includes('Pending'))return'amber';if(value==='Submitted')return'purple';if(value==='Draft')return'blue';return'';}
-function humanStatus(value){const map={'Open for Input':'Drafting','Ready for Review Meeting':'Ready for Meeting','Review Meeting Open':'Meeting Open','Awaiting Signatures':'Awaiting Signatures','Complete':'Complete'};return map[value]||value||'';}
+function humanStatus(value){const map={'Open for Input':'Drafting','Ready for Review Meeting':'Ready for Meeting','Review Meeting Open':'Meeting Open','Awaiting Signatures':'Awaiting Signatures','Finalizing':'Finalizing','Complete':'Complete'};return map[value]||value||'';}
 function humanDocumentStatus(value){const map={'Not Started':'Not started','Draft':'In progress','Submitted':'Submitted and sealed','Pending Manager and Employee Signatures':'Waiting for manager and employee signatures','Pending Manager Signature':'Waiting for manager signature','Pending Employee Signature':'Waiting for employee signature','Pending HR Signature':'Waiting for HR signature','Complete':'Complete'};return map[value]||value||'';}
 function ratingLabel(value){if(!value)return'';if(value==='N/A')return'N/A';const item=state.ratings.find(function(r){return String(r.value)===String(value);});return item?item.value+' — '+item.label:String(value);}
 function isNumericRating(value){const n=Number(value);return value!==''&&value!=='N/A'&&Number.isInteger(n)&&n>=1&&n<=7;}
