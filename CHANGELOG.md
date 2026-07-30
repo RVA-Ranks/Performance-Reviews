@@ -1,5 +1,14 @@
 # V3.1 Changelog
 
+## Delivery B correction — commit classification and reconciliation claims
+
+- Separated signature outcomes into `COMMITTED`, `SUPERSEDED`, and `COMMIT_UNKNOWN`; only a confirmed loser enters automatic disposition.
+- Moved signature and reconciliation audits after authoritative commits. Audit failure now preserves the winner and writes a dedicated audit warning.
+- Added distinct active/winning attempt fields, ambiguous-commit recovery metadata, artifact warnings, audit warnings, and durable per-role reconciliation claims.
+- Reconciliation now claims the selected candidate before Drive validation, commits without moving the file, and organizes the authoritative winner afterward.
+- Restricted automatic legacy normalization to the exact historical `<cycleId> - Combined_Review_Packet_-_<ROLE>.png` name or an exact structured provenance marker.
+- Added private Sandbox fault and evidence harnesses. No operational warning email was introduced.
+
 ## Delivery B — crash-safe signatures
 
 - Added authoritative role-level signature status, file ID, signed timestamp, attempt, and error fields while preserving both document mirrors.

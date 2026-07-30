@@ -91,20 +91,56 @@ const V31 = Object.freeze({
     'Manager Signature Attempt ID',
     'Manager Signature Started At',
     'Manager Signature Last Error',
+    'Manager Signature Artifact Warning',
+    'Manager Signature Audit Warning',
     'Manager Signature File ID',
     'Manager Signed At',
+    'Manager Signature Winning Attempt ID',
+    'Manager Signature Recovery File ID',
+    'Manager Signature Recovery Attempt ID',
+    'Manager Signature Recovery Details JSON',
+    'Manager Signature Recovery Recorded At',
+    'Manager Signature Reconciliation Status',
+    'Manager Signature Reconciliation Attempt ID',
+    'Manager Signature Reconciliation Selected File ID',
+    'Manager Signature Reconciliation Started At',
+    'Manager Signature Reconciliation Last Error',
     'Employee Signature Status',
     'Employee Signature Attempt ID',
     'Employee Signature Started At',
     'Employee Signature Last Error',
+    'Employee Signature Artifact Warning',
+    'Employee Signature Audit Warning',
     'Employee Signature File ID',
     'Employee Signed At',
+    'Employee Signature Winning Attempt ID',
+    'Employee Signature Recovery File ID',
+    'Employee Signature Recovery Attempt ID',
+    'Employee Signature Recovery Details JSON',
+    'Employee Signature Recovery Recorded At',
+    'Employee Signature Reconciliation Status',
+    'Employee Signature Reconciliation Attempt ID',
+    'Employee Signature Reconciliation Selected File ID',
+    'Employee Signature Reconciliation Started At',
+    'Employee Signature Reconciliation Last Error',
     'HR Signature Status',
     'HR Signature Attempt ID',
     'HR Signature Started At',
     'HR Signature Last Error',
+    'HR Signature Artifact Warning',
+    'HR Signature Audit Warning',
     'HR Signature File ID',
     'HR Signed At',
+    'HR Signature Winning Attempt ID',
+    'HR Signature Recovery File ID',
+    'HR Signature Recovery Attempt ID',
+    'HR Signature Recovery Details JSON',
+    'HR Signature Recovery Recorded At',
+    'HR Signature Reconciliation Status',
+    'HR Signature Reconciliation Attempt ID',
+    'HR Signature Reconciliation Selected File ID',
+    'HR Signature Reconciliation Started At',
+    'HR Signature Reconciliation Last Error',
     'Ready Notification Status',
     'Ready Notification Attempt ID',
     'Ready Notification Started At',
@@ -177,6 +213,20 @@ const V31 = Object.freeze({
     FAILED: 'Failed',
   },
 
+  SIGNATURE_RECONCILIATION: {
+    PENDING: 'Pending',
+    RECONCILING: 'Reconciling',
+    RESOLVED: 'Resolved',
+    UNKNOWN: 'Delivery Unknown',
+    FAILED: 'Failed',
+  },
+
+  SIGNATURE_COMMIT_OUTCOME: {
+    COMMITTED: 'COMMITTED',
+    SUPERSEDED: 'SUPERSEDED',
+    UNKNOWN: 'COMMIT_UNKNOWN',
+  },
+
   CALENDAR: {
     PENDING: 'Pending',
     CREATING: 'Creating',
@@ -198,6 +248,8 @@ function upgradeToV31_() {
   try {
     signatureFolder = provisionSignatureRecoveryFolder_();
     signatureMigration = migrateLegacySignatureRoleFields_();
+    signatureMigration.correctionUpdated =
+      migrateSignatureCorrectionFields_().updated;
   } catch (error) {
     persistAutomationSettings_({ AUTOMATION_MODE: 'Preview' });
     throw new Error(
@@ -238,6 +290,8 @@ function upgradeToV31_() {
       ')' +
       '\nLegacy signature rows normalized: ' +
       String(signatureMigration.updated || 0) +
+      '\nSignature correction rows migrated: ' +
+      String(signatureMigration.correctionUpdated || 0) +
       '\n\n' +
       'Next:\n' +
       '1. Open the web app as HR.\n' +
@@ -385,33 +439,69 @@ function validateSignatureRecoveryFolder_(
   }
 
   const checkRestricted = requireRestricted !== false;
-  if (
-    checkRestricted &&
-    typeof folder.getSharingAccess === 'function' &&
-    folder.getSharingAccess() !== DriveApp.Access.PRIVATE
-  ) {
-    throw new Error(
-      'SIGNATURE_RECOVERY_FOLDER_ID must not use public, domain, or link sharing.'
-    );
-  }
+  if (checkRestricted) {
+    let sharingAccess;
+    try {
+      sharingAccess = folder.getSharingAccess();
+    } catch (sharingError) {
+      throw new Error(
+        'SIGNATURE_RECOVERY_FOLDER_ID permission state is unsupported or inherited and could not be verified: ' +
+          String(sharingError.message || sharingError)
+      );
+    }
+    if (sharingAccess !== DriveApp.Access.PRIVATE) {
+      throw new Error(
+        'SIGNATURE_RECOVERY_FOLDER_ID has link or domain sharing enabled (' +
+          String(sharingAccess) +
+          ').'
+      );
+    }
 
-  const allowed = checkRestricted
-    ? getAllowedSignatureRecoveryEmails_()
-    : {};
-  const unauthorized = []
-    .concat(folder.getEditors ? folder.getEditors() : [])
-    .concat(folder.getViewers ? folder.getViewers() : [])
-    .map(function (user) {
-      return normalizeEmail_(user.getEmail());
-    })
-    .filter(function (email) {
-      return email && !allowed[email];
-    });
-  if (checkRestricted && unauthorized.length) {
-    throw new Error(
-      'SIGNATURE_RECOVERY_FOLDER_ID has non-HR access that must be removed: ' +
-        unauthorized.join(', ')
-    );
+    try {
+      if (
+        typeof folder.getOwner === 'function' &&
+        !folder.getOwner()
+      ) {
+        throw new Error(
+          'Shared Drive ownership does not expose a verifiable individual owner.'
+        );
+      }
+    } catch (ownerError) {
+      throw new Error(
+        'SIGNATURE_RECOVERY_FOLDER_ID is in a Shared Drive or has an unsupported ownership model: ' +
+          String(ownerError.message || ownerError)
+      );
+    }
+
+    const allowed = getAllowedSignatureRecoveryEmails_();
+    const unauthorizedEditors = folder
+      .getEditors()
+      .map(function (user) {
+        return normalizeEmail_(user.getEmail());
+      })
+      .filter(function (email) {
+        return email && !allowed[email];
+      });
+    if (unauthorizedEditors.length) {
+      throw new Error(
+        'SIGNATURE_RECOVERY_FOLDER_ID has unauthorized explicit editor access: ' +
+          unauthorizedEditors.join(', ')
+      );
+    }
+    const unauthorizedViewers = folder
+      .getViewers()
+      .map(function (user) {
+        return normalizeEmail_(user.getEmail());
+      })
+      .filter(function (email) {
+        return email && !allowed[email];
+      });
+    if (unauthorizedViewers.length) {
+      throw new Error(
+        'SIGNATURE_RECOVERY_FOLDER_ID has unauthorized explicit viewer access: ' +
+          unauthorizedViewers.join(', ')
+      );
+    }
   }
 
   return {
@@ -578,6 +668,12 @@ function provisionSignatureRecoveryFolder_() {
       selected.folderId,
       reviewFolderId
     );
+    if (action === 'created') {
+      maybeInjectSignatureFault_(
+        'AFTER_SIGNATURE_RECOVERY_FOLDER_CREATION',
+        ''
+      );
+    }
 
     persistAutomationSettings_({
       SIGNATURE_RECOVERY_FOLDER_ID: selected.folderId,
@@ -644,17 +740,19 @@ function validateLegacySignatureArtifact_(
       );
     const name = String(file.getName() || '');
     const roleToken = signatureRoleToken_(role);
+    const provenance = parseSignatureProvenance_(
+      file.getDescription()
+    );
+    const exactLegacyName =
+      name === buildLegacySignatureFileName_(cycleId, role);
+    const exactProvenance =
+      provenance &&
+      provenance.cycleId === String(cycleId) &&
+      provenance.role === roleToken;
     return (
       String(file.getMimeType() || '') === 'image/png' &&
       (inReview || inRecovery) &&
-      (name.indexOf(String(cycleId)) >= 0 ||
-        String(file.getDescription() || '').indexOf(
-          'cycleId=' + String(cycleId)
-        ) >= 0) &&
-      (name.toUpperCase().indexOf(roleToken) >= 0 ||
-        String(file.getDescription() || '').indexOf(
-          'role=' + roleToken
-        ) >= 0)
+      (exactLegacyName || exactProvenance)
     );
   } catch (error) {
     return false;
@@ -680,6 +778,10 @@ function planLegacySignatureNormalization_(
     cycle[fields.startedField],
     cycle[fields.errorField],
     cycle[fields.signedAtField],
+    cycle[fields.winningAttemptField],
+    cycle[fields.recoveryFileField],
+    cycle[fields.recoveryAttemptField],
+    cycle[fields.recoveryDetailsField],
   ].some(function (value) {
     return value !== '' && value != null;
   });
@@ -864,6 +966,76 @@ function migrateLegacySignatureRoleFields_() {
   });
 
   return { ok: true, updated: updated, skipped: skipped };
+}
+
+function migrateSignatureCorrectionFields_() {
+  const snapshots = getAllObjects_(PR.SHEETS.CYCLES);
+  let updated = 0;
+  snapshots.forEach(function (snapshot) {
+    const changed = withLock_(function () {
+      const location = findCycle_(snapshot['Cycle ID']);
+      const cycle = location.object;
+      let dirty = false;
+      [
+        PR.ROLE.MANAGER,
+        PR.ROLE.EMPLOYEE,
+        PR.ROLE.HR,
+      ].forEach(function (role) {
+        const fields = getSignatureClaimFields_(role);
+        const status = String(cycle[fields.statusField] || '');
+        const activeAttempt = String(
+          cycle[fields.attemptField] || ''
+        );
+        if (status === V31.SIGNATURE.SIGNED && activeAttempt) {
+          if (!cycle[fields.winningAttemptField]) {
+            cycle[fields.winningAttemptField] = activeAttempt;
+          }
+          cycle[fields.attemptField] = '';
+          cycle[fields.startedField] = '';
+          dirty = true;
+        } else if (
+          status === V31.SIGNATURE.UNKNOWN &&
+          activeAttempt
+        ) {
+          if (!cycle[fields.recoveryAttemptField]) {
+            cycle[fields.recoveryAttemptField] = activeAttempt;
+          }
+          cycle[fields.attemptField] = '';
+          cycle[fields.startedField] = '';
+          dirty = true;
+        }
+        if (!cycle[fields.reconciliationStatusField]) {
+          cycle[fields.reconciliationStatusField] =
+            V31.SIGNATURE_RECONCILIATION.PENDING;
+          dirty = true;
+        }
+      });
+      if (!dirty) return false;
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+      return true;
+    });
+    if (changed) {
+      updated++;
+      try {
+        audit_(
+          snapshot['Cycle ID'],
+          'Signature correction fields migrated',
+          getEffectiveAutomationUserEmail_(),
+          'Delivery B correction',
+          'migrated',
+          JSON.stringify({
+            schemaVersion: 1,
+            event: 'signature-correction-fields-migrated',
+            activeClaimsClearedAfterResolution: true,
+            existingAuthoritativeDataPreserved: true,
+          })
+        );
+      } catch (auditError) {}
+    }
+  });
+  return { ok: true, updated: updated };
 }
 
 function formatSingleSheet_(sheet) {
@@ -1078,10 +1250,55 @@ function getV31CycleData_(cycle, email, isHr) {
           hrError: String(
             cycle['HR Signature Last Error'] || ''
           ),
+          reconciliation: {
+            manager: String(
+              cycle['Manager Signature Reconciliation Status'] ||
+                ''
+            ),
+            employee: String(
+              cycle['Employee Signature Reconciliation Status'] ||
+                ''
+            ),
+            hr: String(
+              cycle['HR Signature Reconciliation Status'] || ''
+            ),
+          },
           recoveryWarnings: [
-            String(cycle['Manager Signature Last Error'] || ''),
-            String(cycle['Employee Signature Last Error'] || ''),
-            String(cycle['HR Signature Last Error'] || ''),
+            cycle['Manager Signature Last Error']
+              ? 'Manager error: ' +
+                cycle['Manager Signature Last Error']
+              : '',
+            cycle['Manager Signature Artifact Warning']
+              ? 'Manager artifact: ' +
+                cycle['Manager Signature Artifact Warning']
+              : '',
+            cycle['Manager Signature Audit Warning']
+              ? 'Manager audit: ' +
+                cycle['Manager Signature Audit Warning']
+              : '',
+            cycle['Employee Signature Last Error']
+              ? 'Employee error: ' +
+                cycle['Employee Signature Last Error']
+              : '',
+            cycle['Employee Signature Artifact Warning']
+              ? 'Employee artifact: ' +
+                cycle['Employee Signature Artifact Warning']
+              : '',
+            cycle['Employee Signature Audit Warning']
+              ? 'Employee audit: ' +
+                cycle['Employee Signature Audit Warning']
+              : '',
+            cycle['HR Signature Last Error']
+              ? 'HR error: ' + cycle['HR Signature Last Error']
+              : '',
+            cycle['HR Signature Artifact Warning']
+              ? 'HR artifact: ' +
+                cycle['HR Signature Artifact Warning']
+              : '',
+            cycle['HR Signature Audit Warning']
+              ? 'HR audit: ' +
+                cycle['HR Signature Audit Warning']
+              : '',
           ].filter(Boolean),
           reconciliationRequired:
             String(cycle['Manager Signature Status'] || '') ===
@@ -1098,8 +1315,14 @@ function getV31CycleData_(cycle, email, isHr) {
             String(cycle['HR Signature Status'] || '') ===
               V31.DELIVERY.UNKNOWN ||
             !!cycle['Manager Signature Last Error'] ||
+            !!cycle['Manager Signature Artifact Warning'] ||
+            !!cycle['Manager Signature Audit Warning'] ||
             !!cycle['Employee Signature Last Error'] ||
-            !!cycle['HR Signature Last Error'],
+            !!cycle['Employee Signature Artifact Warning'] ||
+            !!cycle['Employee Signature Audit Warning'] ||
+            !!cycle['HR Signature Last Error'] ||
+            !!cycle['HR Signature Artifact Warning'] ||
+            !!cycle['HR Signature Audit Warning'],
         }
       : null,
     daysUntilMeeting: daysUntilMeeting,
@@ -3525,10 +3748,54 @@ function applyV31DefaultsToCycle_(
         cycle[fields.startedField] || '';
       cycle[fields.errorField] =
         cycle[fields.errorField] || '';
+      cycle[fields.artifactWarningField] =
+        cycle[fields.artifactWarningField] || '';
+      cycle[fields.auditWarningField] =
+        cycle[fields.auditWarningField] || '';
       cycle[fields.fileField] =
         cycle[fields.fileField] || '';
       cycle[fields.signedAtField] =
         cycle[fields.signedAtField] || '';
+      cycle[fields.winningAttemptField] =
+        cycle[fields.winningAttemptField] || '';
+      cycle[fields.recoveryFileField] =
+        cycle[fields.recoveryFileField] || '';
+      cycle[fields.recoveryAttemptField] =
+        cycle[fields.recoveryAttemptField] || '';
+      cycle[fields.recoveryDetailsField] =
+        cycle[fields.recoveryDetailsField] || '';
+      cycle[fields.recoveryRecordedAtField] =
+        cycle[fields.recoveryRecordedAtField] || '';
+      cycle[fields.reconciliationStatusField] =
+        cycle[fields.reconciliationStatusField] ||
+        V31.SIGNATURE_RECONCILIATION.PENDING;
+      cycle[fields.reconciliationAttemptField] =
+        cycle[fields.reconciliationAttemptField] || '';
+      cycle[fields.reconciliationSelectedFileField] =
+        cycle[fields.reconciliationSelectedFileField] || '';
+      cycle[fields.reconciliationStartedField] =
+        cycle[fields.reconciliationStartedField] || '';
+      cycle[fields.reconciliationErrorField] =
+        cycle[fields.reconciliationErrorField] || '';
+      if (
+        cycle[fields.statusField] === V31.SIGNATURE.SIGNED
+      ) {
+        cycle[fields.winningAttemptField] =
+          cycle[fields.winningAttemptField] ||
+          cycle[fields.attemptField] ||
+          '';
+        cycle[fields.attemptField] = '';
+        cycle[fields.startedField] = '';
+      } else if (
+        cycle[fields.statusField] === V31.SIGNATURE.UNKNOWN
+      ) {
+        cycle[fields.recoveryAttemptField] =
+          cycle[fields.recoveryAttemptField] ||
+          cycle[fields.attemptField] ||
+          '';
+        cycle[fields.attemptField] = '';
+        cycle[fields.startedField] = '';
+      }
     }
   );
 

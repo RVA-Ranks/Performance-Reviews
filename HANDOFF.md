@@ -9,6 +9,16 @@ document-specific fields remain compatibility mirrors. Signature attempts create
 provenance-marked staging files, commit one winner under the review-data lock,
 then disposition losers after releasing that lock. Cleanup failure never rolls
 back a `Signed` winner. Operational-alert delivery remains Delivery C work.
+
+The Delivery B correction distinguishes `COMMITTED`, `SUPERSEDED`, and
+`COMMIT_UNKNOWN`. Only confirmed superseded attempts may enter automatic loser
+cleanup. Ambiguous artifacts are preserved in dedicated recovery metadata.
+Active claims are cleared after resolution, winning attempts are retained
+separately, and per-role reconciliation uses a durable selected-file claim.
+Artifact and audit warnings are separate. Recovered reconciliation candidates
+are never automatically trashed. Automatic legacy normalization trusts only the
+exact historical filename or exact structured provenance.
+
 ## Complete Product and Engineering Handoff for Cursor and Coder Coach GPT
 
 **Current working package:** V3.1  

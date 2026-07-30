@@ -143,9 +143,20 @@ The upgrade adds:
 - Authoritative role-level signature state fields
 - A restricted direct-child folder named `AITHERAS Signature Recovery`; the
   upgrade reuses one exact match and blocks if multiple matches exist
+- Separate active claims, winning-attempt provenance, ambiguous-commit recovery
+  metadata, reconciliation claims, artifact warnings, and audit warnings
 
 It does not send anything. It validates existing signature files outside the
 review-data lock, then reloads each row before applying additive normalization.
+Only the exact historical name
+`<cycleId> - Combined_Review_Packet_-_<ROLE>.png` (historical role casing:
+`Manager`, `Employee`, or `HR`) or an exact `AITHERAS_SIGNATURE` provenance
+marker is trusted automatically. Other candidates require HR reconciliation.
+
+Signature and reconciliation fault tests are available through the private
+`runV31SignatureSandboxHarness_()` editor function. It requires
+`ENVIRONMENT=Sandbox` and confirmation token `DANIEL_SIGNATURE_SANDBOX`.
+Test code availability is not evidence of a passed Workspace test.
 
 ### 4. Update the deployment
 

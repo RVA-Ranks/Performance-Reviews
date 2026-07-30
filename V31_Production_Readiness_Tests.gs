@@ -25,6 +25,10 @@ function runV31ProductionReadinessTests_() {
         testReadinessBlankSignatureRecoveryBlocks_
       ),
       triggerTestCase_(
+        'Delivery B correction headers are migrated',
+        testSignatureCorrectionHeadersPresent_
+      ),
+      triggerTestCase_(
         'Production fault injection blocks readiness',
         testReadinessProductionFaultBlocks_
       ),
@@ -138,6 +142,36 @@ function testReadinessBlankSignatureRecoveryBlocks_() {
     }),
     'Blank signature recovery folder must block readiness.'
   );
+}
+
+function testSignatureCorrectionHeadersPresent_() {
+  [
+    'Signature Artifact Warning',
+    'Signature Audit Warning',
+    'Signature Winning Attempt ID',
+    'Signature Recovery File ID',
+    'Signature Recovery Attempt ID',
+    'Signature Recovery Details JSON',
+    'Signature Reconciliation Status',
+    'Signature Reconciliation Attempt ID',
+    'Signature Reconciliation Selected File ID',
+    'Signature Reconciliation Started At',
+    'Signature Reconciliation Last Error',
+  ].forEach(function (suffix) {
+    [PR.ROLE.MANAGER, PR.ROLE.EMPLOYEE, PR.ROLE.HR].forEach(
+      function (role) {
+        const prefix =
+          role === PR.ROLE.HR ? 'HR' : String(role);
+        assertTriggerTest_(
+          V31.CYCLE_HEADERS.indexOf(prefix + ' ' + suffix) >= 0,
+          'Missing Delivery B correction header: ' +
+            prefix +
+            ' ' +
+            suffix
+        );
+      }
+    );
+  });
 }
 
 function testReadinessProductionFaultBlocks_() {

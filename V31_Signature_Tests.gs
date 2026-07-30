@@ -180,8 +180,115 @@ function runV31SignatureTests_() {
         'Superseded response shape is incorrect.'
       );
     }),
+    sigCase_('Commit reread classifies matching winner as committed', function () {
+      assertSig_(
+        decideSignatureCommitOutcome_(
+          'file-a',
+          V31.SIGNATURE.SIGNED,
+          'file-a'
+        ) === V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED,
+        'Matching Signed winner must be committed.'
+      );
+    }),
+    sigCase_('Commit reread classifies different winner as superseded', function () {
+      assertSig_(
+        decideSignatureCommitOutcome_(
+          'file-b',
+          V31.SIGNATURE.SIGNED,
+          'file-a'
+        ) === V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED,
+        'Different Signed winner must supersede this attempt.'
+      );
+    }),
+    sigCase_('Commit reread preserves no-winner artifact as unknown', function () {
+      assertSig_(
+        decideSignatureCommitOutcome_(
+          '',
+          V31.SIGNATURE.UNKNOWN,
+          'file-a'
+        ) === V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN,
+        'No-winner reread must be commit unknown.'
+      );
+    }),
+    sigCase_('Exact legacy filename is the only trusted name', function () {
+      const exact = buildLegacySignatureFileName_(
+        'cycle-1',
+        PR.ROLE.MANAGER
+      );
+      assertSig_(
+        exact ===
+          'cycle-1 - Combined_Review_Packet_-_Manager.png',
+        'Legacy name casing or shape changed.'
+      );
+      assertSig_(
+        exact !==
+          'copy cycle-1 - Combined_Review_Packet_-_Manager.png',
+        'Near-match legacy names must not be trusted.'
+      );
+    }),
+    sigCase_('Structured provenance parser rejects free-form text', function () {
+      const exact = buildSignatureProvenanceMarker_(
+        'cycle-1',
+        PR.ROLE.MANAGER,
+        'attempt-1',
+        'created'
+      );
+      assertSig_(
+        parseSignatureProvenance_(exact).attemptId ===
+          'attempt-1',
+        'Exact provenance must parse.'
+      );
+      assertSig_(
+        parseSignatureProvenance_(
+          exact + '\nfree-form-extra=true'
+        ) === null,
+        'Extended free-form descriptions must be rejected.'
+      );
+    }),
+    sigCase_('Role fields separate active winner recovery and warnings', function () {
+      const fields = getSignatureClaimFields_(PR.ROLE.MANAGER);
+      const distinct = [
+        fields.attemptField,
+        fields.winningAttemptField,
+        fields.recoveryAttemptField,
+        fields.errorField,
+        fields.artifactWarningField,
+        fields.auditWarningField,
+        fields.reconciliationAttemptField,
+      ];
+      assertSig_(
+        distinct.filter(function (value, index) {
+          return distinct.indexOf(value) === index;
+        }).length === distinct.length,
+        'Signature recovery concepts must use distinct fields.'
+      );
+    }),
     {
       name: 'True concurrent identical and different submissions',
+      severity: 'Blocking',
+      skip: true,
+      skipMessage: 'Requires Daniel Sandbox',
+    },
+    {
+      name: 'Audit failure after authoritative signature commit',
+      severity: 'Blocking',
+      skip: true,
+      skipMessage: 'Requires Daniel Sandbox',
+    },
+    {
+      name: 'Sheet write failure preserves ambiguous artifact',
+      severity: 'Blocking',
+      skip: true,
+      skipMessage: 'Requires Daniel Sandbox',
+    },
+    {
+      name: 'Concurrent durable HR reconciliation claims',
+      severity: 'Blocking',
+      skip: true,
+      skipMessage: 'Requires Daniel Sandbox',
+    },
+    {
+      name: 'Recovery folder crash and concurrent provisioning',
       severity: 'Blocking',
       skip: true,
       skipMessage: 'Requires Daniel Sandbox',
@@ -200,6 +307,160 @@ function runV31SignatureTests_() {
     },
   ];
   return runStructuredV31Suite_('V31 Signature Tests', cases);
+}
+
+/**
+ * Executes one explicitly confirmed live-boundary test in Daniel's Sandbox.
+ * This harness never sends operational alert email and always disables the
+ * one-shot fault setting before returning.
+ */
+function runV31SignatureSandboxHarness_(payload) {
+  const input = payload || {};
+  const settings = getSettings_();
+  if (
+    String(settings.ENVIRONMENT || '') !== 'Sandbox' ||
+    String(input.confirmationToken || '') !==
+      'DANIEL_SIGNATURE_SANDBOX'
+  ) {
+    throw new Error(
+      'Requires Daniel Sandbox and confirmationToken DANIEL_SIGNATURE_SANDBOX.'
+    );
+  }
+
+  const operation = String(input.operation || '');
+  const cycleId = String(input.cycleId || '');
+  const role = String(input.role || '');
+  const faultPoint = String(input.faultPoint || '');
+  const allowedFaults = [
+    'AFTER_SIGNATURE_ARTIFACT_CREATED',
+    'BEFORE_SIGNATURE_WINNER_WRITE',
+    'AFTER_SIGNATURE_WINNER_WRITE_BEFORE_FLUSH',
+    'SIGNATURE_AUDIT_APPEND',
+    'AFTER_SIGNATURE_RECONCILIATION_CLAIM',
+    'AFTER_SIGNATURE_RECONCILIATION_VALIDATION',
+    'BEFORE_SIGNATURE_RECONCILIATION_WRITE',
+    'AFTER_SIGNATURE_RECONCILIATION_WRITE_BEFORE_FLUSH',
+    'AFTER_SIGNATURE_RECOVERY_FOLDER_CREATION',
+  ];
+  if (
+    faultPoint &&
+    allowedFaults.indexOf(faultPoint) < 0
+  ) {
+    throw new Error('Unsupported signature sandbox fault point.');
+  }
+  if (
+    cycleId &&
+    [PR.ROLE.MANAGER, PR.ROLE.EMPLOYEE, PR.ROLE.HR].indexOf(
+      role
+    ) < 0
+  ) {
+    throw new Error(
+      'A valid role is required for cycle-backed signature evidence.'
+    );
+  }
+
+  if (faultPoint) {
+    persistAutomationSettings_({
+      ENABLE_FAULT_INJECTION: 'true',
+      FAULT_POINT: faultPoint,
+      FAULT_CYCLE_ID: cycleId,
+      FAULT_ONCE: 'true',
+    });
+  }
+
+  let result = null;
+  let errorText = '';
+  try {
+    if (operation === 'sign') {
+      result = signReviewCycle(
+        cycleId,
+        String(input.signatureDataUrl || '')
+      );
+    } else if (operation === 'reconcile') {
+      result = reconcileSignature(
+        cycleId,
+        role,
+        'chooseFile',
+        { fileId: String(input.fileId || '') }
+      );
+    } else if (operation === 'provisionRecoveryFolder') {
+      result = provisionSignatureRecoveryFolder_();
+    } else {
+      throw new Error(
+        'operation must be sign, reconcile, or provisionRecoveryFolder.'
+      );
+    }
+  } catch (error) {
+    errorText = String(error.message || error);
+  } finally {
+    persistAutomationSettings_({
+      ENABLE_FAULT_INJECTION: 'false',
+      FAULT_POINT: '',
+      FAULT_CYCLE_ID: '',
+    });
+  }
+
+  let evidence = null;
+  if (cycleId) {
+    const cycle = findCycle_(cycleId).object;
+    const fields = getSignatureClaimFields_(role);
+    evidence = {
+      account: getCurrentUserEmail_(),
+      cycleId: cycleId,
+      role: role,
+      signatureStatus: String(cycle[fields.statusField] || ''),
+      activeAttemptId: String(cycle[fields.attemptField] || ''),
+      winningAttemptId: String(
+        cycle[fields.winningAttemptField] || ''
+      ),
+      authoritativeFileId: String(
+        cycle[fields.fileField] || ''
+      ),
+      recoveryFileId: String(
+        cycle[fields.recoveryFileField] || ''
+      ),
+      recoveryAttemptId: String(
+        cycle[fields.recoveryAttemptField] || ''
+      ),
+      reconciliationStatus: String(
+        cycle[fields.reconciliationStatusField] || ''
+      ),
+      reconciliationSelectedFileId: String(
+        cycle[fields.reconciliationSelectedFileField] || ''
+      ),
+      artifactWarning: String(
+        cycle[fields.artifactWarningField] || ''
+      ),
+      auditWarning: String(
+        cycle[fields.auditWarningField] || ''
+      ),
+      lastError: String(cycle[fields.errorField] || ''),
+    };
+  }
+
+  const expectedStatus = String(input.expectedStatus || '');
+  const actualStatus = evidence
+    ? evidence.signatureStatus
+    : '';
+  return {
+    status:
+      expectedStatus && actualStatus !== expectedStatus
+        ? 'Failed'
+        : errorText && !input.expectError
+        ? 'Failed'
+        : 'Passed',
+    testName: String(input.testName || operation),
+    account: getCurrentUserEmail_(),
+    cycleId: cycleId,
+    faultPoint: faultPoint,
+    expectedResult: String(input.expectedResult || ''),
+    actualResult: result,
+    error: errorText,
+    evidence: evidence,
+    cleanupCompleted: false,
+    evidenceReminder:
+      'Attach Apps Script logs or screenshots and record manual cleanup before approval.',
+  };
 }
 
 function sigCase_(name, fn) {

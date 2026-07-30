@@ -72,6 +72,12 @@ function runV31FinalizationTests_() {
       testFinalDistributionAttemptIdHeader_
     )
   );
+  results.push(
+    runFinalCase_(
+      'signature commitment clears active claim and retains winner',
+      testSignatureWinnerClearsActiveClaim_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -131,6 +137,35 @@ function assertFinal_(condition, message) {
   if (!condition) {
     throw new Error(message || 'Assertion failed');
   }
+}
+
+function testSignatureWinnerClearsActiveClaim_() {
+  const cycle = {
+    'Manager Signature Attempt ID': 'active-attempt',
+    'Manager Signature Started At': new Date(),
+  };
+  applySignatureWinnerToCycle_(
+    cycle,
+    PR.ROLE.MANAGER,
+    'winner-file',
+    'winning-attempt',
+    new Date()
+  );
+  assertFinal_(
+    cycle['Manager Signature Attempt ID'] === '' &&
+      cycle['Manager Signature Started At'] === '',
+    'Committed signature must clear its active claim.'
+  );
+  assertFinal_(
+    cycle['Manager Signature Winning Attempt ID'] ===
+      'winning-attempt',
+    'Committed signature must retain winning provenance.'
+  );
+  assertFinal_(
+    cycle['Manager Signature File ID'] === 'winner-file' &&
+      cycle['Manager Signature Status'] === V31.SIGNATURE.SIGNED,
+    'Committed signature must retain its authoritative winner.'
+  );
 }
 
 function testFinalizingStatusConstant_() {

@@ -16,6 +16,31 @@ signature submissions, trash/movement permission failures, both final PDFs,
 mobile signing, and confirmation that the recovery folder has no public/link,
 manager, or employee access. Do not mark these passed without recorded evidence.
 
+### Delivery B correction boundary tests
+
+Use private `runV31SignatureSandboxHarness_()` only with
+`ENVIRONMENT=Sandbox`, token `DANIEL_SIGNATURE_SANDBOX`, a fake cycle, and one
+of the documented fault points. Capture account, cycle ID, attempt ID, expected
+and actual result, file IDs, logs/screenshots, and cleanup status.
+
+Blocking cases:
+
+1. `SIGNATURE_AUDIT_APPEND`: winner stays `Signed`, remains in the review
+   folder, and only Signature Audit Warning is populated.
+2. `BEFORE_SIGNATURE_WINNER_WRITE`: artifact remains preserved with
+   `COMMIT_UNKNOWN` recovery metadata and no authoritative file ID.
+3. `AFTER_SIGNATURE_WINNER_WRITE_BEFORE_FLUSH`: authoritative reread classifies
+   the matching file as `COMMITTED`.
+4. Controlled different-winner attempt: only the confirmed loser may be
+   dispositioned.
+5. Reconciliation interruption after claim, validation, write, and before
+   flush: one claim wins and unselected recovered candidates remain preserved.
+6. Exact historical legacy name is accepted; near matches and incidental
+   cycle/role text remain `Delivery Unknown`.
+
+All real Drive, Sheet, concurrency, PDF, and permission results remain
+**Requires Daniel Sandbox** until the evidence record is attached.
+
 ## Delivery A gate — production candidate and triggers
 
 Run from the Apps Script editor:

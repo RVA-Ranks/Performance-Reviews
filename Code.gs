@@ -112,6 +112,12 @@ const PR = Object.freeze({
     'Employee Signed At',
     'Employee Signature Last Error',
     'HR Signature File ID',
+    'Manager Signature Recovery File ID',
+    'Employee Signature Recovery File ID',
+    'HR Signature Recovery File ID',
+    'Manager Signature Reconciliation Selected File ID',
+    'Employee Signature Reconciliation Selected File ID',
+    'HR Signature Reconciliation Selected File ID',
     'HR Signed At',
     'HR Signature Last Error',
     'Manager Review PDF ID',
@@ -1085,6 +1091,8 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     ) {
       if (isDeliveryClaimStale_(cycle[fields.startedField])) {
         cycle[fields.statusField] = V31.SIGNATURE.UNKNOWN;
+        cycle[fields.attemptField] = '';
+        cycle[fields.startedField] = '';
         cycle[fields.errorField] =
           'Signature claim went stale. HR reconciliation is required.';
         cycle['Updated At'] = new Date();
@@ -1129,158 +1137,45 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       signatureDataUrl,
       claim.attemptId
     );
+    maybeInjectSignatureFault_(
+      'AFTER_SIGNATURE_ARTIFACT_CREATED',
+      cycleId
+    );
   } catch (error) {
-    withLock_(function () {
-      const location = findCycle_(cycleId);
-      const cycle = location.object;
-
-      if (
-        String(cycle[claim.fields.attemptField] || '') !==
-        String(claim.attemptId)
-      ) {
-        return;
+    persistSignatureCommitUnknown_(
+      cycleId,
+      claim,
+      artifact,
+      error,
+      {
+        writeReturned: false,
+        flushSucceeded: false,
+        rereadClassification: 'artifact-creation-unconfirmed',
       }
-
-      cycle[claim.fields.statusField] = V31.SIGNATURE.UNKNOWN;
-      cycle[claim.fields.errorField] =
-        'Signature artifact creation was not confirmed. ' +
-        String(error.message || error);
-      cycle['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, cycle);
-      SpreadsheetApp.flush();
-    });
-
+    );
     throw error;
   }
 
-  let signed;
+  let commitResult;
   try {
-    signed = withLock_(function () {
-      const location = findCycle_(cycleId);
-      const cycle = location.object;
-      const now = new Date();
-      const state = getCombinedSignatureState_(cycle);
-
-    if (
-      String(cycle[claim.fields.attemptField] || '') !==
-      String(claim.attemptId)
-    ) {
-      return {
-        role: claim.role,
-        cycle: cycle,
-        updatedState: state,
-        alreadySigned: true,
-        superseded: true,
-        artifact: artifact,
-      };
-    }
-
-    if (String(cycle['Status']) !== PR.CYCLE.SIGNATURES) {
-      throw new Error(
-        'This review cycle is not currently awaiting signatures.'
-      );
-    }
-
-    if (claim.role === PR.ROLE.MANAGER) {
-      if (state.managerSigned) {
-        cycle[claim.fields.statusField] = V31.SIGNATURE.SIGNED;
-        writeCycle_(location.rowNumber, cycle);
-        return {
-          role: claim.role,
-          cycle: cycle,
-          updatedState: state,
-          alreadySigned: true,
-          superseded: true,
-          artifact: artifact,
-        };
-      }
-
-      cycle['MGR Manager Signature ID'] = artifact.fileId;
-      cycle['MGR Manager Signed At'] = now;
-      cycle['SELF Manager Signature ID'] = artifact.fileId;
-      cycle['SELF Manager Signed At'] = now;
-    } else if (claim.role === PR.ROLE.EMPLOYEE) {
-      if (state.employeeSigned) {
-        cycle[claim.fields.statusField] = V31.SIGNATURE.SIGNED;
-        writeCycle_(location.rowNumber, cycle);
-        return {
-          role: claim.role,
-          cycle: cycle,
-          updatedState: state,
-          alreadySigned: true,
-          superseded: true,
-          artifact: artifact,
-        };
-      }
-
-      cycle['MGR Employee Signature ID'] = artifact.fileId;
-      cycle['MGR Employee Signed At'] = now;
-      cycle['SELF Employee Signature ID'] = artifact.fileId;
-      cycle['SELF Employee Signed At'] = now;
-    } else {
-      if (state.hrSigned) {
-        cycle[claim.fields.statusField] = V31.SIGNATURE.SIGNED;
-        writeCycle_(location.rowNumber, cycle);
-        return {
-          role: claim.role,
-          cycle: cycle,
-          updatedState: state,
-          alreadySigned: true,
-          superseded: true,
-          artifact: artifact,
-        };
-      }
-
-      if (!state.managerSigned || !state.employeeSigned) {
-        throw new Error(
-          'HR may sign only after both the manager and employee have signed.'
-        );
-      }
-
-      cycle['MGR HR Signature ID'] = artifact.fileId;
-      cycle['MGR HR Signed At'] = now;
-      cycle['SELF HR Signature ID'] = artifact.fileId;
-      cycle['SELF HR Signed At'] = now;
-    }
-
-    cycle[claim.fields.fileField] = artifact.fileId;
-    cycle[claim.fields.signedAtField] = now;
-    cycle[claim.fields.statusField] = V31.SIGNATURE.SIGNED;
-    cycle[claim.fields.errorField] = '';
-    updateCombinedSignatureStatuses_(cycle);
-    cycle['Updated At'] = now;
-
-    writeCycle_(location.rowNumber, cycle);
-    SpreadsheetApp.flush();
-
-    audit_(
+    commitResult = commitSignatureWinner_(
       cycleId,
-      'Both review documents signed by ' + claim.role,
-      email,
-      PR.CYCLE.SIGNATURES,
-      String(cycle['Status']),
-      ''
-    );
-
-      return {
-        role: claim.role,
-        cycle: cycle,
-        updatedState: getCombinedSignatureState_(cycle),
-        alreadySigned: false,
-      };
-    });
-  } catch (error) {
-    const recovery = handleSupersededSignatureArtifact_(
-      cycleId,
-      claim.role,
-      claim.attemptId,
+      claim,
       artifact
     );
-    error.artifactRecovery = recovery;
-    throw error;
+  } catch (error) {
+    commitResult = classifySignatureCommitAfterFailure_(
+      cycleId,
+      claim,
+      artifact,
+      error
+    );
   }
 
-  if (signed.superseded) {
+  if (
+    commitResult.outcome ===
+    V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED
+  ) {
     const recovery = handleSupersededSignatureArtifact_(
       cycleId,
       claim.role,
@@ -1290,49 +1185,573 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     return buildSupersededSignatureResult_(recovery);
   }
 
+  if (
+    commitResult.outcome ===
+    V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN
+  ) {
+    if (!commitResult.recovery) {
+      commitResult.recovery = persistSignatureCommitUnknown_(
+        cycleId,
+        claim,
+        artifact,
+        new Error('Signature claim changed before commitment.'),
+        {
+          writeReturned: false,
+          flushSucceeded: false,
+          rereadClassification:
+            'claim-changed-without-authoritative-winner',
+        }
+      );
+    }
+    if (commitResult.recovery.observedOutcome) {
+      commitResult.outcome =
+        commitResult.recovery.observedOutcome;
+      commitResult.cycle =
+        commitResult.recovery.observedCycle || {};
+      commitResult.updatedState = getCombinedSignatureState_(
+        commitResult.cycle
+      );
+      if (
+        commitResult.outcome ===
+        V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED
+      ) {
+        const recovery = handleSupersededSignatureArtifact_(
+          cycleId,
+          claim.role,
+          claim.attemptId,
+          artifact
+        );
+        return buildSupersededSignatureResult_(recovery);
+      }
+    } else {
+    return {
+      ok: false,
+      recoveryRequired: true,
+      signatureRecorded: false,
+      outcome: commitResult.outcome,
+      warning:
+        'Signature commit could not be confirmed. The artifact was preserved for HR reconciliation.',
+      recovery: commitResult.recovery,
+      message:
+        'Your signature could not be confirmed. HR must reconcile the preserved signature artifact.',
+    };
+    }
+  }
+
+  let auditWarning = '';
+  try {
+    maybeInjectSignatureFault_(
+      'SIGNATURE_AUDIT_APPEND',
+      cycleId
+    );
+    audit_(
+      cycleId,
+      'Both review documents signed by ' + claim.role,
+      email,
+      PR.CYCLE.SIGNATURES,
+      String(commitResult.cycle['Status']),
+      JSON.stringify({
+        schemaVersion: 1,
+        outcome: commitResult.outcome,
+        fileId: artifact.fileId,
+        winningAttemptId: claim.attemptId,
+      })
+    );
+  } catch (error) {
+    auditWarning =
+      'Signature committed, but its audit record could not be written: ' +
+      String(error.message || error);
+    try {
+      persistSignatureWarning_(
+        cycleId,
+        claim.role,
+        'audit',
+        auditWarning
+      );
+    } catch (persistAuditWarningError) {}
+  }
+
   const canonicalWarning = finalizeSignatureArtifactName_(
     cycleId,
     claim.role,
     artifact
   );
 
+  let notificationWarning = '';
   if (
-    !signed.alreadySigned &&
-    signed.role !== PR.ROLE.HR &&
-    signed.updatedState.managerSigned &&
-    signed.updatedState.employeeSigned
+    commitResult.role !== PR.ROLE.HR &&
+    commitResult.updatedState.managerSigned &&
+    commitResult.updatedState.employeeSigned
   ) {
-    sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
+    try {
+      sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
+    } catch (notificationError) {
+      notificationWarning =
+        'The signature is recorded, but the durable HR signature notification requires retry.';
+    }
   }
 
-  if (signed.role === PR.ROLE.HR && !signed.alreadySigned) {
+  if (commitResult.role === PR.ROLE.HR) {
     const finalizeResult =
       attemptFinalizationAfterSignature_(cycleId);
 
     return {
       ok: true,
+      partial:
+        !!auditWarning ||
+        !!canonicalWarning ||
+        !!notificationWarning,
       signatureRecorded: true,
-      warning: canonicalWarning,
+      outcome: commitResult.outcome,
+      warning: [
+        auditWarning,
+        canonicalWarning,
+        notificationWarning,
+      ]
+        .filter(Boolean)
+        .join(' '),
       message:
         finalizeResult.message +
-        (canonicalWarning ? ' ' + canonicalWarning : ''),
+        ([
+          auditWarning,
+          canonicalWarning,
+          notificationWarning,
+        ].filter(Boolean).length
+          ? ' ' +
+            [
+              auditWarning,
+              canonicalWarning,
+              notificationWarning,
+            ]
+              .filter(Boolean)
+              .join(' ')
+          : ''),
       finalization: finalizeResult,
     };
   }
 
   return {
     ok: true,
+    partial:
+      !!auditWarning ||
+      !!canonicalWarning ||
+      !!notificationWarning,
     signatureRecorded: true,
-    warning: canonicalWarning,
+    outcome: commitResult.outcome,
+    warning: [
+      auditWarning,
+      canonicalWarning,
+      notificationWarning,
+    ]
+      .filter(Boolean)
+      .join(' '),
     message:
-      signed.role +
+      commitResult.role +
       ' signature recorded for both review documents.' +
-      (signed.updatedState.managerSigned &&
-      signed.updatedState.employeeSigned
+      (commitResult.updatedState.managerSigned &&
+      commitResult.updatedState.employeeSigned
         ? ' HR has been notified to sign last.'
         : ' The other participant may now sign from the same review cycle.') +
-      (canonicalWarning ? ' ' + canonicalWarning : ''),
+      ([
+        auditWarning,
+        canonicalWarning,
+        notificationWarning,
+      ].filter(Boolean).length
+        ? ' ' +
+          [
+            auditWarning,
+            canonicalWarning,
+            notificationWarning,
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : ''),
   };
+}
+
+function commitSignatureWinner_(cycleId, claim, artifact) {
+  return withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const now = new Date();
+    const state = getCombinedSignatureState_(cycle);
+    const existingWinner = String(
+      cycle[claim.fields.fileField] || ''
+    );
+
+    if (
+      String(cycle[claim.fields.attemptField] || '') !==
+      String(claim.attemptId)
+    ) {
+      return {
+        outcome:
+          existingWinner && existingWinner !== artifact.fileId
+            ? V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED
+            : V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN,
+        role: claim.role,
+        cycle: cycle,
+        updatedState: state,
+      };
+    }
+
+    if (String(cycle['Status']) !== PR.CYCLE.SIGNATURES) {
+      throw new Error(
+        'This review cycle is not currently awaiting signatures.'
+      );
+    }
+
+    if (
+      (claim.role === PR.ROLE.MANAGER && state.managerSigned) ||
+      (claim.role === PR.ROLE.EMPLOYEE && state.employeeSigned) ||
+      (claim.role === PR.ROLE.HR && state.hrSigned)
+    ) {
+      return {
+        outcome:
+          existingWinner === artifact.fileId
+            ? V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED
+            : V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED,
+        role: claim.role,
+        cycle: cycle,
+        updatedState: state,
+      };
+    }
+
+    if (
+      claim.role === PR.ROLE.HR &&
+      (!state.managerSigned || !state.employeeSigned)
+    ) {
+      throw new Error(
+        'HR may sign only after both the manager and employee have signed.'
+      );
+    }
+
+    applySignatureWinnerToCycle_(
+      cycle,
+      claim.role,
+      artifact.fileId,
+      claim.attemptId,
+      now
+    );
+    updateCombinedSignatureStatuses_(cycle);
+    cycle['Updated At'] = now;
+    maybeInjectSignatureFault_(
+      'BEFORE_SIGNATURE_WINNER_WRITE',
+      cycleId
+    );
+    writeCycle_(location.rowNumber, cycle);
+    maybeInjectSignatureFault_(
+      'AFTER_SIGNATURE_WINNER_WRITE_BEFORE_FLUSH',
+      cycleId
+    );
+    SpreadsheetApp.flush();
+
+    return {
+      outcome: V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED,
+      role: claim.role,
+      cycle: cycle,
+      updatedState: getCombinedSignatureState_(cycle),
+    };
+  });
+}
+
+function applySignatureWinnerToCycle_(
+  cycle,
+  role,
+  fileId,
+  attemptId,
+  signedAt
+) {
+  const fields = getSignatureClaimFields_(role);
+  const mirrors = getLegacySignatureMirrorFields_(role);
+  cycle[mirrors.managerId] = fileId;
+  cycle[mirrors.selfId] = fileId;
+  cycle[mirrors.managerAt] = signedAt;
+  cycle[mirrors.selfAt] = signedAt;
+  cycle[fields.fileField] = fileId;
+  cycle[fields.signedAtField] = signedAt;
+  cycle[fields.winningAttemptField] = attemptId;
+  cycle[fields.statusField] = V31.SIGNATURE.SIGNED;
+  cycle[fields.attemptField] = '';
+  cycle[fields.startedField] = '';
+  cycle[fields.errorField] = '';
+  cycle[fields.artifactWarningField] = '';
+  cycle[fields.auditWarningField] = '';
+  cycle[fields.recoveryFileField] = '';
+  cycle[fields.recoveryAttemptField] = '';
+  cycle[fields.recoveryDetailsField] = '';
+  cycle[fields.recoveryRecordedAtField] = '';
+}
+
+function decideSignatureCommitOutcome_(
+  authoritativeFileId,
+  status,
+  artifactFileId
+) {
+  const winner = String(authoritativeFileId || '');
+  if (
+    winner === String(artifactFileId || '') &&
+    String(status || '') === V31.SIGNATURE.SIGNED
+  ) {
+    return V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED;
+  }
+  if (
+    winner &&
+    winner !== String(artifactFileId || '') &&
+    String(status || '') === V31.SIGNATURE.SIGNED
+  ) {
+    return V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED;
+  }
+  return V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN;
+}
+
+function classifySignatureCommitAfterFailure_(
+  cycleId,
+  claim,
+  artifact,
+  error
+) {
+  let reread;
+  try {
+    reread = withLock_(function () {
+      return findCycle_(cycleId).object;
+    });
+  } catch (rereadError) {
+    try {
+      const retry = withLock_(function () {
+        return findCycle_(cycleId).object;
+      });
+      const retryOutcome = decideSignatureCommitOutcome_(
+        retry[claim.fields.fileField],
+        retry[claim.fields.statusField],
+        artifact.fileId
+      );
+      if (
+        retryOutcome !==
+        V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN
+      ) {
+        return {
+          outcome: retryOutcome,
+          role: claim.role,
+          cycle: retry,
+          updatedState: getCombinedSignatureState_(retry),
+          auditPending:
+            retryOutcome ===
+            V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED,
+          commitError: String(error.message || error),
+          rereadWarning: String(
+            rereadError.message || rereadError
+          ),
+        };
+      }
+    } catch (retryRereadError) {}
+    const recovery = persistSignatureCommitUnknown_(
+      cycleId,
+      claim,
+      artifact,
+      error,
+      {
+        writeReturned: true,
+        flushSucceeded: false,
+        rereadClassification:
+          'authoritative-reread-failed: ' +
+          String(rereadError.message || rereadError),
+      }
+    );
+    if (recovery.observedOutcome) {
+      return {
+        outcome: recovery.observedOutcome,
+        role: claim.role,
+        cycle: recovery.observedCycle || {},
+        updatedState: getCombinedSignatureState_(
+          recovery.observedCycle || {}
+        ),
+        auditPending:
+          recovery.observedOutcome ===
+          V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED,
+        commitError: String(error.message || error),
+      };
+    }
+    return {
+      outcome: V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN,
+      role: claim.role,
+      cycle: {},
+      updatedState: {
+        managerSigned: false,
+        employeeSigned: false,
+        hrSigned: false,
+      },
+      recovery: recovery,
+      commitError: String(error.message || error),
+    };
+  }
+  const fileId = String(
+    reread[claim.fields.fileField] || ''
+  );
+  const status = String(
+    reread[claim.fields.statusField] || ''
+  );
+
+  const outcome = decideSignatureCommitOutcome_(
+    fileId,
+    status,
+    artifact.fileId
+  );
+
+  if (outcome === V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED) {
+    return {
+      outcome: V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED,
+      role: claim.role,
+      cycle: reread,
+      updatedState: getCombinedSignatureState_(reread),
+      auditPending: true,
+      commitError: String(error.message || error),
+    };
+  }
+
+  if (outcome === V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED) {
+    return {
+      outcome: V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED,
+      role: claim.role,
+      cycle: reread,
+      updatedState: getCombinedSignatureState_(reread),
+      commitError: String(error.message || error),
+    };
+  }
+
+  const recovery = persistSignatureCommitUnknown_(
+    cycleId,
+    claim,
+    artifact,
+    error,
+    {
+      writeReturned: true,
+      flushSucceeded: false,
+      rereadClassification: 'no-authoritative-winner',
+    }
+  );
+  if (recovery.observedOutcome) {
+    return {
+      outcome: recovery.observedOutcome,
+      role: claim.role,
+      cycle: recovery.observedCycle || {},
+      updatedState: getCombinedSignatureState_(
+        recovery.observedCycle || {}
+      ),
+      auditPending:
+        recovery.observedOutcome ===
+        V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED,
+      commitError: String(error.message || error),
+    };
+  }
+  return {
+    outcome: V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN,
+    role: claim.role,
+    cycle: reread,
+    updatedState: getCombinedSignatureState_(reread),
+    recovery: recovery,
+    commitError: String(error.message || error),
+  };
+}
+
+function persistSignatureCommitUnknown_(
+  cycleId,
+  claim,
+  artifact,
+  error,
+  evidence
+) {
+  const details = {
+    schemaVersion: 1,
+    outcome: V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN,
+    artifactOrigin: artifact ? artifact.origin : 'unconfirmed',
+    fileId: artifact ? artifact.fileId : '',
+    attemptId: claim.attemptId,
+    writeReturned: !!(evidence && evidence.writeReturned),
+    flushSucceeded: !!(evidence && evidence.flushSucceeded),
+    rereadClassification:
+      (evidence && evidence.rereadClassification) || 'unknown',
+    error: String(error.message || error),
+    recoveryRecommendation:
+      'HR must inspect the candidate and either attach it or reset the role.',
+  };
+
+  try {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      const fields = claim.fields;
+      const currentWinner = String(cycle[fields.fileField] || '');
+      const currentAttempt = String(
+        cycle[fields.attemptField] || ''
+      );
+      const observedOutcome = decideSignatureCommitOutcome_(
+        currentWinner,
+        cycle[fields.statusField],
+        artifact ? artifact.fileId : ''
+      );
+      if (
+        observedOutcome !==
+        V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN
+      ) {
+        details.observedOutcome = observedOutcome;
+        details.observedCycle = cycle;
+        return;
+      }
+      if (
+        currentAttempt &&
+        currentAttempt !== String(claim.attemptId)
+      ) {
+        details.persistenceSkipped =
+          'A different active signature claim is authoritative.';
+        return;
+      }
+      clearSignatureArtifactMirrorsIfMatching_(
+        cycle,
+        claim.role,
+        artifact ? artifact.fileId : ''
+      );
+      cycle[fields.statusField] = V31.SIGNATURE.UNKNOWN;
+      cycle[fields.fileField] = '';
+      cycle[fields.signedAtField] = '';
+      cycle[fields.winningAttemptField] = '';
+      cycle[fields.attemptField] = '';
+      cycle[fields.startedField] = '';
+      cycle[fields.errorField] =
+        'Signature commit could not be confirmed. HR reconciliation is required.';
+      cycle[fields.recoveryFileField] = artifact
+        ? artifact.fileId
+        : '';
+      cycle[fields.recoveryAttemptField] = claim.attemptId;
+      cycle[fields.recoveryDetailsField] =
+        JSON.stringify(details);
+      cycle[fields.recoveryRecordedAtField] = new Date();
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+  } catch (persistError) {
+    details.persistenceError = String(
+      persistError.message || persistError
+    );
+  }
+  return details;
+}
+
+function clearSignatureArtifactMirrorsIfMatching_(
+  cycle,
+  role,
+  fileId
+) {
+  if (!fileId) return;
+  const mirrors = getLegacySignatureMirrorFields_(role);
+  if (String(cycle[mirrors.managerId] || '') === fileId) {
+    cycle[mirrors.managerId] = '';
+    cycle[mirrors.managerAt] = '';
+  }
+  if (String(cycle[mirrors.selfId] || '') === fileId) {
+    cycle[mirrors.selfId] = '';
+    cycle[mirrors.selfAt] = '';
+  }
 }
 
 function attemptFinalizationAfterSignature_(cycleId) {
@@ -1378,8 +1797,25 @@ function getSignatureClaimFields_(role) {
       attemptField: 'Manager Signature Attempt ID',
       startedField: 'Manager Signature Started At',
       errorField: 'Manager Signature Last Error',
+      artifactWarningField: 'Manager Signature Artifact Warning',
+      auditWarningField: 'Manager Signature Audit Warning',
       fileField: 'Manager Signature File ID',
       signedAtField: 'Manager Signed At',
+      winningAttemptField: 'Manager Signature Winning Attempt ID',
+      recoveryFileField: 'Manager Signature Recovery File ID',
+      recoveryAttemptField: 'Manager Signature Recovery Attempt ID',
+      recoveryDetailsField: 'Manager Signature Recovery Details JSON',
+      recoveryRecordedAtField: 'Manager Signature Recovery Recorded At',
+      reconciliationStatusField:
+        'Manager Signature Reconciliation Status',
+      reconciliationAttemptField:
+        'Manager Signature Reconciliation Attempt ID',
+      reconciliationSelectedFileField:
+        'Manager Signature Reconciliation Selected File ID',
+      reconciliationStartedField:
+        'Manager Signature Reconciliation Started At',
+      reconciliationErrorField:
+        'Manager Signature Reconciliation Last Error',
     };
   }
 
@@ -1389,8 +1825,25 @@ function getSignatureClaimFields_(role) {
       attemptField: 'Employee Signature Attempt ID',
       startedField: 'Employee Signature Started At',
       errorField: 'Employee Signature Last Error',
+      artifactWarningField: 'Employee Signature Artifact Warning',
+      auditWarningField: 'Employee Signature Audit Warning',
       fileField: 'Employee Signature File ID',
       signedAtField: 'Employee Signed At',
+      winningAttemptField: 'Employee Signature Winning Attempt ID',
+      recoveryFileField: 'Employee Signature Recovery File ID',
+      recoveryAttemptField: 'Employee Signature Recovery Attempt ID',
+      recoveryDetailsField: 'Employee Signature Recovery Details JSON',
+      recoveryRecordedAtField: 'Employee Signature Recovery Recorded At',
+      reconciliationStatusField:
+        'Employee Signature Reconciliation Status',
+      reconciliationAttemptField:
+        'Employee Signature Reconciliation Attempt ID',
+      reconciliationSelectedFileField:
+        'Employee Signature Reconciliation Selected File ID',
+      reconciliationStartedField:
+        'Employee Signature Reconciliation Started At',
+      reconciliationErrorField:
+        'Employee Signature Reconciliation Last Error',
     };
   }
 
@@ -1399,8 +1852,24 @@ function getSignatureClaimFields_(role) {
     attemptField: 'HR Signature Attempt ID',
     startedField: 'HR Signature Started At',
     errorField: 'HR Signature Last Error',
+    artifactWarningField: 'HR Signature Artifact Warning',
+    auditWarningField: 'HR Signature Audit Warning',
     fileField: 'HR Signature File ID',
     signedAtField: 'HR Signed At',
+    winningAttemptField: 'HR Signature Winning Attempt ID',
+    recoveryFileField: 'HR Signature Recovery File ID',
+    recoveryAttemptField: 'HR Signature Recovery Attempt ID',
+    recoveryDetailsField: 'HR Signature Recovery Details JSON',
+    recoveryRecordedAtField: 'HR Signature Recovery Recorded At',
+    reconciliationStatusField: 'HR Signature Reconciliation Status',
+    reconciliationAttemptField:
+      'HR Signature Reconciliation Attempt ID',
+    reconciliationSelectedFileField:
+      'HR Signature Reconciliation Selected File ID',
+    reconciliationStartedField:
+      'HR Signature Reconciliation Started At',
+    reconciliationErrorField:
+      'HR Signature Reconciliation Last Error',
   };
 }
 
@@ -1495,6 +1964,36 @@ function clearCombinedSignatureFields_(cycle) {
     'SELF HR Signed At',
   ].forEach(function (field) {
     cycle[field] = '';
+  });
+  [
+    PR.ROLE.MANAGER,
+    PR.ROLE.EMPLOYEE,
+    PR.ROLE.HR,
+  ].forEach(function (role) {
+    const fields = getSignatureClaimFields_(role);
+    [
+      fields.attemptField,
+      fields.startedField,
+      fields.errorField,
+      fields.artifactWarningField,
+      fields.auditWarningField,
+      fields.fileField,
+      fields.signedAtField,
+      fields.winningAttemptField,
+      fields.recoveryFileField,
+      fields.recoveryAttemptField,
+      fields.recoveryDetailsField,
+      fields.recoveryRecordedAtField,
+      fields.reconciliationAttemptField,
+      fields.reconciliationSelectedFileField,
+      fields.reconciliationStartedField,
+      fields.reconciliationErrorField,
+    ].forEach(function (field) {
+      cycle[field] = '';
+    });
+    cycle[fields.statusField] = V31.SIGNATURE.PENDING;
+    cycle[fields.reconciliationStatusField] =
+      V31.SIGNATURE_RECONCILIATION.PENDING;
   });
 }
 
@@ -2862,9 +3361,6 @@ function reconcileFinalPdf(
       cycle[fields.statusField] = V31.DELIVERY.PENDING;
       cycle[fields.attemptField] = '';
       cycle[fields.startedField] = '';
-      cycle[fields.errorField] = '';
-      cycle[fields.fileField] = '';
-      cycle[fields.signedAtField] = '';
       cycle['Finalization Last Error'] = '';
       cycle['Updated At'] = new Date();
       writeCycle_(freshLocation.rowNumber, cycle);
@@ -2944,19 +3440,17 @@ function listFinalPdfCandidates(cycleId, documentType) {
 
 function listMatchingSignatureArtifacts_(cycleId, role) {
   const settings = getSettings_();
+  const cycle = findCycle_(cycleId).object;
+  const signatureFields = getSignatureClaimFields_(role);
+  const recoveryFileId = String(
+    cycle[signatureFields.recoveryFileField] || ''
+  );
   const folderIds = [
     String(settings.REVIEW_FOLDER_ID || ''),
     String(settings.SIGNATURE_RECOVERY_FOLDER_ID || ''),
   ].filter(Boolean);
   const canonical = buildCanonicalSignatureFileName_(cycleId, role);
-  const legacy =
-    String(cycleId) +
-    ' - ' +
-    String('Combined Review Packet - ' + role).replace(
-      /[^A-Za-z0-9_-]/g,
-      '_'
-    ) +
-    '.png';
+  const legacy = buildLegacySignatureFileName_(cycleId, role);
   const attemptPrefix =
     'AITHERAS_' +
     String(cycleId) +
@@ -2990,6 +3484,20 @@ function listMatchingSignatureArtifacts_(cycleId, role) {
         ) {
           continue;
         }
+        const description = String(
+          file.getDescription() || ''
+        );
+        const provenance =
+          parseSignatureProvenance_(description);
+        const exactProof =
+          name === legacy ||
+          file.getId() === recoveryFileId ||
+          (provenance &&
+            provenance.cycleId === String(cycleId) &&
+            provenance.role === signatureRoleToken_(role));
+        if (!exactProof) {
+          continue;
+        }
         const id = file.getId();
         if (!seen[id]) {
           seen[id] = true;
@@ -3001,8 +3509,9 @@ function listMatchingSignatureArtifacts_(cycleId, role) {
               folderId === settings.REVIEW_FOLDER_ID
                 ? 'Review Records'
                 : 'Signature Recovery',
-            provenance: String(file.getDescription() || ''),
+            provenance: description,
             legacy: name === legacy,
+            recoveryMetadataMatch: id === recoveryFileId,
             updatedAt: file.getLastUpdated()
               ? file.getLastUpdated().toISOString()
               : '',
@@ -3083,34 +3592,415 @@ function assertSignatureReconciliationAllowed_(cycle, role) {
   }
 }
 
-function applyReconciledSignatureId_(cycle, role, signatureId) {
+function applyReconciledSignatureId_(
+  cycle,
+  role,
+  signatureId,
+  winningAttemptId,
+  reconciliationAttemptId
+) {
   const now = new Date();
   const fields = getSignatureClaimFields_(role);
-  cycle[fields.fileField] = signatureId;
-  cycle[fields.signedAtField] = now;
-  cycle[fields.statusField] = V31.SIGNATURE.SIGNED;
-  cycle[fields.errorField] = '';
+  applySignatureWinnerToCycle_(
+    cycle,
+    role,
+    signatureId,
+    winningAttemptId || '',
+    now
+  );
+  cycle[fields.reconciliationStatusField] =
+    V31.SIGNATURE_RECONCILIATION.RESOLVED;
+  cycle[fields.reconciliationAttemptField] = '';
+  cycle[fields.reconciliationSelectedFileField] = '';
+  cycle[fields.reconciliationStartedField] = '';
+  cycle[fields.reconciliationErrorField] = '';
+  cycle[fields.recoveryFileField] = '';
+  cycle[fields.recoveryAttemptField] = '';
+  cycle[fields.recoveryDetailsField] = '';
+  cycle[fields.recoveryRecordedAtField] = '';
+  cycle[fields.auditWarningField] = '';
+  cycle[fields.artifactWarningField] = '';
+  updateCombinedSignatureStatuses_(cycle);
+}
 
-  if (role === PR.ROLE.MANAGER) {
-    cycle['MGR Manager Signature ID'] = signatureId;
-    cycle['MGR Manager Signed At'] = now;
-    cycle['SELF Manager Signature ID'] = signatureId;
-    cycle['SELF Manager Signed At'] = now;
-  } else if (role === PR.ROLE.EMPLOYEE) {
-    cycle['MGR Employee Signature ID'] = signatureId;
-    cycle['MGR Employee Signed At'] = now;
-    cycle['SELF Employee Signature ID'] = signatureId;
-    cycle['SELF Employee Signed At'] = now;
-  } else if (role === PR.ROLE.HR) {
-    cycle['MGR HR Signature ID'] = signatureId;
-    cycle['MGR HR Signed At'] = now;
-    cycle['SELF HR Signature ID'] = signatureId;
-    cycle['SELF HR Signed At'] = now;
-  } else {
-    throw new Error('Unsupported signature role.');
+function claimSignatureReconciliation_(cycleId, role, fileId) {
+  return withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const fields = getSignatureClaimFields_(role);
+    assertSignatureReconciliationAllowed_(cycle, role);
+    const status = String(
+      cycle[fields.reconciliationStatusField] ||
+        V31.SIGNATURE_RECONCILIATION.PENDING
+    );
+
+    if (
+      status === V31.SIGNATURE_RECONCILIATION.RECONCILING
+    ) {
+      if (
+        !isDeliveryClaimStale_(
+          cycle[fields.reconciliationStartedField]
+        )
+      ) {
+        throw new Error(
+          role + ' signature reconciliation is already in progress.'
+        );
+      }
+      cycle[fields.reconciliationStatusField] =
+        V31.SIGNATURE_RECONCILIATION.UNKNOWN;
+      cycle[fields.reconciliationAttemptField] = '';
+      cycle[fields.reconciliationStartedField] = '';
+      cycle[fields.reconciliationErrorField] =
+        'A reconciliation claim went stale. HR must inspect the selected candidate.';
+      cycle[fields.statusField] = V31.SIGNATURE.UNKNOWN;
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+      throw new Error(
+        role +
+          ' reconciliation claim went stale and now requires HR review.'
+      );
+    }
+
+    const attemptId = Utilities.getUuid();
+    cycle[fields.reconciliationStatusField] =
+      V31.SIGNATURE_RECONCILIATION.RECONCILING;
+    cycle[fields.reconciliationAttemptField] = attemptId;
+    cycle[fields.reconciliationSelectedFileField] = fileId;
+    cycle[fields.reconciliationStartedField] = new Date();
+    cycle[fields.reconciliationErrorField] = '';
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+    return {
+      attemptId: attemptId,
+      selectedFileId: fileId,
+      role: role,
+    };
+  });
+}
+
+function validateSignatureReconciliationCandidate_(
+  cycleId,
+  role,
+  fileId
+) {
+  const settings = getSettings_();
+  const file = DriveApp.getFileById(fileId);
+  if (String(file.getMimeType() || '') !== 'image/png') {
+    throw new Error('Signature candidate must be image/png.');
+  }
+  const inReview = isDriveFileInFolder_(
+    file,
+    settings.REVIEW_FOLDER_ID
+  );
+  const inRecovery = isDriveFileInFolder_(
+    file,
+    settings.SIGNATURE_RECOVERY_FOLDER_ID
+  );
+  if (!inReview && !inRecovery) {
+    throw new Error(
+      'Signature candidate must remain in a restricted review or recovery folder.'
+    );
   }
 
-  updateCombinedSignatureStatuses_(cycle);
+  const name = String(file.getName() || '');
+  const legacyName = buildLegacySignatureFileName_(
+    cycleId,
+    role
+  );
+  const provenance = parseSignatureProvenance_(
+    file.getDescription()
+  );
+  const provenanceMatches =
+    provenance &&
+    provenance.cycleId === String(cycleId) &&
+    provenance.role === signatureRoleToken_(role);
+  const cycle = findCycle_(cycleId).object;
+  const fields = getSignatureClaimFields_(role);
+  const recoveryMetadataMatches =
+    String(cycle[fields.recoveryFileField] || '') ===
+    String(fileId);
+  if (
+    name !== legacyName &&
+    !provenanceMatches &&
+    !recoveryMetadataMatches
+  ) {
+    throw new Error(
+      'Signature candidate lacks an exact recognized legacy name, structured provenance marker, or explicit recovery record.'
+    );
+  }
+
+  return {
+    file: file,
+    fileId: file.getId(),
+    fileName: name,
+    originalFolder:
+      inRecovery && !inReview ? 'recovery' : 'review',
+    recoveredCandidate: inRecovery,
+    provenance: provenance,
+    recoveryMetadataMatch: recoveryMetadataMatches,
+    winningAttemptId: provenanceMatches
+      ? String(provenance.attemptId || '')
+      : recoveryMetadataMatches
+      ? String(cycle[fields.recoveryAttemptField] || '')
+      : '',
+  };
+}
+
+function failSignatureReconciliationClaim_(
+  cycleId,
+  role,
+  attemptId,
+  error
+) {
+  withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const fields = getSignatureClaimFields_(role);
+    if (
+      String(cycle[fields.reconciliationAttemptField] || '') !==
+      String(attemptId)
+    ) {
+      return;
+    }
+    cycle[fields.reconciliationStatusField] =
+      V31.SIGNATURE_RECONCILIATION.FAILED;
+    cycle[fields.reconciliationAttemptField] = '';
+    cycle[fields.reconciliationStartedField] = '';
+    cycle[fields.reconciliationErrorField] = String(
+      error.message || error
+    );
+    cycle[fields.errorField] =
+      'Selected signature candidate validation failed: ' +
+      String(error.message || error);
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+  });
+}
+
+function commitSignatureReconciliation_(
+  cycleId,
+  role,
+  claim,
+  candidate
+) {
+  return withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const fields = getSignatureClaimFields_(role);
+    assertSignatureReconciliationAllowed_(cycle, role);
+    if (
+      String(cycle[fields.reconciliationStatusField] || '') !==
+        V31.SIGNATURE_RECONCILIATION.RECONCILING ||
+      String(cycle[fields.reconciliationAttemptField] || '') !==
+        String(claim.attemptId) ||
+      String(
+        cycle[fields.reconciliationSelectedFileField] || ''
+      ) !== String(candidate.fileId)
+    ) {
+      throw new Error(
+        'Signature reconciliation claim no longer matches this request.'
+      );
+    }
+    const recoveryAttempt =
+      String(cycle[fields.recoveryFileField] || '') ===
+      String(candidate.fileId)
+        ? String(cycle[fields.recoveryAttemptField] || '')
+        : '';
+    applyReconciledSignatureId_(
+      cycle,
+      role,
+      candidate.fileId,
+      recoveryAttempt || candidate.winningAttemptId,
+      claim.attemptId
+    );
+    cycle['Updated At'] = new Date();
+    maybeInjectSignatureFault_(
+      'BEFORE_SIGNATURE_RECONCILIATION_WRITE',
+      cycleId
+    );
+    writeCycle_(location.rowNumber, cycle);
+    maybeInjectSignatureFault_(
+      'AFTER_SIGNATURE_RECONCILIATION_WRITE_BEFORE_FLUSH',
+      cycleId
+    );
+    SpreadsheetApp.flush();
+    return {
+      committed: true,
+      reconciliationAttemptId: claim.attemptId,
+      selectedFileId: candidate.fileId,
+      cycle: cycle,
+      signatureState: getCombinedSignatureState_(cycle),
+    };
+  });
+}
+
+function classifySignatureReconciliationAfterFailure_(
+  cycleId,
+  role,
+  claim,
+  candidate,
+  error
+) {
+  try {
+    return withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      const fields = getSignatureClaimFields_(role);
+      if (
+        String(cycle[fields.fileField] || '') ===
+          String(candidate.fileId) &&
+        String(cycle[fields.statusField] || '') ===
+          V31.SIGNATURE.SIGNED
+      ) {
+        return {
+          committed: true,
+          cycle: cycle,
+          signatureState: getCombinedSignatureState_(cycle),
+          rereadClassification: 'committed',
+          commitError: String(error.message || error),
+        };
+      }
+
+      markSignatureReconciliationUnknownOnCycle_(
+        cycle,
+        fields,
+        claim.attemptId,
+        error
+      );
+      try {
+        writeCycle_(location.rowNumber, cycle);
+        SpreadsheetApp.flush();
+      } catch (persistError) {}
+      return {
+        committed: false,
+        rereadClassification: 'delivery-unknown',
+        selectedFileId: candidate.fileId,
+        commitError: String(error.message || error),
+      };
+    });
+  } catch (rereadError) {
+    try {
+      return withLock_(function () {
+        const location = findCycle_(cycleId);
+        const cycle = location.object;
+        const fields = getSignatureClaimFields_(role);
+        if (
+          String(cycle[fields.fileField] || '') ===
+            String(candidate.fileId) &&
+          String(cycle[fields.statusField] || '') ===
+            V31.SIGNATURE.SIGNED
+        ) {
+          return {
+            committed: true,
+            cycle: cycle,
+            signatureState: getCombinedSignatureState_(cycle),
+            rereadClassification: 'committed-on-retry',
+            commitError: String(error.message || error),
+          };
+        }
+        if (
+          markSignatureReconciliationUnknownOnCycle_(
+            cycle,
+            fields,
+            claim.attemptId,
+            error
+          )
+        ) {
+          writeCycle_(location.rowNumber, cycle);
+          SpreadsheetApp.flush();
+        }
+        return {
+          committed: false,
+          rereadClassification: 'delivery-unknown-on-retry',
+          selectedFileId: candidate.fileId,
+          commitError: String(error.message || error),
+        };
+      });
+    } catch (persistUnknownError) {}
+    return {
+      committed: false,
+      rereadClassification: 'authoritative-reread-failed',
+      selectedFileId: candidate.fileId,
+      commitError:
+        String(error.message || error) +
+        '; reread failed: ' +
+        String(rereadError.message || rereadError),
+    };
+  }
+}
+
+function markSignatureReconciliationUnknownOnCycle_(
+  cycle,
+  fields,
+  attemptId,
+  error
+) {
+  if (
+    String(cycle[fields.reconciliationAttemptField] || '') !==
+    String(attemptId)
+  ) {
+    return false;
+  }
+  cycle[fields.reconciliationStatusField] =
+    V31.SIGNATURE_RECONCILIATION.UNKNOWN;
+  cycle[fields.reconciliationAttemptField] = '';
+  cycle[fields.reconciliationStartedField] = '';
+  cycle[fields.reconciliationErrorField] =
+    'Reconciliation commit could not be confirmed: ' +
+    String(error.message || error);
+  cycle[fields.statusField] = V31.SIGNATURE.UNKNOWN;
+  cycle[fields.errorField] =
+    'Reconciliation commit could not be confirmed. The selected candidate remains preserved.';
+  cycle['Updated At'] = new Date();
+  return true;
+}
+
+function organizeReconciledSignatureCandidate_(
+  cycleId,
+  role,
+  candidate
+) {
+  try {
+    const settings = getSettings_();
+    if (
+      !isDriveFileInFolder_(
+        candidate.file,
+        settings.REVIEW_FOLDER_ID
+      )
+    ) {
+      candidate.file.moveTo(
+        DriveApp.getFolderById(settings.REVIEW_FOLDER_ID)
+      );
+    }
+    candidate.file.setName(
+      buildCanonicalSignatureFileName_(cycleId, role)
+    );
+    candidate.file.setDescription(
+      buildSignatureProvenanceMarker_(
+        cycleId,
+        role,
+        candidate.winningAttemptId,
+        'winner-reconciled'
+      )
+    );
+    return '';
+  } catch (error) {
+    const warning =
+      'The reconciled winner is authoritative, but its Drive organization requires HR attention: ' +
+      String(error.message || error);
+    try {
+      persistSignatureWarning_(
+        cycleId,
+        role,
+        'artifact',
+        warning
+      );
+    } catch (persistError) {}
+    return warning;
+  }
 }
 
 /**
@@ -3162,59 +4052,129 @@ function reconcileSignature(cycleId, role, action, options) {
       );
     }
 
-    const settings = getSettings_();
-    const file = DriveApp.getFileById(fileId);
-    if (String(file.getMimeType() || '') !== 'image/png') {
-      throw new Error('Signature file must be image/png.');
-    }
-    if (
-      !isDriveFileInFolder_(file, settings.REVIEW_FOLDER_ID)
-    ) {
-      file.moveTo(
-        DriveApp.getFolderById(settings.REVIEW_FOLDER_ID)
-      );
-    }
-
-    withLock_(function () {
-      const freshLocation = findCycle_(cycleId);
-      const cycle = freshLocation.object;
-      assertSignatureReconciliationAllowed_(cycle, role);
-      applyReconciledSignatureId_(cycle, role, file.getId());
-      cycle['Updated At'] = new Date();
-      writeCycle_(freshLocation.rowNumber, cycle);
-      SpreadsheetApp.flush();
-    });
-
-    audit_(
-      cycleId,
-      'Signature reconciled with existing file',
-      email,
-      role,
-      fileId,
-      action
-    );
-
-    try {
-      file.setName(
-        buildCanonicalSignatureFileName_(cycleId, role)
-      );
-    } catch (renameError) {
-      persistSignatureRecoveryWarning_(
+    const reconciliationClaim =
+      claimSignatureReconciliation_(
         cycleId,
         role,
-        'The reconciled signature is attached, but its Drive filename requires cleanup.'
+        fileId
       );
+    maybeInjectSignatureFault_(
+      'AFTER_SIGNATURE_RECONCILIATION_CLAIM',
+      cycleId
+    );
+    let candidate;
+    try {
+      candidate = validateSignatureReconciliationCandidate_(
+        cycleId,
+        role,
+        fileId
+      );
+      maybeInjectSignatureFault_(
+        'AFTER_SIGNATURE_RECONCILIATION_VALIDATION',
+        cycleId
+      );
+    } catch (validationError) {
+      failSignatureReconciliationClaim_(
+        cycleId,
+        role,
+        reconciliationClaim.attemptId,
+        validationError
+      );
+      throw validationError;
     }
 
-    const signed = findCycle_(cycleId).object;
-    const state = getCombinedSignatureState_(signed);
+    let reconciliationResult;
+    try {
+      reconciliationResult =
+        commitSignatureReconciliation_(
+          cycleId,
+          role,
+          reconciliationClaim,
+          candidate
+        );
+    } catch (commitError) {
+      reconciliationResult =
+        classifySignatureReconciliationAfterFailure_(
+          cycleId,
+          role,
+          reconciliationClaim,
+          candidate,
+          commitError
+        );
+    }
 
+    if (!reconciliationResult.committed) {
+      return {
+        ok: false,
+        recoveryRequired: true,
+        signatureReconciled: false,
+        message:
+          'Signature reconciliation could not be confirmed. The selected candidate remains preserved.',
+        reconciliation: reconciliationResult,
+      };
+    }
+
+    let auditWarning = '';
+    try {
+      audit_(
+        cycleId,
+        'Signature reconciled with existing file',
+        email,
+        role,
+        fileId,
+        JSON.stringify({
+          schemaVersion: 1,
+          action: action,
+          reconciliationAttemptId:
+            reconciliationClaim.attemptId,
+          selectedFileId: fileId,
+        })
+      );
+    } catch (auditError) {
+      auditWarning =
+        'Reconciliation committed, but its audit record could not be written: ' +
+        String(auditError.message || auditError);
+      try {
+        persistSignatureWarning_(
+          cycleId,
+          role,
+          'audit',
+          auditWarning
+        );
+      } catch (persistAuditWarningError) {}
+    }
+
+    const organizationWarning =
+      organizeReconciledSignatureCandidate_(
+        cycleId,
+        role,
+        candidate
+      );
+    let signed = reconciliationResult.cycle || {};
+    let state =
+      reconciliationResult.signatureState ||
+      getCombinedSignatureState_(signed);
+    let stateReadWarning = '';
+    try {
+      signed = findCycle_(cycleId).object;
+      state = getCombinedSignatureState_(signed);
+    } catch (stateReadError) {
+      stateReadWarning =
+        'The reconciliation committed, but the follow-up state refresh failed.';
+    }
+
+    let notificationWarning = stateReadWarning;
     if (
       role !== PR.ROLE.HR &&
       state.managerSigned &&
       state.employeeSigned
     ) {
-      sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
+      try {
+        sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
+      } catch (notificationError) {
+        notificationWarning =
+          'The reconciled signature is recorded, but the durable HR signature notification requires retry.';
+      }
     }
 
     if (role === PR.ROLE.HR) {
@@ -3224,17 +4184,43 @@ function reconcileSignature(cycleId, role, action, options) {
 
         return {
           ok: true,
+          partial:
+            !!auditWarning ||
+            !!organizationWarning ||
+            !!notificationWarning,
           signatureReconciled: true,
           signatureStatus: V31.SIGNATURE.SIGNED,
           finalizationComplete: !!finalizeResult.ok,
-          cycleStatus: String(
-            findCycle_(cycleId).object['Status'] || ''
-          ),
-          message: finalizeResult.message,
+          cycleStatus: finalizeResult.ok
+            ? PR.CYCLE.COMPLETE
+            : PR.CYCLE.FINALIZING,
+          warning: [
+            auditWarning,
+            organizationWarning,
+            notificationWarning,
+          ]
+            .filter(Boolean)
+            .join(' '),
+          message:
+            finalizeResult.message +
+            ([
+              auditWarning,
+              organizationWarning,
+              notificationWarning,
+            ]
+              .filter(Boolean)
+              .length
+              ? ' ' +
+                [
+                  auditWarning,
+                  organizationWarning,
+                  notificationWarning,
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+              : ''),
           finalization: finalizeResult,
-          signatureState: getCombinedSignatureState_(
-            findCycle_(cycleId).object
-          ),
+          signatureState: state,
         };
       } catch (finalizeError) {
         return {
@@ -3246,21 +4232,46 @@ function reconcileSignature(cycleId, role, action, options) {
           message:
             'HR signature was attached. Final document preparation requires attention. ' +
             String(finalizeError.message || finalizeError),
-          signatureState: getCombinedSignatureState_(
-            findCycle_(cycleId).object
-          ),
+          signatureState: state,
         };
       }
     }
 
     return {
       ok: true,
+      partial:
+        !!auditWarning ||
+        !!organizationWarning ||
+        !!notificationWarning,
       signatureReconciled: true,
       signatureStatus: V31.SIGNATURE.SIGNED,
-      message: role + ' signature attached from validated candidate.',
-      signatureState: getCombinedSignatureState_(
-        findCycle_(cycleId).object
-      ),
+      warning: [
+        auditWarning,
+        organizationWarning,
+        notificationWarning,
+      ]
+        .filter(Boolean)
+        .join(' '),
+      message:
+        role +
+        ' signature attached from validated candidate.' +
+        ([
+          auditWarning,
+          organizationWarning,
+          notificationWarning,
+        ]
+          .filter(Boolean)
+          .length
+          ? ' ' +
+            [
+              auditWarning,
+              organizationWarning,
+              notificationWarning,
+            ]
+              .filter(Boolean)
+              .join(' ')
+          : ''),
+      signatureState: state,
     };
   }
 
@@ -3289,6 +4300,19 @@ function reconcileSignature(cycleId, role, action, options) {
       cycle[fields.statusField] = V31.DELIVERY.PENDING;
       cycle[fields.attemptField] = '';
       cycle[fields.startedField] = '';
+      cycle[fields.errorField] = '';
+      cycle[fields.fileField] = '';
+      cycle[fields.signedAtField] = '';
+      cycle[fields.recoveryFileField] = '';
+      cycle[fields.recoveryAttemptField] = '';
+      cycle[fields.recoveryDetailsField] = '';
+      cycle[fields.recoveryRecordedAtField] = '';
+      cycle[fields.reconciliationStatusField] =
+        V31.SIGNATURE_RECONCILIATION.PENDING;
+      cycle[fields.reconciliationAttemptField] = '';
+      cycle[fields.reconciliationSelectedFileField] = '';
+      cycle[fields.reconciliationStartedField] = '';
+      cycle[fields.reconciliationErrorField] = '';
       cycle['Updated At'] = new Date();
       writeCycle_(freshLocation.rowNumber, cycle);
       SpreadsheetApp.flush();
@@ -4695,6 +5719,40 @@ function moveFileToFolder_(fileId, folderId) {
   return fileId;
 }
 
+function maybeInjectSignatureFault_(point, cycleId) {
+  const settings = getSettings_();
+  const enabled = v31Boolean_(
+    settings.ENABLE_FAULT_INJECTION,
+    false
+  );
+  if (!enabled) return;
+  if (String(settings.ENVIRONMENT || '') !== 'Sandbox') {
+    throw new Error(
+      'Signature fault injection is prohibited unless ENVIRONMENT is Sandbox.'
+    );
+  }
+  if (
+    String(settings.FAULT_POINT || '') !== String(point) ||
+    (settings.FAULT_CYCLE_ID &&
+      String(settings.FAULT_CYCLE_ID) !== String(cycleId))
+  ) {
+    return;
+  }
+  if (v31Boolean_(settings.FAULT_ONCE, true)) {
+    persistAutomationSettings_({
+      ENABLE_FAULT_INJECTION: 'false',
+      FAULT_POINT: '',
+    });
+  }
+  throw new Error(
+    'Sandbox signature fault injected at ' +
+      String(point) +
+      ' for cycle ' +
+      String(cycleId) +
+      '.'
+  );
+}
+
 function saveSignature_(cycleId, role, dataUrl, attemptId) {
   validateSignatureDataUrl_(dataUrl);
 
@@ -4746,14 +5804,19 @@ function saveSignature_(cycleId, role, dataUrl, attemptId) {
   const file = folder.createFile(
     Utilities.newBlob(bytes, 'image/png', fileName)
   );
-  file.setDescription(
-    buildSignatureProvenanceMarker_(
-      cycleId,
-      role,
-      attemptId,
-      'created'
-    )
-  );
+  let provenanceError = '';
+  try {
+    file.setDescription(
+      buildSignatureProvenanceMarker_(
+        cycleId,
+        role,
+        attemptId,
+        'created'
+      )
+    );
+  } catch (error) {
+    provenanceError = String(error.message || error);
+  }
   return {
     fileId: file.getId(),
     fileName: fileName,
@@ -4763,6 +5826,7 @@ function saveSignature_(cycleId, role, dataUrl, attemptId) {
     createdByCurrentAttempt: true,
     recoveredCandidate: false,
     folderId: settings.REVIEW_FOLDER_ID,
+    provenanceError: provenanceError,
   };
 }
 
@@ -4796,6 +5860,15 @@ function buildCanonicalSignatureFileName_(cycleId, role) {
   );
 }
 
+function buildLegacySignatureFileName_(cycleId, role) {
+  return (
+    String(cycleId) +
+    ' - Combined_Review_Packet_-_' +
+    String(role) +
+    '.png'
+  );
+}
+
 function buildSignatureFileName_(cycleId, label) {
   const role = String(label || '').split(' - ').pop();
   return buildCanonicalSignatureFileName_(cycleId, role);
@@ -4814,6 +5887,22 @@ function buildSignatureProvenanceMarker_(
     'attemptId=' + String(attemptId || ''),
     'origin=' + String(origin || ''),
   ].join('\n');
+}
+
+function parseSignatureProvenance_(description) {
+  const lines = String(description || '').split('\n');
+  if (lines.length !== 5 || lines[0] !== 'AITHERAS_SIGNATURE') {
+    return null;
+  }
+  const expected = ['cycleId', 'role', 'attemptId', 'origin'];
+  const parsed = {};
+  for (let index = 0; index < expected.length; index++) {
+    const prefix = expected[index] + '=';
+    const line = lines[index + 1];
+    if (line.indexOf(prefix) !== 0) return null;
+    parsed[expected[index]] = line.slice(prefix.length);
+  }
+  return parsed;
 }
 
 function assertValidSignatureAttemptFile_(
@@ -4876,11 +5965,29 @@ function persistSignatureRecoveryWarning_(
   role,
   warning
 ) {
+  return persistSignatureWarning_(
+    cycleId,
+    role,
+    'artifact',
+    warning
+  );
+}
+
+function persistSignatureWarning_(
+  cycleId,
+  role,
+  warningType,
+  warning
+) {
   withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
     const fields = getSignatureClaimFields_(role);
-    cycle[fields.errorField] = String(warning || '');
+    const targetField =
+      warningType === 'audit'
+        ? fields.auditWarningField
+        : fields.artifactWarningField;
+    cycle[targetField] = String(warning || '');
     cycle['Updated At'] = new Date();
     writeCycle_(location.rowNumber, cycle);
     SpreadsheetApp.flush();
@@ -4921,7 +6028,17 @@ function handleSupersededSignatureArtifact_(
           recoveryRecommendation: warning,
         })
       );
-    } catch (auditError) {}
+    } catch (auditError) {
+      try {
+        persistSignatureWarning_(
+          cycleId,
+          role,
+          'audit',
+          'Superseded artifact handling audit could not be written: ' +
+            String(auditError.message || auditError)
+        );
+      } catch (persistAuditWarningError) {}
+    }
     return {
       disposition: 'left-in-place',
       warning: warning,
@@ -5016,6 +6133,38 @@ function handleSupersededSignatureArtifactCore_(
     }
   }
 
+  if (disposition === 'trashed') {
+    try {
+      audit_(
+        cycleId,
+        'Superseded signature artifact trash complete',
+        getEffectiveAutomationUserEmail_(),
+        role,
+        'trash-complete',
+        JSON.stringify({
+          schemaVersion: 1,
+          losingAttemptId: losingAttemptId,
+          fileId: artifact.fileId,
+        })
+      );
+    } catch (trashAuditError) {
+      warning =
+        'The superseded artifact was trashed, but the completion audit could not be written.';
+      try {
+        persistSignatureWarning_(
+          cycleId,
+          role,
+          'audit',
+          warning +
+            ' ' +
+            String(
+              trashAuditError.message || trashAuditError
+            )
+        );
+      } catch (persistTrashAuditWarningError) {}
+    }
+  }
+
   if (warning) {
     try {
       persistSignatureRecoveryWarning_(cycleId, role, warning);
@@ -5039,7 +6188,9 @@ function handleSupersededSignatureArtifactCore_(
         component: role + ' Signature Artifact',
         event: 'superseded-artifact-disposition',
         losingAttemptId: losingAttemptId,
-        winningAttemptId: String(cycle[fields.attemptField] || ''),
+        winningAttemptId: String(
+          cycle[fields.winningAttemptField] || ''
+        ),
         losingFileId: artifact.fileId,
         winningFileId: winningFileId,
         disposition: disposition,
@@ -5052,6 +6203,15 @@ function handleSupersededSignatureArtifactCore_(
     warning =
       warning ||
       'Signature artifact disposition completed, but its audit record needs verification.';
+    try {
+      persistSignatureWarning_(
+        cycleId,
+        role,
+        'audit',
+        'Signature artifact disposition audit could not be confirmed: ' +
+          String(auditError.message || auditError)
+      );
+    } catch (persistAuditWarningError) {}
   }
 
   return {
@@ -5095,7 +6255,17 @@ function finalizeSignatureArtifactName_(cycleId, role, artifact) {
           recoveryRecommendation: warning,
         })
       );
-    } catch (auditError) {}
+    } catch (auditError) {
+      try {
+        persistSignatureWarning_(
+          cycleId,
+          role,
+          'audit',
+          'Signature winner cleanup audit could not be written: ' +
+            String(auditError.message || auditError)
+        );
+      } catch (persistAuditWarningError) {}
+    }
     return warning;
   }
 }

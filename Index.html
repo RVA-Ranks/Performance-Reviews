@@ -2179,7 +2179,12 @@ async function openSignatureReconcileModal() {
       select.innerHTML = files.length
         ? files.map(function(file) {
             return '<option value="' + escapeAttr(file.id) + '">' +
-              escapeHtml(file.name) + ' — ' + escapeHtml(file.id) + '</option>';
+              escapeHtml(file.name) + ' — ' +
+              escapeHtml(file.location || 'Unknown location') +
+              (file.legacy ? ' — exact legacy name' : '') +
+              (file.recoveryMetadataMatch ? ' — explicit recovery record' : '') +
+              (file.provenance ? ' — structured provenance' : '') +
+              '</option>';
           }).join('')
         : '<option value="">No matching signature candidates</option>';
       confirmDisabled = false;
@@ -2222,8 +2227,8 @@ async function openSignatureReconcileModal() {
           fileId: fileId,
           confirmMissing: confirmMissing
         });
-        const tone = result.finalizationComplete === false ? 'warning' : 'success';
-        showToast(tone, 'Signature reconciled', result.message || 'Updated');
+        const tone = result.ok === false || result.partial || result.finalizationComplete === false ? 'warning' : 'success';
+        showToast(tone, result.ok === false ? 'Signature recovery required' : 'Signature reconciled', result.message || 'Updated');
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not reconcile signature', errorMessage(error));
@@ -3142,7 +3147,7 @@ async function submitSignature() {
   const pad = signaturePads.packetSignature;
   if (!pad || pad.isEmpty) { showToast('error','Signature required','Draw your signature before continuing.'); return; }
   const button = document.getElementById('signPacketButton'); setButtonBusy(button,true,'Recording signature…');
-  try { const result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature')); showToast('success','Signature recorded',result.message); await refreshApplication(currentCycle.cycleId,'signatures'); }
+  try { const result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature')); showToast(result.ok === false || result.partial ? 'warning' : 'success', result.signatureRecorded ? 'Signature recorded' : 'Signature recovery required', result.message); await refreshApplication(currentCycle.cycleId,'signatures'); }
   catch (error) { setButtonBusy(button,false,'Sign Both Review Documents'); showToast('error','Could not record signature',errorMessage(error)); }
 }
 
