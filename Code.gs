@@ -700,7 +700,7 @@ function saveIndependentReview_(
       },
       {}
     );
-    dispatchPendingWorkflowNotifications(cycleId);
+    dispatchPendingWorkflowNotifications_(cycleId);
   }
 
   return {
@@ -754,7 +754,7 @@ function startReviewMeeting(cycleId) {
   });
 
   sendMeetingOpenedEmails_(cycleId);
-  dispatchPendingWorkflowNotifications(cycleId);
+  dispatchPendingWorkflowNotifications_(cycleId);
 
   return {
     ok: true,
@@ -898,7 +898,7 @@ function releaseReviewSignatures(cycleId) {
 
   sendCombinedSignatureEmail_(cycleId, PR.ROLE.MANAGER);
   sendCombinedSignatureEmail_(cycleId, PR.ROLE.EMPLOYEE);
-  dispatchPendingWorkflowNotifications(cycleId);
+  dispatchPendingWorkflowNotifications_(cycleId);
 
   return {
     ok: true,
@@ -3025,11 +3025,41 @@ function reconcileSignature(cycleId, role, action, options) {
     }
 
     if (role === PR.ROLE.HR) {
-      finalizeReviewCycle_(cycleId);
+      try {
+        const finalizeResult = finalizeReviewCycle_(cycleId);
+
+        return {
+          ok: true,
+          signatureReconciled: true,
+          finalizationComplete: !!finalizeResult.ok,
+          cycleStatus: String(
+            findCycle_(cycleId).object['Status'] || ''
+          ),
+          message: finalizeResult.message,
+          finalization: finalizeResult,
+          signatureState: getCombinedSignatureState_(
+            findCycle_(cycleId).object
+          ),
+        };
+      } catch (finalizeError) {
+        return {
+          ok: true,
+          signatureReconciled: true,
+          finalizationComplete: false,
+          cycleStatus: PR.CYCLE.FINALIZING,
+          message:
+            'HR signature was attached. Final document preparation requires attention. ' +
+            String(finalizeError.message || finalizeError),
+          signatureState: getCombinedSignatureState_(
+            findCycle_(cycleId).object
+          ),
+        };
+      }
     }
 
     return {
       ok: true,
+      signatureReconciled: true,
       message: role + ' signature attached from validated candidate.',
       signatureState: getCombinedSignatureState_(
         findCycle_(cycleId).object
@@ -3043,15 +3073,15 @@ function reconcileSignature(cycleId, role, action, options) {
       role
     );
 
-    if (matches.length > 0 && !opts.confirmMissing) {
+    if (matches.length > 0) {
       throw new Error(
-        'Signature candidate(s) already exist. Choose one, or confirmMissing only after they are removed.'
+        'Matching signature files exist. Select one or remove them before resetting.'
       );
     }
 
-    if (matches.length === 0 && !opts.confirmMissing) {
+    if (!opts.confirmMissing) {
       throw new Error(
-        'Confirm no Drive signature file exists before resetting to Pending.'
+        'Confirm that no signature file exists before resetting to Pending.'
       );
     }
 

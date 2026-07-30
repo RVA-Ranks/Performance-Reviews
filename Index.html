@@ -2020,21 +2020,33 @@ async function retryFinalization() {
 async function openPdfReconcileModal() {
   const finalization = currentCycle.v31 && currentCycle.v31.finalization ? currentCycle.v31.finalization : {};
   const defaultType = finalization.managerPdfUnknown ? 'Manager Review' : 'Self-Evaluation';
+  let confirmDisabled = true;
 
-  let candidateOptions = '<option value="">Loading candidates…</option>';
-  try {
-    const listed = await server('listFinalPdfCandidates', currentCycle.cycleId, defaultType);
-    const files = listed.files || [];
-    candidateOptions = files.length
-      ? files.map(function(file) {
-          return '<option value="' + escapeAttr(file.id) + '">' +
-            escapeHtml(file.name) + ' — ' + escapeHtml(file.id) +
-            (file.updatedAt ? ' (' + escapeHtml(file.updatedAt) + ')' : '') +
-            '</option>';
-        }).join('')
-      : '<option value="">No matching candidates in the review folder</option>';
-  } catch (error) {
-    candidateOptions = '<option value="">' + escapeHtml(errorMessage(error)) + '</option>';
+  async function refreshPdfCandidates(documentType) {
+    const select = document.getElementById('pdfReconcileFileId');
+    const confirmBtn = document.querySelector('#modalRoot .button.primary, #appModal .button.primary, .modal .button.primary');
+    if (!select) return;
+    select.innerHTML = '<option value="">Loading candidates…</option>';
+    confirmDisabled = true;
+    if (confirmBtn) confirmBtn.disabled = true;
+    try {
+      const listed = await server('listFinalPdfCandidates', currentCycle.cycleId, documentType);
+      const files = listed.files || [];
+      select.innerHTML = files.length
+        ? files.map(function(file) {
+            return '<option value="' + escapeAttr(file.id) + '">' +
+              escapeHtml(file.name) + ' — ' + escapeHtml(file.id) +
+              (file.updatedAt ? ' (' + escapeHtml(file.updatedAt) + ')' : '') +
+              '</option>';
+          }).join('')
+        : '<option value="">No matching candidates in the review folder</option>';
+      confirmDisabled = false;
+      if (confirmBtn) confirmBtn.disabled = false;
+    } catch (error) {
+      select.innerHTML = '<option value="">' + escapeHtml(errorMessage(error)) + '</option>';
+      confirmDisabled = false;
+      if (confirmBtn) confirmBtn.disabled = false;
+    }
   }
 
   openModal({
@@ -2047,11 +2059,15 @@ async function openPdfReconcileModal() {
       (defaultType === 'Self-Evaluation' ? ' selected' : '') +
       '>Self-Evaluation</option></select></label>' +
       '<label style="display:block;margin-top:12px;">Action<br><select id="pdfReconcileAction"><option value="useFileId">Use selected candidate</option><option value="chooseFile">Choose one duplicate candidate</option><option value="regenerate">Confirm missing and regenerate</option><option value="cancel">Cancel and leave Unknown</option></select></label>' +
-      '<label style="display:block;margin-top:12px;">Candidate<br><select id="pdfReconcileFileId" style="width:100%">' + candidateOptions + '</select></label>' +
+      '<label style="display:block;margin-top:12px;">Candidate<br><select id="pdfReconcileFileId" style="width:100%"><option value="">Loading candidates…</option></select></label>' +
       '<label style="display:block;margin-top:12px;"><input type="checkbox" id="pdfConfirmMissing"> Confirm no usable Drive file exists (required to regenerate)</label>',
     confirmLabel: 'Apply PDF Reconciliation',
     tone: 'warning',
     onConfirm: async function() {
+      if (confirmDisabled) {
+        showToast('warning', 'PDF reconcile', 'Candidates are still loading.');
+        return;
+      }
       const documentType = document.getElementById('pdfReconcileType').value;
       const action = document.getElementById('pdfReconcileAction').value;
       const fileId = (document.getElementById('pdfReconcileFileId').value || '').trim();
@@ -2062,31 +2078,53 @@ async function openPdfReconcileModal() {
           fileId: fileId,
           confirmMissing: confirmMissing
         });
-        showToast('success', 'PDF reconciled', result.message || 'Updated');
+        showToast(result.finalizationComplete === false ? 'warning' : 'success', 'PDF reconciled', result.message || 'Updated');
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not reconcile PDF', errorMessage(error));
       }
     }
   });
+
+  setTimeout(function() {
+    const typeSelect = document.getElementById('pdfReconcileType');
+    if (typeSelect) {
+      typeSelect.onchange = function() {
+        refreshPdfCandidates(typeSelect.value);
+      };
+      refreshPdfCandidates(typeSelect.value);
+    }
+  }, 0);
 }
 
 async function openSignatureReconcileModal() {
   const claims = currentCycle.v31 && currentCycle.v31.signatureClaims ? currentCycle.v31.signatureClaims : {};
   const defaultRole = claims.managerUnknown ? 'Manager' : (claims.employeeUnknown ? 'Employee' : 'HR');
-  let candidateOptions = '<option value="">Loading candidates…</option>';
+  let confirmDisabled = true;
 
-  try {
-    const listed = await server('listSignatureCandidates', currentCycle.cycleId, defaultRole);
-    const files = listed.files || [];
-    candidateOptions = files.length
-      ? files.map(function(file) {
-          return '<option value="' + escapeAttr(file.id) + '">' +
-            escapeHtml(file.name) + ' — ' + escapeHtml(file.id) + '</option>';
-        }).join('')
-      : '<option value="">No matching signature candidates</option>';
-  } catch (error) {
-    candidateOptions = '<option value="">' + escapeHtml(errorMessage(error)) + '</option>';
+  async function refreshSignatureCandidates(role) {
+    const select = document.getElementById('signatureReconcileFileId');
+    const confirmBtn = document.querySelector('#modalRoot .button.primary, #appModal .button.primary, .modal .button.primary');
+    if (!select) return;
+    select.innerHTML = '<option value="">Loading candidates…</option>';
+    confirmDisabled = true;
+    if (confirmBtn) confirmBtn.disabled = true;
+    try {
+      const listed = await server('listSignatureCandidates', currentCycle.cycleId, role);
+      const files = listed.files || [];
+      select.innerHTML = files.length
+        ? files.map(function(file) {
+            return '<option value="' + escapeAttr(file.id) + '">' +
+              escapeHtml(file.name) + ' — ' + escapeHtml(file.id) + '</option>';
+          }).join('')
+        : '<option value="">No matching signature candidates</option>';
+      confirmDisabled = false;
+      if (confirmBtn) confirmBtn.disabled = false;
+    } catch (error) {
+      select.innerHTML = '<option value="">' + escapeHtml(errorMessage(error)) + '</option>';
+      confirmDisabled = false;
+      if (confirmBtn) confirmBtn.disabled = false;
+    }
   }
 
   openModal({
@@ -2101,11 +2139,15 @@ async function openSignatureReconcileModal() {
       (defaultRole === 'HR' ? ' selected' : '') +
       '>HR</option></select></label>' +
       '<label style="display:block;margin-top:12px;">Action<br><select id="signatureReconcileAction"><option value="useFileId">Use selected candidate</option><option value="chooseFile">Choose one duplicate candidate</option><option value="resetPending">Confirm missing and reset to Pending</option><option value="cancel">Cancel and leave Unknown</option></select></label>' +
-      '<label style="display:block;margin-top:12px;">Candidate<br><select id="signatureReconcileFileId" style="width:100%">' + candidateOptions + '</select></label>' +
+      '<label style="display:block;margin-top:12px;">Candidate<br><select id="signatureReconcileFileId" style="width:100%"><option value="">Loading candidates…</option></select></label>' +
       '<label style="display:block;margin-top:12px;"><input type="checkbox" id="signatureConfirmMissing"> Confirm no usable signature file exists</label>',
     confirmLabel: 'Apply Signature Reconciliation',
     tone: 'warning',
     onConfirm: async function() {
+      if (confirmDisabled) {
+        showToast('warning', 'Signature reconcile', 'Candidates are still loading.');
+        return;
+      }
       const role = document.getElementById('signatureReconcileRole').value;
       const action = document.getElementById('signatureReconcileAction').value;
       const fileId = (document.getElementById('signatureReconcileFileId').value || '').trim();
@@ -2116,13 +2158,24 @@ async function openSignatureReconcileModal() {
           fileId: fileId,
           confirmMissing: confirmMissing
         });
-        showToast('success', 'Signature reconciled', result.message || 'Updated');
+        const tone = result.finalizationComplete === false ? 'warning' : 'success';
+        showToast(tone, 'Signature reconciled', result.message || 'Updated');
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not reconcile signature', errorMessage(error));
       }
     }
   });
+
+  setTimeout(function() {
+    const roleSelect = document.getElementById('signatureReconcileRole');
+    if (roleSelect) {
+      roleSelect.onchange = function() {
+        refreshSignatureCandidates(roleSelect.value);
+      };
+      refreshSignatureCandidates(roleSelect.value);
+    }
+  }, 0);
 }
 
 async function openNotificationRetryModal() {
@@ -2181,15 +2234,28 @@ async function openNotificationRetryModal() {
 async function dispatchPendingNotifications() {
   openModal({
     title: 'Drain pending workflow emails?',
-    body: '<p>This sends eligible Pending or Failed notifications for this cycle. Delivery Unknown components are not auto-resent.</p>',
+    body:
+      '<p><strong>This deliberately sends email</strong> for eligible Pending or Failed notifications on this cycle. Preview automation never does this automatically. Delivery Unknown components are not auto-resent.</p>' +
+      '<label style="display:block;margin-top:12px;"><input type="checkbox" id="confirmOutboxDrain"> I confirm I want to send these emails now</label>',
     confirmLabel: 'Drain Pending Emails',
-    tone: 'primary',
+    tone: 'warning',
     onConfirm: async function() {
+      const confirmed = !!(document.getElementById('confirmOutboxDrain') && document.getElementById('confirmOutboxDrain').checked);
+      if (!confirmed) {
+        showToast('warning', 'Confirmation required', 'Check the confirmation box before draining the outbox.');
+        return;
+      }
       closeModal();
       try {
-        const result = await server('dispatchPendingWorkflowNotifications', currentCycle.cycleId);
-        const sent = (result.results || []).filter(function(row) { return row.action === 'sent'; }).length;
-        showToast('success', 'Workflow outbox', 'Sent ' + sent + ' pending notification(s).');
+        const result = await server('drainWorkflowOutboxNow', {
+          confirmed: true,
+          cycleId: currentCycle.cycleId
+        });
+        showToast(
+          result.failed ? 'warning' : 'success',
+          'Workflow outbox',
+          result.message || ('Sent ' + Number(result.sent || 0) + ' notification(s).')
+        );
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not drain notifications', errorMessage(error));

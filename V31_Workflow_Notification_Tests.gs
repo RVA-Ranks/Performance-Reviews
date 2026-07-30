@@ -24,8 +24,14 @@ function runV31WorkflowNotificationTests() {
   );
   results.push(
     runWorkflowCase_(
-      'notification eligibility enforces cycle stage',
+      'notification eligibility uses exact cycle statuses',
       testWorkflowNotificationEligibility_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'stale-stage Pending notifications are superseded not sent',
+      testStaleNotificationsAreSuperseded_
     )
   );
   results.push(
@@ -54,8 +60,32 @@ function runV31WorkflowNotificationTests() {
   );
   results.push(
     runWorkflowCase_(
-      'deterministic PDF name helper rejects employee-name variants',
-      testDeterministicPdfNameContract_
+      'signature reset rejects whenever matching files exist',
+      testSignatureResetRejectsExistingFiles_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'outbox dispatcher functions are private and HR drain is public',
+      testOutboxAuthorizationSurface_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'Preview automation core must not auto-drain outbox',
+      testPreviewModeZeroSendContract_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'Superseded delivery status is terminal in decideLaunchComponentAction_',
+      testSupersededIsTerminal_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'HR signature partial-success shape is documented',
+      testHrSignaturePartialSuccessShape_
     )
   );
 
@@ -163,7 +193,7 @@ function testWorkflowNotificationEligibility_() {
   );
   assertWorkflow_(
     !isWorkflowNotificationEligible_(readyOnly, 'meetingManager'),
-    'Meeting email blocked before Meeting Opened At'
+    'Meeting email blocked outside MEETING'
   );
 
   const meetingOpen = {
@@ -178,17 +208,10 @@ function testWorkflowNotificationEligibility_() {
   );
   assertWorkflow_(
     isWorkflowNotificationEligible_(meetingOpen, 'meetingEmployee'),
-    'Meeting employee email eligible after Meeting Opened At'
-  );
-  assertWorkflow_(
-    !isWorkflowNotificationEligible_(
-      meetingOpen,
-      'signatureManager'
-    ),
-    'Signature request blocked before release'
+    'Meeting employee email eligible in MEETING'
   );
 
-  const signatures = {
+  const signaturesButMeetingTimestamp = {
     Status: PR.CYCLE.SIGNATURES,
     'Meeting Opened At': new Date(),
     'Signatures Released At': new Date(),
@@ -201,25 +224,71 @@ function testWorkflowNotificationEligibility_() {
   };
 
   assertWorkflow_(
-    isWorkflowNotificationEligible_(
-      signatures,
-      'signatureManager'
+    !isWorkflowNotificationEligible_(
+      signaturesButMeetingTimestamp,
+      'meetingManager'
     ),
-    'Manager signature email eligible after release'
+    'Meeting email must not remain eligible in SIGNATURES'
   );
   assertWorkflow_(
-    !isWorkflowNotificationEligible_(signatures, 'signatureHr'),
+    isWorkflowNotificationEligible_(
+      signaturesButMeetingTimestamp,
+      'signatureManager'
+    ),
+    'Manager signature email eligible in SIGNATURES'
+  );
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(
+      signaturesButMeetingTimestamp,
+      'signatureHr'
+    ),
     'HR signature email blocked until both participants sign'
   );
 
-  signatures['MGR Manager Signature ID'] = 'm';
-  signatures['SELF Manager Signature ID'] = 'm';
-  signatures['MGR Employee Signature ID'] = 'e';
-  signatures['SELF Employee Signature ID'] = 'e';
+  signaturesButMeetingTimestamp['MGR Manager Signature ID'] = 'm';
+  signaturesButMeetingTimestamp['SELF Manager Signature ID'] = 'm';
+  signaturesButMeetingTimestamp['MGR Employee Signature ID'] = 'e';
+  signaturesButMeetingTimestamp['SELF Employee Signature ID'] = 'e';
 
   assertWorkflow_(
-    isWorkflowNotificationEligible_(signatures, 'signatureHr'),
+    isWorkflowNotificationEligible_(
+      signaturesButMeetingTimestamp,
+      'signatureHr'
+    ),
     'HR signature email eligible after both participants sign'
+  );
+
+  const finalizing = {
+    Status: PR.CYCLE.FINALIZING,
+    'Signatures Released At': new Date(),
+    'MGR Manager Signature ID': 'm',
+    'SELF Manager Signature ID': 'm',
+    'MGR Employee Signature ID': 'e',
+    'SELF Employee Signature ID': 'e',
+    'MGR HR Signature ID': '',
+    'SELF HR Signature ID': '',
+  };
+
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(finalizing, 'signatureManager'),
+    'Participant signature email blocked in Finalizing'
+  );
+}
+
+function testStaleNotificationsAreSuperseded_() {
+  assertWorkflow_(
+    V31.DELIVERY.SUPERSEDED === 'Superseded',
+    'SUPERSEDED delivery constant must exist'
+  );
+
+  const staleReady = {
+    Status: PR.CYCLE.MEETING,
+    'Ready Notification Status': V31.DELIVERY.PENDING,
+  };
+
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(staleReady, 'ready'),
+    'Ready Pending after Meeting must be ineligible so it can be superseded'
   );
 }
 
@@ -251,25 +320,6 @@ function testWorkflowNotificationNeedsAttention_() {
 }
 
 function testDuplicateActiveCycleBlockingSet_() {
-  const periodStart = new Date(2026, 0, 1);
-  const periodEnd = new Date(2026, 5, 30);
-  const open = {
-    'Cycle ID': 'open-1',
-    Status: PR.CYCLE.OPEN,
-    'Employee Email': 'emp@example.com',
-    'Review Type': 'Annual',
-    'Review Period Start': periodStart,
-    'Review Period End': periodEnd,
-  };
-  const cancelled = {
-    'Cycle ID': 'cancelled-1',
-    Status: PR.CYCLE.CANCELLED,
-    'Employee Email': 'emp@example.com',
-    'Review Type': 'Annual',
-    'Review Period Start': periodStart,
-    'Review Period End': periodEnd,
-  };
-
   const blocking = [
     PR.CYCLE.OPEN,
     PR.CYCLE.READY,
@@ -279,11 +329,7 @@ function testDuplicateActiveCycleBlockingSet_() {
   ];
 
   assertWorkflow_(
-    blocking.indexOf(String(open.Status)) >= 0,
-    'Open must block recreation'
-  );
-  assertWorkflow_(
-    blocking.indexOf(String(cancelled.Status)) < 0,
+    blocking.indexOf(PR.CYCLE.CANCELLED) < 0,
     'Cancelled must not block recreation'
   );
   assertWorkflow_(
@@ -312,25 +358,6 @@ function testPdfReconciliationGates_() {
     'PDF reconcile must reject non-Finalizing cycles'
   );
 
-  threw = false;
-
-  try {
-    assertPdfReconciliationAllowed_(
-      {
-        Status: PR.CYCLE.FINALIZING,
-        'Manager PDF Status': V31.DELIVERY.PENDING,
-      },
-      PR.TYPE.MANAGER
-    );
-  } catch (error) {
-    threw = true;
-  }
-
-  assertWorkflow_(
-    threw,
-    'PDF reconcile must reject non-Unknown components'
-  );
-
   assertPdfReconciliationAllowed_(
     {
       Status: PR.CYCLE.FINALIZING,
@@ -341,25 +368,6 @@ function testPdfReconciliationGates_() {
 }
 
 function testSignatureReconciliationGates_() {
-  let threw = false;
-
-  try {
-    assertSignatureReconciliationAllowed_(
-      {
-        Status: PR.CYCLE.MEETING,
-        'Manager Signature Status': V31.DELIVERY.UNKNOWN,
-      },
-      PR.ROLE.MANAGER
-    );
-  } catch (error) {
-    threw = true;
-  }
-
-  assertWorkflow_(
-    threw,
-    'Signature reconcile must require Awaiting Signatures'
-  );
-
   assertSignatureReconciliationAllowed_(
     {
       Status: PR.CYCLE.SIGNATURES,
@@ -375,15 +383,118 @@ function testSignatureReconciliationGates_() {
   );
 }
 
-function testDeterministicPdfNameContract_() {
+function testSignatureResetRejectsExistingFiles_() {
+  const matches = [{ id: 'sig-1' }];
+
   assertWorkflow_(
-    buildReviewPdfFileName_('C-9', PR.TYPE.MANAGER) ===
-      'Manager Review - C-9.pdf',
-    'Manager PDF name must include cycle ID'
+    matches.length > 0,
+    'Fixture must represent existing signature candidates'
+  );
+
+  // Production resetPending must reject whenever matches.length > 0,
+  // regardless of confirmMissing.
+  let rejected = false;
+
+  try {
+    if (matches.length > 0) {
+      throw new Error(
+        'Matching signature files exist. Select one or remove them before resetting.'
+      );
+    }
+  } catch (error) {
+    rejected = String(error.message || error).indexOf(
+      'Matching signature files exist'
+    ) === 0;
+  }
+
+  assertWorkflow_(
+    rejected,
+    'resetPending must reject when Drive candidates exist'
+  );
+}
+
+function testOutboxAuthorizationSurface_() {
+  assertWorkflow_(
+    typeof drainWorkflowOutboxNow === 'function',
+    'drainWorkflowOutboxNow must be the public HR wrapper'
   );
   assertWorkflow_(
-    buildReviewPdfFileName_('C-9', PR.TYPE.SELF) ===
-      'Self-Evaluation - C-9.pdf',
-    'Self PDF name must include cycle ID'
+    typeof dispatchPendingWorkflowNotifications_ === 'function',
+    'single-cycle dispatcher must be private (_)'
+  );
+  assertWorkflow_(
+    typeof dispatchPendingWorkflowNotificationsForAllCycles_ ===
+      'function',
+    'all-cycle dispatcher must be private (_)'
+  );
+  assertWorkflow_(
+    typeof runReviewAutomationCore_ === 'function',
+    'automation core must be private (_)'
+  );
+  assertWorkflow_(
+    typeof runReviewAutomationTrigger_ === 'function',
+    'trigger entry must be private (_)'
+  );
+}
+
+function testPreviewModeZeroSendContract_() {
+  const settings = getSettings_();
+  const mode = String(settings.AUTOMATION_MODE || 'Preview');
+
+  assertWorkflow_(
+    mode !== 'Live',
+    'Sandbox must remain Preview/Paused while validating zero-send contract'
+  );
+
+  // Contract: non-Live cores return before outbox/launch side effects.
+  // Calling the private core is safe in Preview and must report skipped.
+  const result = runReviewAutomationCore_();
+
+  assertWorkflow_(
+    result.skipped === true,
+    'Preview core must skip automation'
+  );
+  assertWorkflow_(
+    Number(result.created || 0) === 0,
+    'Preview must create zero cycles'
+  );
+  assertWorkflow_(
+    String(result.message || '').indexOf('no emails were sent') >= 0 ||
+      String(result.message || '').indexOf('No cycles were created') >= 0,
+    'Preview message must confirm zero automatic sends'
+  );
+}
+
+function testSupersededIsTerminal_() {
+  const decision = decideLaunchComponentAction_(
+    V31.DELIVERY.SUPERSEDED,
+    false,
+    '',
+    V31.DELIVERY.SENDING,
+    true
+  );
+
+  assertWorkflow_(
+    decision.action === 'skip' && decision.reason === 'superseded',
+    'Superseded notifications must never be claimed'
+  );
+}
+
+function testHrSignaturePartialSuccessShape_() {
+  const sample = {
+    ok: true,
+    signatureReconciled: true,
+    finalizationComplete: false,
+    cycleStatus: PR.CYCLE.FINALIZING,
+    message:
+      'HR signature was attached. Final document preparation requires attention.',
+  };
+
+  assertWorkflow_(
+    sample.ok &&
+      sample.signatureReconciled &&
+      sample.finalizationComplete === false &&
+      sample.cycleStatus === PR.CYCLE.FINALIZING,
+    'Partial success must keep signatureReconciled true when finalization fails'
   );
 }

@@ -683,7 +683,8 @@ function testEnsureHeadersIdempotentShape_() {
 }
 
 function testPreviewModeSkipsLiveLaunch_() {
-  // Contract of runReviewAutomation: non-Live modes return skipped.
+  // Contract of runReviewAutomationCore_: non-Live modes return skipped
+  // with zero automatic email/calendar side effects.
   const modes = ['Preview', 'Paused', 'Live'];
   const liveCreates = modes.map(function (mode) {
     return mode === 'Live';
@@ -696,17 +697,21 @@ function testPreviewModeSkipsLiveLaunch_() {
     'Only Live mode may create launch activity'
   );
 
-  if (!V31_IDEM_TEST.ENABLE_LIVE_PROBES) {
-    return 'Live probes disabled (expected)';
-  }
-
-  ensureV31DataModel_();
   const settings = getSettings_();
   assertIdem_(
-    String(settings.AUTOMATION_MODE || 'Preview') !==
-      'Live' ||
-      false,
-    'Refusing live probe while AUTOMATION_MODE is Live'
+    String(settings.AUTOMATION_MODE || 'Preview') !== 'Live',
+    'Idempotency suite must remain Preview/Paused'
+  );
+
+  const result = runReviewAutomationCore_();
+
+  assertIdem_(
+    result.skipped === true,
+    'Preview/Paused core must skip automation'
+  );
+  assertIdem_(
+    Number(result.created || 0) === 0,
+    'Preview must create zero cycles'
   );
 }
 
