@@ -2,6 +2,20 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery B gate — signature recovery
+
+Run `runV31SignatureTests_()` and retain its structured report. The suite covers
+attempt/canonical names, provenance, every safe-trash predicate, recovered-file
+preservation, folder-selection decisions, legacy matching, missing/conflicting
+fields, normalized winner preservation, and explicit superseded responses.
+
+**Requires Daniel Sandbox:** real Drive zero/one/multiple folder provisioning,
+crash after folder creation before settings persistence, concurrent
+provisioning, inaccessible and wrong-parent configured folders, concurrent
+signature submissions, trash/movement permission failures, both final PDFs,
+mobile signing, and confirmation that the recovery folder has no public/link,
+manager, or employee access. Do not mark these passed without recorded evidence.
+
 ## Delivery A gate — production candidate and triggers
 
 Run from the Apps Script editor:

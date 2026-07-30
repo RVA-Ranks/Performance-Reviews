@@ -1634,6 +1634,7 @@ function renderAutomationPanel(automation) {
   const compensationConfigured = !!automation.compensationAdjustmentUrl;
   const automationOwner = automation.automationOwnerEmail || 'Not configured';
   const ownerMatches = !!automation.triggerOwnerMatches;
+  const recoveryFolder = automation.signatureRecoveryFolder || {};
 
   return '<div class="automation-hero">' +
     '<div class="card"><div class="card-header"><div><h2>Review Automation</h2><p>Automatically launches six-month and annual reviews four weeks before the employee anniversary.</p></div><span class="automation-mode ' +
@@ -1673,6 +1674,14 @@ function renderAutomationPanel(automation) {
     '<br><span class="field-help">' +
     escapeHtml(automation.triggerOwnerWarning || '') +
     '</span></span></div>' +
+    '<div class="automation-check"><span>' +
+    (recoveryFolder.folderId && !recoveryFolder.warning ? '✓' : '!') +
+    '</span><span><strong>Signature recovery:</strong> ' +
+    (recoveryFolder.folderUrl
+      ? '<a href="' + escapeAttr(recoveryFolder.folderUrl) + '" target="_blank" rel="noopener">Open restricted folder</a>'
+      : escapeHtml(recoveryFolder.folderId || 'Not provisioned')) +
+    (recoveryFolder.warning ? '<br><span class="field-help">' + escapeHtml(recoveryFolder.warning) + '</span>' : '') +
+    '<br><span class="field-help">Daniel must verify no public/link, manager, or employee access.</span></span></div>' +
     '<div class="automation-check"><span>' +
     (compensationConfigured ? '✓' : '!') +
     '</span><span><strong>Compensation app:</strong> ' +
@@ -1939,6 +1948,7 @@ function renderCycleWorkspace() {
   document.getElementById('cycleView').innerHTML =
     '<div class="cycle-hero"><div class="cycle-hero-top"><div><button class="breadcrumb-button" onclick="navigate(\'reviews\')">‹ Back to reviews</button><h1>' + escapeHtml(cycle.employeeName) + ' — ' + escapeHtml(cycle.reviewType) + '</h1><p>' + escapeHtml(cycle.employeeJobTitle) + ' · ' + escapeHtml(cycle.departmentProject) + ' · Meeting ' + escapeHtml(cycle.reviewMeetingDate) + '</p></div>' +
     '<div class="cycle-hero-actions button-row">' + statusPill(cycle.status) + renderCycleHeaderActions(cycle) + '</div></div>' + renderTimeline(cycle.lifecycle) + '</div>' +
+    renderSignatureRecoveryWarning(cycle) +
     '<div class="cycle-tabs">' + tabs.map(function(tab) { return '<button class="cycle-tab ' + (tab.key === currentCycleTab ? 'active' : '') + '" onclick="activateCycleTab(\'' + tab.key + '\')">' + escapeHtml(tab.label) + (tab.attention ? '<span class="tab-dot"></span>' : '') + '</button>'; }).join('') + '</div>' +
     '<div id="cycleTabContent"></div>';
   renderActiveCycleTab();
@@ -1955,7 +1965,7 @@ function renderCycleHeaderActions(cycle) {
         html += '<button class="button outline" onclick="openPdfReconcileModal()">Reconcile PDF</button>';
       }
     }
-    if (cycle.v31.signatureClaims && cycle.v31.signatureClaims.needsAttention) {
+    if (cycle.v31.signatureClaims && cycle.v31.signatureClaims.reconciliationRequired) {
       html += '<button class="button outline" onclick="openSignatureReconcileModal()">Reconcile Signature</button>';
     }
     if (!cycle.v31.launchComplete) {
@@ -1981,6 +1991,17 @@ function renderCycleHeaderActions(cycle) {
   if (cycle.canDownloadManager) html += '<button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button>';
   if (cycle.canDownloadSelf) html += '<button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button>';
   return html;
+}
+
+function renderSignatureRecoveryWarning(cycle) {
+  const claims = cycle && cycle.v31 && cycle.v31.signatureClaims;
+  const warnings = claims && claims.recoveryWarnings
+    ? claims.recoveryWarnings
+    : [];
+  if (!cycle.isHr || !warnings.length) return '';
+  return '<div class="guidance-card" style="margin:14px 0"><strong>Signature recovery attention</strong><p>' +
+    warnings.map(escapeHtml).join('<br>') +
+    '</p></div>';
 }
 
 async function retryIncompleteLaunch() {

@@ -1,4 +1,14 @@
 # AITHERAS Performance Review Portal
+
+## Delivery B signature recovery
+
+`upgradeToV31_()` provisions or reuses the direct-child
+`AITHERAS Signature Recovery` folder and blocks on invalid configured IDs or
+multiple valid exact-name matches. Role-level signature fields are authoritative;
+document-specific fields remain compatibility mirrors. Signature attempts create
+provenance-marked staging files, commit one winner under the review-data lock,
+then disposition losers after releasing that lock. Cleanup failure never rolls
+back a `Signed` winner. Operational-alert delivery remains Delivery C work.
 ## Complete Product and Engineering Handoff for Cursor and Coder Coach GPT
 
 **Current working package:** V3.1  

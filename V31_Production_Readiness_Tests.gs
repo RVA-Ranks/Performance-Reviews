@@ -21,6 +21,10 @@ function runV31ProductionReadinessTests_() {
         testReadinessBlankOwnerBlocks_
       ),
       triggerTestCase_(
+        'Blank signature recovery setting blocks readiness',
+        testReadinessBlankSignatureRecoveryBlocks_
+      ),
+      triggerTestCase_(
         'Production fault injection blocks readiness',
         testReadinessProductionFaultBlocks_
       ),
@@ -55,6 +59,8 @@ function readinessSettingsFixture_() {
   values.ENVIRONMENT = 'Production';
   values.AUTOMATION_MODE = 'Preview';
   values.AUTOMATION_TRIGGER_HOUR = '8';
+  values.SYSTEM_ADMIN_EMAIL = 'aitheras-hr@aitheras.com';
+  values.SIGNATURE_RECOVERY_FOLDER_ID = 'test-recovery-folder';
   values.ENABLE_FAULT_INJECTION = 'false';
   return values;
 }
@@ -73,6 +79,8 @@ function testReadinessSettingsPresent_() {
     'APP_VERSION',
     'ENVIRONMENT',
     'AUTOMATION_OWNER_EMAIL',
+    'SYSTEM_ADMIN_EMAIL',
+    'SIGNATURE_RECOVERY_FOLDER_ID',
     'AUTOMATION_TRIGGER_UNIQUE_ID',
     'AUTOMATION_TRIGGER_INSTALLED_AT',
     'AUTOMATION_LAST_RUN',
@@ -111,6 +119,24 @@ function testReadinessBlankOwnerBlocks_() {
       return row.code === 'AUTOMATION_OWNER_REQUIRED';
     }),
     'Owner blocker must be explicit.'
+  );
+}
+
+function testReadinessBlankSignatureRecoveryBlocks_() {
+  const settings = readinessSettingsFixture_();
+  settings.SIGNATURE_RECOVERY_FOLDER_ID = '';
+  const report = buildProductionReadinessReport_(
+    settings,
+    healthyPreviewTriggerFixture_(settings),
+    { liveProbes: false }
+  );
+  assertTriggerTest_(
+    report.blocking.some(function (row) {
+      return (
+        row.code === 'SIGNATURE_RECOVERY_FOLDER_REQUIRED'
+      );
+    }),
+    'Blank signature recovery folder must block readiness.'
   );
 }
 

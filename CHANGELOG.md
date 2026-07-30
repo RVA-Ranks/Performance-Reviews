@@ -1,5 +1,14 @@
 # V3.1 Changelog
 
+## Delivery B — crash-safe signatures
+
+- Added authoritative role-level signature status, file ID, signed timestamp, attempt, and error fields while preserving both document mirrors.
+- Added attempt-specific artifacts, provenance markers, lock-protected winner commits, and post-lock loser trash/quarantine handling.
+- Added idempotent `AITHERAS Signature Recovery` provisioning under the review folder; invalid configured IDs and ambiguous matches block migration.
+- Matching legacy IDs normalize to `Signed`; missing, conflicting, or invalid IDs become `Delivery Unknown` without invented attempt IDs.
+- Added HR artifact provenance and cleanup warnings plus `V31_Signature_Tests.gs`.
+- Confirmed automation owner and system admin as `aitheras-hr@aitheras.com`; durable operational alerts remain Delivery C work.
+
 ## Production candidate freeze
 
 - Identified the deployed build as `3.1-production-candidate` in bootstrap data and HR Administration

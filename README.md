@@ -128,9 +128,8 @@ Run:
 Approve the new permissions.
 
 V3.1 adds Calendar access and permission to create the daily installable trigger.
-`AUTOMATION_OWNER_EMAIL` has no fallback and must be set explicitly to the
-Daniel-approved AITHERAS account. Until then, upgrade forces Preview and Live
-activation is blocked. Only that effective user may install, replace, or
+The confirmed `AUTOMATION_OWNER_EMAIL` and `SYSTEM_ADMIN_EMAIL` are
+`aitheras-hr@aitheras.com`. Only that effective user may install, replace, or
 migrate automation triggers. Apps Script cannot see triggers owned by other
 editors, so every former administrator must also remove legacy review
 automation triggers from **My Triggers**.
@@ -141,8 +140,12 @@ The upgrade adds:
 - New automation settings
 - `Review Automation` checkbox column in `EmployeeAssignments`
 - Calendar, due-date, automation, and compensation fields in `ReviewCycles`
+- Authoritative role-level signature state fields
+- A restricted direct-child folder named `AITHERAS Signature Recovery`; the
+  upgrade reuses one exact match and blocks if multiple matches exist
 
-It does not send anything.
+It does not send anything. It validates existing signature files outside the
+review-data lock, then reloads each row before applying additive normalization.
 
 ### 4. Update the deployment
 
@@ -165,15 +168,14 @@ Open the web app as HR and go to:
 Then:
 
 1. Confirm `ENVIRONMENT=Production`
-2. Enter the approved `AUTOMATION_OWNER_EMAIL` directly in ReviewSettings
-3. Confirm `ENABLE_FAULT_INJECTION=false`
-4. Paste the live Compensation Adjustment workflow URL
-5. Confirm the 28-day notice
-6. Confirm the 7-day form deadline
-7. Confirm the calendar and event time
-8. Review the upcoming-review preview
-9. Run `runProductionReadinessChecks_({liveProbes:false})`
-10. Do not enable Live until Daniel's sandbox evidence has zero blockers
+2. Confirm both owner/admin email settings are `aitheras-hr@aitheras.com`
+3. Verify the signature recovery folder has no public/link sharing and no manager or employee access
+4. Confirm `ENABLE_FAULT_INJECTION=false`
+5. Paste the live Compensation Adjustment workflow URL
+6. Confirm the 28-day notice, 7-day deadline, calendar, and event time
+7. Review the upcoming-review preview
+8. Run `runProductionReadinessChecks_({liveProbes:false})`
+9. Do not enable Live until Daniel's sandbox evidence has zero blockers
 
 ### 6. Confirm employee assignments
 

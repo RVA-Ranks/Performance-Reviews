@@ -34,7 +34,9 @@ const V31 = Object.freeze({
     AUTOMATION_LAST_SUCCESS: '',
     AUTOMATION_LAST_FAILURE: '',
     AUTOMATION_LAST_ERROR: '',
-    AUTOMATION_OWNER_EMAIL: '',
+    AUTOMATION_OWNER_EMAIL: 'aitheras-hr@aitheras.com',
+    SYSTEM_ADMIN_EMAIL: 'aitheras-hr@aitheras.com',
+    SIGNATURE_RECOVERY_FOLDER_ID: '',
     AUTOMATION_TRIGGER_UNIQUE_ID: '',
     AUTOMATION_TRIGGER_INSTALLED_AT: '',
     ENABLE_FAULT_INJECTION: 'false',
@@ -88,12 +90,21 @@ const V31 = Object.freeze({
     'Manager Signature Status',
     'Manager Signature Attempt ID',
     'Manager Signature Started At',
+    'Manager Signature Last Error',
+    'Manager Signature File ID',
+    'Manager Signed At',
     'Employee Signature Status',
     'Employee Signature Attempt ID',
     'Employee Signature Started At',
+    'Employee Signature Last Error',
+    'Employee Signature File ID',
+    'Employee Signed At',
     'HR Signature Status',
     'HR Signature Attempt ID',
     'HR Signature Started At',
+    'HR Signature Last Error',
+    'HR Signature File ID',
+    'HR Signed At',
     'Ready Notification Status',
     'Ready Notification Attempt ID',
     'Ready Notification Started At',
@@ -158,6 +169,14 @@ const V31 = Object.freeze({
     SUPERSEDED: 'Superseded',
   },
 
+  SIGNATURE: {
+    PENDING: 'Pending',
+    SIGNING: 'Signing',
+    SIGNED: 'Signed',
+    UNKNOWN: 'Delivery Unknown',
+    FAILED: 'Failed',
+  },
+
   CALENDAR: {
     PENDING: 'Pending',
     CREATING: 'Creating',
@@ -173,6 +192,19 @@ const V31 = Object.freeze({
 
 function upgradeToV31_() {
   ensureV31DataModel_();
+  ensureConfirmedAdminSettings_();
+  let signatureFolder;
+  let signatureMigration;
+  try {
+    signatureFolder = provisionSignatureRecoveryFolder_();
+    signatureMigration = migrateLegacySignatureRoleFields_();
+  } catch (error) {
+    persistAutomationSettings_({ AUTOMATION_MODE: 'Preview' });
+    throw new Error(
+      'Signature recovery migration blocked; automation remains Preview. ' +
+        String(error.message || error)
+    );
+  }
   const settings = getSettings_();
   const ownerEmail = normalizeEmail_(
     settings.AUTOMATION_OWNER_EMAIL
@@ -199,6 +231,13 @@ function upgradeToV31_() {
       '\n\n' +
       'Trigger migration: ' +
       triggerMigration.message +
+      '\nSignature recovery folder: ' +
+      signatureFolder.action +
+      ' (' +
+      signatureFolder.folderId +
+      ')' +
+      '\nLegacy signature rows normalized: ' +
+      String(signatureMigration.updated || 0) +
       '\n\n' +
       'Next:\n' +
       '1. Open the web app as HR.\n' +
@@ -207,6 +246,22 @@ function upgradeToV31_() {
       '4. Preview upcoming reviews.\n' +
       '5. Enable Live Automation only after the preview is correct.'
   );
+}
+
+function ensureConfirmedAdminSettings_() {
+  const settings = getSettings_();
+  const values = {};
+  if (!normalizeEmail_(settings.AUTOMATION_OWNER_EMAIL)) {
+    values.AUTOMATION_OWNER_EMAIL =
+      'aitheras-hr@aitheras.com';
+  }
+  if (!normalizeEmail_(settings.SYSTEM_ADMIN_EMAIL)) {
+    values.SYSTEM_ADMIN_EMAIL = 'aitheras-hr@aitheras.com';
+  }
+  if (Object.keys(values).length) {
+    persistAutomationSettings_(values);
+  }
+  return getSettings_();
 }
 
 function ensureV31DataModel_() {
@@ -288,6 +343,527 @@ function ensureV31DataModel_() {
 
   formatSingleSheet_(log);
   protectV31Sheet_(log);
+}
+
+function validateSignatureRecoveryFolder_(
+  folderId,
+  reviewFolderId,
+  requireRestricted
+) {
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(String(folderId || ''));
+  } catch (error) {
+    throw new Error(
+      'SIGNATURE_RECOVERY_FOLDER_ID is configured but inaccessible. Correct or clear the setting.'
+    );
+  }
+
+  if (
+    folder.getId() === String(reviewFolderId || '') ||
+    folder.getName() !== 'AITHERAS Signature Recovery' ||
+    (typeof folder.isTrashed === 'function' && folder.isTrashed())
+  ) {
+    throw new Error(
+      'SIGNATURE_RECOVERY_FOLDER_ID is configured but invalid. Correct or clear the setting.'
+    );
+  }
+
+  let directChild = false;
+  const parents = folder.getParents();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === String(reviewFolderId || '')) {
+      directChild = true;
+      break;
+    }
+  }
+
+  if (!directChild) {
+    throw new Error(
+      'SIGNATURE_RECOVERY_FOLDER_ID must be a direct child of REVIEW_FOLDER_ID. Correct or clear the setting.'
+    );
+  }
+
+  const checkRestricted = requireRestricted !== false;
+  if (
+    checkRestricted &&
+    typeof folder.getSharingAccess === 'function' &&
+    folder.getSharingAccess() !== DriveApp.Access.PRIVATE
+  ) {
+    throw new Error(
+      'SIGNATURE_RECOVERY_FOLDER_ID must not use public, domain, or link sharing.'
+    );
+  }
+
+  const allowed = checkRestricted
+    ? getAllowedSignatureRecoveryEmails_()
+    : {};
+  const unauthorized = []
+    .concat(folder.getEditors ? folder.getEditors() : [])
+    .concat(folder.getViewers ? folder.getViewers() : [])
+    .map(function (user) {
+      return normalizeEmail_(user.getEmail());
+    })
+    .filter(function (email) {
+      return email && !allowed[email];
+    });
+  if (checkRestricted && unauthorized.length) {
+    throw new Error(
+      'SIGNATURE_RECOVERY_FOLDER_ID has non-HR access that must be removed: ' +
+        unauthorized.join(', ')
+    );
+  }
+
+  return {
+    folder: folder,
+    folderId: folder.getId(),
+    folderName: folder.getName(),
+    folderUrl: folder.getUrl(),
+  };
+}
+
+function getAllowedSignatureRecoveryEmails_() {
+  const allowed = {};
+  const settings = getSettings_();
+  [
+    settings.AUTOMATION_OWNER_EMAIL,
+    settings.SYSTEM_ADMIN_EMAIL,
+    Session.getEffectiveUser().getEmail(),
+  ]
+    .concat(
+      getAllObjects_(PR.SHEETS.HR)
+        .filter(function (row) {
+          return (
+            row.Active === true ||
+            String(row.Active).toLowerCase() === 'true'
+          );
+        })
+        .map(function (row) {
+          return row.Email;
+        })
+    )
+    .forEach(function (email) {
+      const normalized = normalizeEmail_(email);
+      if (normalized) allowed[normalized] = true;
+    });
+  return allowed;
+}
+
+function restrictSignatureRecoveryFolder_(folder) {
+  folder.setSharing(
+    DriveApp.Access.PRIVATE,
+    DriveApp.Permission.NONE
+  );
+  const allowed = getAllowedSignatureRecoveryEmails_();
+  []
+    .concat(folder.getEditors ? folder.getEditors() : [])
+    .concat(folder.getViewers ? folder.getViewers() : [])
+    .forEach(function (user) {
+      const email = normalizeEmail_(user.getEmail());
+      if (!email || allowed[email]) return;
+      try {
+        folder.removeEditor(email);
+      } catch (editorError) {}
+      try {
+        folder.removeViewer(email);
+      } catch (viewerError) {}
+    });
+}
+
+function decideSignatureRecoveryFolderProvisioning_(candidates) {
+  const count = (candidates || []).length;
+  return count === 0
+    ? { action: 'create' }
+    : count === 1
+    ? { action: 'reuse', candidate: candidates[0] }
+    : {
+        action: 'block',
+        code: 'MULTIPLE_SIGNATURE_RECOVERY_FOLDERS',
+        candidates: candidates,
+      };
+}
+
+function provisionSignatureRecoveryFolder_() {
+  const initial = getSettings_();
+  const reviewFolderId = String(initial.REVIEW_FOLDER_ID || '');
+  if (!reviewFolderId) {
+    throw new Error(
+      'REVIEW_FOLDER_ID must be configured before provisioning signature recovery.'
+    );
+  }
+
+  try {
+    DriveApp.getFolderById(reviewFolderId).getName();
+  } catch (error) {
+    throw new Error(
+      'REVIEW_FOLDER_ID is inaccessible. Signature recovery cannot be provisioned.'
+    );
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error(
+      'Another signature recovery folder migration is in progress.'
+    );
+  }
+
+  try {
+    const settings = getSettings_();
+    const configured = String(
+      settings.SIGNATURE_RECOVERY_FOLDER_ID || ''
+    );
+    if (configured) {
+      const preserved = validateSignatureRecoveryFolder_(
+        configured,
+        reviewFolderId
+      );
+      preserved.action = 'preserved';
+      return preserved;
+    }
+
+    const reviewFolder = DriveApp.getFolderById(reviewFolderId);
+    const folders = reviewFolder.getFoldersByName(
+      'AITHERAS Signature Recovery'
+    );
+    const candidates = [];
+    while (folders.hasNext()) {
+      const folder = folders.next();
+      try {
+        candidates.push(
+          validateSignatureRecoveryFolder_(
+            folder.getId(),
+            reviewFolderId,
+            false
+          )
+        );
+      } catch (error) {}
+    }
+
+    const decision =
+      decideSignatureRecoveryFolderProvisioning_(candidates);
+    if (decision.action === 'block') {
+      const failure = new Error(
+        'Multiple direct child folders named AITHERAS Signature Recovery were found. HR must select one explicitly.'
+      );
+      failure.code = 'MULTIPLE_SIGNATURE_RECOVERY_FOLDERS';
+      failure.candidates = candidates.map(function (candidate) {
+        return {
+          folderId: candidate.folderId,
+          folderName: candidate.folderName,
+          folderUrl: candidate.folderUrl,
+        };
+      });
+      throw failure;
+    }
+
+    let selected;
+    let action;
+    if (decision.action === 'reuse') {
+      selected = decision.candidate;
+      action = 'recovered';
+    } else {
+      const created = reviewFolder.createFolder(
+        'AITHERAS Signature Recovery'
+      );
+      selected = validateSignatureRecoveryFolder_(
+        created.getId(),
+        reviewFolderId,
+        false
+      );
+      action = 'created';
+    }
+
+    restrictSignatureRecoveryFolder_(selected.folder);
+    selected = validateSignatureRecoveryFolder_(
+      selected.folderId,
+      reviewFolderId
+    );
+
+    persistAutomationSettings_({
+      SIGNATURE_RECOVERY_FOLDER_ID: selected.folderId,
+    });
+    if (
+      String(
+        getSettings_().SIGNATURE_RECOVERY_FOLDER_ID || ''
+      ) !== selected.folderId
+    ) {
+      throw new Error(
+        'Signature recovery folder setting could not be verified.'
+      );
+    }
+
+    selected.action = action;
+    return selected;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getLegacySignatureMirrorFields_(role) {
+  if (role === PR.ROLE.MANAGER) {
+    return {
+      managerId: 'MGR Manager Signature ID',
+      selfId: 'SELF Manager Signature ID',
+      managerAt: 'MGR Manager Signed At',
+      selfAt: 'SELF Manager Signed At',
+    };
+  }
+  if (role === PR.ROLE.EMPLOYEE) {
+    return {
+      managerId: 'MGR Employee Signature ID',
+      selfId: 'SELF Employee Signature ID',
+      managerAt: 'MGR Employee Signed At',
+      selfAt: 'SELF Employee Signed At',
+    };
+  }
+  return {
+    managerId: 'MGR HR Signature ID',
+    selfId: 'SELF HR Signature ID',
+    managerAt: 'MGR HR Signed At',
+    selfAt: 'SELF HR Signed At',
+  };
+}
+
+function validateLegacySignatureArtifact_(
+  cycleId,
+  role,
+  fileId,
+  settings
+) {
+  try {
+    const file = DriveApp.getFileById(fileId);
+    const inReview = isDriveFileInFolder_(
+      file,
+      settings.REVIEW_FOLDER_ID
+    );
+    const inRecovery =
+      settings.SIGNATURE_RECOVERY_FOLDER_ID &&
+      isDriveFileInFolder_(
+        file,
+        settings.SIGNATURE_RECOVERY_FOLDER_ID
+      );
+    const name = String(file.getName() || '');
+    const roleToken = signatureRoleToken_(role);
+    return (
+      String(file.getMimeType() || '') === 'image/png' &&
+      (inReview || inRecovery) &&
+      (name.indexOf(String(cycleId)) >= 0 ||
+        String(file.getDescription() || '').indexOf(
+          'cycleId=' + String(cycleId)
+        ) >= 0) &&
+      (name.toUpperCase().indexOf(roleToken) >= 0 ||
+        String(file.getDescription() || '').indexOf(
+          'role=' + roleToken
+        ) >= 0)
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+function planLegacySignatureNormalization_(
+  cycle,
+  role,
+  settings,
+  validateFile
+) {
+  const validator =
+    validateFile || validateLegacySignatureArtifact_;
+  const fields = getSignatureClaimFields_(role);
+  const mirrors = getLegacySignatureMirrorFields_(role);
+  const normalizedId = String(cycle[fields.fileField] || '');
+  const managerId = String(cycle[mirrors.managerId] || '');
+  const selfId = String(cycle[mirrors.selfId] || '');
+  const hasAuthoritativeMetadata = [
+    cycle[fields.fileField],
+    cycle[fields.attemptField],
+    cycle[fields.startedField],
+    cycle[fields.errorField],
+    cycle[fields.signedAtField],
+  ].some(function (value) {
+    return value !== '' && value != null;
+  });
+  const plan = {
+    role: role,
+    snapshotNormalizedId: normalizedId,
+    snapshotManagerId: managerId,
+    snapshotSelfId: selfId,
+    status: '',
+    fileId: normalizedId,
+    signedAt: cycle[fields.signedAtField] || '',
+    error: '',
+    event: '',
+  };
+
+  if (hasAuthoritativeMetadata) {
+    plan.status = String(cycle[fields.statusField] || '');
+    plan.error = String(cycle[fields.errorField] || '');
+    plan.event = 'normalized-role-preserved';
+    plan.preserve = true;
+    return plan;
+  }
+
+  if (normalizedId) {
+    const valid = validator(
+      cycle['Cycle ID'],
+      role,
+      normalizedId,
+      settings
+    );
+    if (
+      valid &&
+      managerId === normalizedId &&
+      selfId === normalizedId
+    ) {
+      plan.status = V31.SIGNATURE.SIGNED;
+      plan.event =
+        String(cycle[fields.statusField] || '') ===
+          V31.SIGNATURE.SIGNED &&
+        !String(cycle[fields.errorField] || '')
+          ? 'already-normalized'
+          : 'normalized-role-preserved';
+    } else {
+      plan.status = V31.SIGNATURE.UNKNOWN;
+      plan.error =
+        'Normalized signature data conflicts with document mirrors and requires HR reconciliation.';
+      plan.event = 'normalized-role-inconsistent';
+    }
+    return plan;
+  }
+
+  if (managerId && selfId && managerId === selfId) {
+    if (
+      validator(
+        cycle['Cycle ID'],
+        role,
+        managerId,
+        settings
+      )
+    ) {
+      plan.status = V31.SIGNATURE.SIGNED;
+      plan.fileId = managerId;
+      plan.signedAt =
+        cycle[mirrors.managerAt] || cycle[mirrors.selfAt] || '';
+      plan.event = 'legacy-signature-normalized';
+    } else {
+      plan.status = V31.SIGNATURE.UNKNOWN;
+      plan.error =
+        'Legacy signature file could not be validated and requires HR reconciliation.';
+      plan.event = 'legacy-signature-invalid';
+    }
+    return plan;
+  }
+
+  if (managerId || selfId) {
+    plan.status = V31.SIGNATURE.UNKNOWN;
+    plan.error =
+      managerId && selfId
+        ? 'Legacy signature fields conflict and require HR reconciliation.'
+        : 'Legacy signature fields are incomplete and require HR reconciliation.';
+    plan.event = managerId && selfId
+      ? 'legacy-signature-conflict'
+      : 'legacy-signature-incomplete';
+    return plan;
+  }
+
+  plan.status = V31.SIGNATURE.PENDING;
+  plan.event = 'no-legacy-signature';
+  return plan;
+}
+
+function migrateLegacySignatureRoleFields_() {
+  const settings = getSettings_();
+  const cycles = getAllObjects_(PR.SHEETS.CYCLES);
+  let updated = 0;
+  let skipped = 0;
+
+  cycles.forEach(function (snapshot) {
+    const plans = [
+      PR.ROLE.MANAGER,
+      PR.ROLE.EMPLOYEE,
+      PR.ROLE.HR,
+    ].map(function (role) {
+      return planLegacySignatureNormalization_(
+        snapshot,
+        role,
+        settings
+      );
+    });
+
+    plans.forEach(function (plan) {
+      if (
+        plan.event === 'no-legacy-signature' ||
+        plan.event === 'already-normalized' ||
+        plan.preserve === true
+      ) {
+        return;
+      }
+      const snapshotFields = getSignatureClaimFields_(
+        plan.role
+      );
+      if (
+        String(snapshot[snapshotFields.statusField] || '') ===
+          plan.status &&
+        String(snapshot[snapshotFields.fileField] || '') ===
+          String(plan.fileId || '') &&
+        String(snapshot[snapshotFields.errorField] || '') ===
+          String(plan.error || '')
+      ) {
+        return;
+      }
+      const applied = withLock_(function () {
+        const location = findCycle_(snapshot['Cycle ID']);
+        const cycle = location.object;
+        const fields = getSignatureClaimFields_(plan.role);
+        const mirrors = getLegacySignatureMirrorFields_(plan.role);
+
+        if (
+          String(cycle[fields.fileField] || '') !==
+            plan.snapshotNormalizedId ||
+          String(cycle[mirrors.managerId] || '') !==
+            plan.snapshotManagerId ||
+          String(cycle[mirrors.selfId] || '') !==
+            plan.snapshotSelfId
+        ) {
+          return false;
+        }
+
+        cycle[fields.statusField] = plan.status;
+        cycle[fields.fileField] = plan.fileId;
+        cycle[fields.signedAtField] = plan.signedAt;
+        cycle[fields.errorField] = plan.error;
+        cycle[fields.attemptField] =
+          cycle[fields.attemptField] || '';
+        cycle['Updated At'] = new Date();
+        writeCycle_(location.rowNumber, cycle);
+        SpreadsheetApp.flush();
+        return true;
+      });
+
+      if (!applied) {
+        skipped++;
+        return;
+      }
+      updated++;
+      audit_(
+        snapshot['Cycle ID'],
+        'Legacy signature normalized',
+        getEffectiveAutomationUserEmail_(),
+        plan.role,
+        plan.status,
+        JSON.stringify({
+          schemaVersion: 1,
+          event: plan.event,
+          source: 'legacy-document-fields',
+          attemptId: null,
+          managerDocumentFileId: plan.snapshotManagerId,
+          selfDocumentFileId: plan.snapshotSelfId,
+        })
+      );
+    });
+  });
+
+  return { ok: true, updated: updated, skipped: skipped };
 }
 
 function formatSingleSheet_(sheet) {
@@ -493,13 +1069,37 @@ function getV31CycleData_(cycle, email, isHr) {
           hrUnknown:
             String(cycle['HR Signature Status'] || '') ===
             V31.DELIVERY.UNKNOWN,
-          needsAttention:
+          managerError: String(
+            cycle['Manager Signature Last Error'] || ''
+          ),
+          employeeError: String(
+            cycle['Employee Signature Last Error'] || ''
+          ),
+          hrError: String(
+            cycle['HR Signature Last Error'] || ''
+          ),
+          recoveryWarnings: [
+            String(cycle['Manager Signature Last Error'] || ''),
+            String(cycle['Employee Signature Last Error'] || ''),
+            String(cycle['HR Signature Last Error'] || ''),
+          ].filter(Boolean),
+          reconciliationRequired:
             String(cycle['Manager Signature Status'] || '') ===
               V31.DELIVERY.UNKNOWN ||
             String(cycle['Employee Signature Status'] || '') ===
               V31.DELIVERY.UNKNOWN ||
             String(cycle['HR Signature Status'] || '') ===
               V31.DELIVERY.UNKNOWN,
+          needsAttention:
+            String(cycle['Manager Signature Status'] || '') ===
+              V31.DELIVERY.UNKNOWN ||
+            String(cycle['Employee Signature Status'] || '') ===
+              V31.DELIVERY.UNKNOWN ||
+            String(cycle['HR Signature Status'] || '') ===
+              V31.DELIVERY.UNKNOWN ||
+            !!cycle['Manager Signature Last Error'] ||
+            !!cycle['Employee Signature Last Error'] ||
+            !!cycle['HR Signature Last Error'],
         }
       : null,
     daysUntilMeeting: daysUntilMeeting,
@@ -867,6 +1467,24 @@ function getAutomationAdminData_() {
   const ownerEmail = normalizeEmail_(
     settings.AUTOMATION_OWNER_EMAIL
   );
+  let signatureRecoveryFolder = {
+    folderId: String(
+      settings.SIGNATURE_RECOVERY_FOLDER_ID || ''
+    ),
+    folderUrl: '',
+    warning: '',
+  };
+  try {
+    const validated = validateSignatureRecoveryFolder_(
+      settings.SIGNATURE_RECOVERY_FOLDER_ID,
+      settings.REVIEW_FOLDER_ID
+    );
+    signatureRecoveryFolder.folderUrl = validated.folderUrl;
+  } catch (error) {
+    signatureRecoveryFolder.warning = String(
+      error.message || error
+    );
+  }
 
   return {
     appVersion: APP_VERSION,
@@ -913,6 +1531,10 @@ function getAutomationAdminData_() {
         );
       }),
     automationOwnerEmail: ownerEmail,
+    systemAdminEmail: normalizeEmail_(
+      settings.SYSTEM_ADMIN_EMAIL
+    ),
+    signatureRecoveryFolder: signatureRecoveryFolder,
     effectiveAutomationUser: effectiveEmail,
     triggerUniqueId: String(
       settings.AUTOMATION_TRIGGER_UNIQUE_ID || ''
@@ -1863,6 +2485,8 @@ function buildProductionReadinessReport_(
     'APP_VERSION',
     'ENVIRONMENT',
     'AUTOMATION_OWNER_EMAIL',
+    'SYSTEM_ADMIN_EMAIL',
+    'SIGNATURE_RECOVERY_FOLDER_ID',
     'AUTOMATION_MODE',
     'AUTOMATION_TRIGGER_HOUR',
     'AUTOMATION_TRIGGER_UNIQUE_ID',
@@ -1912,6 +2536,22 @@ function buildProductionReadinessReport_(
       code: 'AUTOMATION_OWNER_REQUIRED',
       message:
         'AUTOMATION_OWNER_EMAIL must be explicitly configured before Live activation.',
+    });
+  }
+
+  if (!normalizeEmail_(settings.SYSTEM_ADMIN_EMAIL)) {
+    blocking.push({
+      code: 'SYSTEM_ADMIN_REQUIRED',
+      message:
+        'SYSTEM_ADMIN_EMAIL must be explicitly configured.',
+    });
+  }
+
+  if (!String(settings.SIGNATURE_RECOVERY_FOLDER_ID || '')) {
+    blocking.push({
+      code: 'SIGNATURE_RECOVERY_FOLDER_REQUIRED',
+      message:
+        'SIGNATURE_RECOVERY_FOLDER_ID must be provisioned before production readiness can pass.',
     });
   }
 
@@ -1974,11 +2614,36 @@ function buildProductionReadinessReport_(
 
 function runProductionReadinessChecks_(options) {
   const settings = getSettings_();
-  return buildProductionReadinessReport_(
+  const report = buildProductionReadinessReport_(
     settings,
     getAutomationTriggerHealth_(settings),
     options || { liveProbes: false }
   );
+  if (settings.SIGNATURE_RECOVERY_FOLDER_ID) {
+    try {
+      const folder = validateSignatureRecoveryFolder_(
+        settings.SIGNATURE_RECOVERY_FOLDER_ID,
+        settings.REVIEW_FOLDER_ID
+      );
+      report.signatureRecoveryFolder = {
+        folderId: folder.folderId,
+        folderUrl: folder.folderUrl,
+        manuallyVerifiedPermissions: false,
+      };
+      report.warnings.push({
+        code: 'MANUAL_FOLDER_PERMISSION_CHECK',
+        message:
+          'Daniel must verify recovery-folder permissions in Sandbox and Production.',
+      });
+    } catch (error) {
+      report.blocking.push({
+        code: 'INVALID_SIGNATURE_RECOVERY_FOLDER',
+        message: String(error.message || error),
+      });
+      report.ok = false;
+    }
+  }
+  return report;
 }
 
 function maybeInjectTriggerFault_(point) {
@@ -2844,10 +3509,30 @@ function applyV31DefaultsToCycle_(
       ? 0
       : Number(cycle['Finalization Attempt Count'] || 0);
 
+  [PR.ROLE.MANAGER, PR.ROLE.EMPLOYEE, PR.ROLE.HR].forEach(
+    function (role) {
+      const fields = getSignatureClaimFields_(role);
+      const oldStatus = String(cycle[fields.statusField] || '');
+      cycle[fields.statusField] =
+        oldStatus === V31.DELIVERY.SENT
+          ? V31.SIGNATURE.SIGNED
+          : oldStatus === V31.DELIVERY.SENDING
+          ? V31.SIGNATURE.SIGNING
+          : oldStatus || V31.SIGNATURE.PENDING;
+      cycle[fields.attemptField] =
+        cycle[fields.attemptField] || '';
+      cycle[fields.startedField] =
+        cycle[fields.startedField] || '';
+      cycle[fields.errorField] =
+        cycle[fields.errorField] || '';
+      cycle[fields.fileField] =
+        cycle[fields.fileField] || '';
+      cycle[fields.signedAtField] =
+        cycle[fields.signedAtField] || '';
+    }
+  );
+
   ensureDeliveryFieldDefaults_(cycle, [
-    ['Manager Signature Status', 'Manager Signature Attempt ID', 'Manager Signature Started At', ''],
-    ['Employee Signature Status', 'Employee Signature Attempt ID', 'Employee Signature Started At', ''],
-    ['HR Signature Status', 'HR Signature Attempt ID', 'HR Signature Started At', ''],
     [
       'Ready Notification Status',
       'Ready Notification Attempt ID',
