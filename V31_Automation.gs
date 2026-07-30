@@ -1287,12 +1287,7 @@ function findReviewAutomationCandidates_(windowDays) {
         automationKey
       ];
 
-      if (existing && isReviewLaunchComplete_(existing)) {
-        return;
-      }
-
-      // Also avoid duplicates created manually for the same employee and period end.
-      const duplicate = cycles.find(
+      const periodCycles = cycles.filter(
         function (cycle) {
           return (
             normalizeEmail_(
@@ -1308,18 +1303,17 @@ function findReviewAutomationCandidates_(windowDays) {
         }
       );
 
-      if (
-        duplicate &&
-        String(
-          duplicate['Cycle ID']
-        ) !==
-          String(
-            existing &&
-              existing['Cycle ID']
-          )
-      ) {
+      const launchTarget =
+        resolveAutomationLaunchTarget_(
+          existing,
+          periodCycles
+        );
+
+      if (launchTarget.skip) {
         return;
       }
+
+      const retryCycle = launchTarget.retryCycle;
 
       const meetingDate =
         v31Boolean_(
@@ -1343,8 +1337,8 @@ function findReviewAutomationCandidates_(windowDays) {
 
       candidates.push({
         automationKey: automationKey,
-        existingCycleId: existing
-          ? String(existing['Cycle ID'])
+        existingCycleId: retryCycle
+          ? String(retryCycle['Cycle ID'])
           : '',
         employeeEmail: employeeEmail,
         employeeName: employeeName,
@@ -1380,12 +1374,14 @@ function findReviewAutomationCandidates_(windowDays) {
         ),
         daysUntilReview:
           v31DaysBetween_(today, reviewDate),
-        status: existing
-          ? describeReviewLaunchStatus_(existing)
+        status: retryCycle
+          ? describeReviewLaunchStatus_(
+              retryCycle
+            )
           : 'Ready to create',
-        launchComponents: existing
+        launchComponents: retryCycle
           ? getReviewLaunchComponentSummary_(
-              existing
+              retryCycle
             )
           : null,
       });
@@ -1703,12 +1699,194 @@ function describeReviewLaunchStatus_(cycle) {
 }
 
 /**
+ * Decide whether automation should skip, create, or retry a cycle for
+ * a candidate review window.
+ *
+ * - Complete period match → skip (no duplicate launch)
+ * - Incomplete automation-key match → retry that cycle
+ * - Incomplete same-employee/period cycle (manual or orphaned) → retry it
+ * - Otherwise → create
+ */
+function resolveAutomationLaunchTarget_(
+  existingByKey,
+  periodCycles
+) {
+  const period = periodCycles || [];
+
+  if (
+    existingByKey &&
+    isReviewLaunchComplete_(existingByKey)
+  ) {
+    return { skip: true, retryCycle: null };
+  }
+
+  const completePeriod = period.find(function (
+    cycle
+  ) {
+    return isReviewLaunchComplete_(cycle);
+  });
+
+  if (completePeriod) {
+    return { skip: true, retryCycle: null };
+  }
+
+  if (
+    existingByKey &&
+    !isReviewLaunchComplete_(existingByKey)
+  ) {
+    return {
+      skip: false,
+      retryCycle: existingByKey,
+    };
+  }
+
+  const incompletePeriod = period.find(function (
+    cycle
+  ) {
+    return !isReviewLaunchComplete_(cycle);
+  });
+
+  return {
+    skip: false,
+    retryCycle: incompletePeriod || null,
+  };
+}
+
+/**
+ * Persist launch progress immediately and flush so concurrent readers
+ * see component timestamps before the next external side effect.
+ */
+function persistLaunchCycle_(rowNumber, cycle) {
+  writeCycle_(rowNumber, cycle);
+  SpreadsheetApp.flush();
+}
+
+function getDefaultLaunchAdapters_() {
+  return {
+    createCalendar: createReviewCalendarEvent_,
+    sendManager: sendV31ManagerLaunchEmail_,
+    sendEmployee: sendV31EmployeeLaunchEmail_,
+    sendHr: sendV31HrLaunchEmail_,
+  };
+}
+
+/**
+ * Core launch orchestration. Used by production and idempotency tests.
+ * adapters may stub Calendar/Mail; persistFn must persist each step.
+ */
+function orchestrateReviewLaunchSteps_(
+  stored,
+  persistFn,
+  adapters
+) {
+  const actions = [];
+  const hooks =
+    adapters || getDefaultLaunchAdapters_();
+
+  if (isReviewLaunchComplete_(stored)) {
+    return {
+      cycle: stored,
+      actions: actions,
+      alreadyComplete: true,
+    };
+  }
+
+  stored['Launch Attempt Count'] =
+    Number(stored['Launch Attempt Count'] || 0) +
+    1;
+  stored['Updated At'] = new Date();
+  persistFn(stored);
+
+  try {
+    if (!stored['Calendar Event ID']) {
+      const event = hooks.createCalendar(stored);
+
+      stored['Calendar Event ID'] =
+        event.getId();
+      stored['Calendar Created At'] =
+        new Date();
+      stored['Calendar Status'] =
+        V31.CALENDAR.CREATED;
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      persistFn(stored);
+      actions.push('calendar');
+    } else if (!stored['Calendar Status']) {
+      stored['Calendar Status'] =
+        V31.CALENDAR.CREATED;
+      stored['Updated At'] = new Date();
+      persistFn(stored);
+    }
+
+    if (!stored['Manager Email Sent At']) {
+      hooks.sendManager(stored);
+      stored['Manager Email Sent At'] =
+        new Date();
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      persistFn(stored);
+      actions.push('manager');
+    }
+
+    if (!stored['Employee Email Sent At']) {
+      hooks.sendEmployee(stored);
+      stored['Employee Email Sent At'] =
+        new Date();
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      persistFn(stored);
+      actions.push('employee');
+    }
+
+    if (!stored['HR Email Sent At']) {
+      hooks.sendHr(stored);
+      stored['HR Email Sent At'] = new Date();
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = new Date();
+      persistFn(stored);
+      actions.push('hr');
+    }
+
+    if (
+      isReviewLaunchComponentsComplete_(stored) &&
+      !stored['Launch Completed At']
+    ) {
+      const completedAt = new Date();
+
+      stored['Launch Completed At'] =
+        completedAt;
+      stored['Automation Notice Sent At'] =
+        stored['Automation Notice Sent At'] ||
+        completedAt;
+      stored['Last Launch Error'] = '';
+      stored['Updated At'] = completedAt;
+      persistFn(stored);
+      actions.push('complete');
+    }
+
+    return {
+      cycle: stored,
+      actions: actions,
+      alreadyComplete: false,
+    };
+  } catch (error) {
+    stored['Last Launch Error'] = String(
+      error.message || error
+    );
+    stored['Updated At'] = new Date();
+    persistFn(stored);
+    throw error;
+  }
+}
+
+/**
  * Create Calendar event and send launch emails with independently
  * persisted completion for each external action.
  *
- * Callers that mutate cycles (createReviewCycle, runReviewAutomation)
- * must already hold LockService.getScriptLock() — script locks are
- * not re-entrant, so this function does not nest another lock.
+ * Callers that mutate cycles (createReviewCycle, runReviewAutomation,
+ * retryReviewLaunch) must already hold LockService.getScriptLock() —
+ * script locks are not re-entrant, so this function does not nest
+ * another lock.
  */
 function launchReviewCycleCommunications_(
   cycle,
@@ -1729,96 +1907,121 @@ function launchReviewCycleCommunications_(
 
     if (needsLegacyPersist) {
       stored['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, stored);
-    }
-
-    return stored;
-  }
-
-  const attemptCount =
-    Number(stored['Launch Attempt Count'] || 0) +
-    1;
-  stored['Launch Attempt Count'] = attemptCount;
-  stored['Updated At'] = new Date();
-  writeCycle_(location.rowNumber, stored);
-
-  try {
-    if (!stored['Calendar Event ID']) {
-      const event = createReviewCalendarEvent_(
+      persistLaunchCycle_(
+        location.rowNumber,
         stored
       );
-
-      stored['Calendar Event ID'] =
-        event.getId();
-      stored['Calendar Created At'] =
-        new Date();
-      stored['Calendar Status'] =
-        V31.CALENDAR.CREATED;
-      stored['Last Launch Error'] = '';
-      stored['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, stored);
-    } else if (!stored['Calendar Status']) {
-      stored['Calendar Status'] =
-        V31.CALENDAR.CREATED;
-      stored['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, stored);
-    }
-
-    if (!stored['Manager Email Sent At']) {
-      sendV31ManagerLaunchEmail_(stored);
-      stored['Manager Email Sent At'] =
-        new Date();
-      stored['Last Launch Error'] = '';
-      stored['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, stored);
-    }
-
-    if (!stored['Employee Email Sent At']) {
-      sendV31EmployeeLaunchEmail_(stored);
-      stored['Employee Email Sent At'] =
-        new Date();
-      stored['Last Launch Error'] = '';
-      stored['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, stored);
-    }
-
-    if (!stored['HR Email Sent At']) {
-      sendV31HrLaunchEmail_(stored);
-      stored['HR Email Sent At'] = new Date();
-      stored['Last Launch Error'] = '';
-      stored['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, stored);
-    }
-
-    if (
-      isReviewLaunchComponentsComplete_(stored) &&
-      !stored['Launch Completed At']
-    ) {
-      const completedAt = new Date();
-
-      stored['Launch Completed At'] =
-        completedAt;
-      stored['Automation Notice Sent At'] =
-        stored['Automation Notice Sent At'] ||
-        completedAt;
-      stored['Last Launch Error'] = '';
-      stored['Updated At'] = completedAt;
-      writeCycle_(location.rowNumber, stored);
     }
 
     return stored;
-  } catch (error) {
-    stored['Last Launch Error'] = String(
-      error.message || error
-    );
-    stored['Updated At'] = new Date();
-    writeCycle_(location.rowNumber, stored);
-    throw error;
   }
+
+  const result = orchestrateReviewLaunchSteps_(
+    stored,
+    function (row) {
+      persistLaunchCycle_(
+        location.rowNumber,
+        row
+      );
+    },
+    getDefaultLaunchAdapters_()
+  );
+
+  return result.cycle;
 }
 
-function createReviewCalendarEvent_(cycle) {
-  const settings = getSettings_();
+/**
+ * HR-only: resume an incomplete launch without clearing completed
+ * component timestamps. Distinct from intentional resend.
+ */
+function retryReviewLaunch(cycleId) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may retry an incomplete review launch.'
+    );
+  }
+
+  return withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] ||
+        'Manual'
+    );
+
+    if (isReviewLaunchComplete_(cycle)) {
+      return {
+        ok: true,
+        alreadyComplete: true,
+        message:
+          'Launch is already complete. Use Resend Instructions if recipients need the emails again.',
+        launchComponents:
+          getReviewLaunchComponentSummary_(cycle),
+      };
+    }
+
+    const before = getReviewLaunchComponentSummary_(
+      cycle
+    );
+    const launched = launchReviewCycleCommunications_(
+      cycle,
+      String(cycle['Cycle Source'] || '') ===
+        'Automated'
+    );
+    const after = getReviewLaunchComponentSummary_(
+      launched
+    );
+
+    audit_(
+      cycleId,
+      'Review launch retried',
+      email,
+      String(cycle['Status']),
+      String(launched['Status'] || cycle['Status']),
+      JSON.stringify({
+        before: before,
+        after: after,
+        attemptCount: Number(
+          launched['Launch Attempt Count'] || 0
+        ),
+      })
+    );
+
+    logReviewAutomation_({
+      mode: String(
+        getSettings_().AUTOMATION_MODE || 'Preview'
+      ),
+      action: 'Launch retried (HR)',
+      employeeEmail: launched['Employee Email'],
+      employeeName: launched['Employee Name'],
+      reviewType: launched['Review Type'],
+      reviewDate: formatDate_(
+        launched['Review Meeting Date']
+      ),
+      cycleId: cycleId,
+      result: isReviewLaunchComplete_(launched)
+        ? 'Success'
+        : 'Partial',
+      details: describeReviewLaunchStatus_(
+        launched
+      ),
+    });
+
+    return {
+      ok: true,
+      alreadyComplete: false,
+      message: isReviewLaunchComplete_(launched)
+        ? 'Launch completed. Calendar and role emails are in place.'
+        : 'Launch still incomplete: ' +
+          describeReviewLaunchStatus_(launched),
+      launchComponents: after,
+    };
+  });
+}
+
+function openReviewCalendar_(settings) {
   const calendarId = String(
     settings.CALENDAR_ID || 'primary'
   );
@@ -1832,6 +2035,62 @@ function createReviewCalendarEvent_(cycle) {
       'The configured Google Calendar could not be opened.'
     );
   }
+
+  return calendar;
+}
+
+/**
+ * Recover an event created in a prior attempt whose ID was never
+ * persisted (crash between createEvent and writeCycle_).
+ */
+function findExistingReviewCalendarEventByTag_(
+  calendar,
+  cycleId,
+  meetingDate
+) {
+  if (!calendar || !cycleId || !meetingDate) {
+    return null;
+  }
+
+  const dayStart = new Date(
+    meetingDate.getFullYear(),
+    meetingDate.getMonth(),
+    meetingDate.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const rangeStart = new Date(
+    dayStart.getTime() - 86400000
+  );
+  const rangeEnd = new Date(
+    dayStart.getTime() + 2 * 86400000
+  );
+  const events = calendar.getEvents(
+    rangeStart,
+    rangeEnd
+  );
+  const wanted = String(cycleId);
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    const tag = String(
+      event.getTag('AITHERAS_REVIEW_CYCLE_ID') ||
+        ''
+    );
+
+    if (tag === wanted) {
+      return event;
+    }
+  }
+
+  return null;
+}
+
+function createReviewCalendarEvent_(cycle) {
+  const settings = getSettings_();
+  const calendar = openReviewCalendar_(settings);
 
   let meetingDate = v31Date_(
     cycle['Review Meeting Date']
@@ -1851,6 +2110,17 @@ function createReviewCalendarEvent_(cycle) {
   ) {
     meetingDate =
       v31ShiftWeekendForward_(meetingDate);
+  }
+
+  const recovered =
+    findExistingReviewCalendarEventByTag_(
+      calendar,
+      cycle['Cycle ID'],
+      meetingDate
+    );
+
+  if (recovered) {
+    return recovered;
   }
 
   const start = new Date(

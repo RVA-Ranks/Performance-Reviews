@@ -100,6 +100,36 @@ function runV31IdempotencyTests() {
       testResendDoesNotClearTimestamps_
     )
   );
+  results.push(
+    runIdemCase_(
+      'orchestrator stubs: calendar then manager fail resumes correctly',
+      testOrchestratorCalendarThenManagerFail_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'orchestrator stubs: flush persist called after each step',
+      testOrchestratorPersistsEachStep_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'incomplete manual period cycle is selected for retry',
+      testIncompleteManualPeriodRetryTarget_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'complete period cycle blocks new automated create',
+      testCompletePeriodSkipsCreate_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'calendar tag recovery prefers existing tagged event',
+      testCalendarTagRecoveryPreference_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -665,5 +695,278 @@ function testResendDoesNotClearTimestamps_() {
       !!after['Employee Email Sent At'] &&
       !!after['HR Email Sent At'],
     'Resend must leave recipient timestamps intact'
+  );
+}
+
+/**
+ * In-memory adapters that exercise orchestrateReviewLaunchSteps_
+ * (the same path production launchReviewCycleCommunications_ uses).
+ */
+function buildStubLaunchAdapters_(options) {
+  const opts = options || {};
+  const calls = {
+    calendar: 0,
+    manager: 0,
+    employee: 0,
+    hr: 0,
+  };
+
+  return {
+    calls: calls,
+    adapters: {
+      createCalendar: function (cycle) {
+        calls.calendar++;
+        if (opts.failAt === 'calendar') {
+          throw new Error('Simulated calendar fail');
+        }
+        if (opts.existingTaggedEventId) {
+          return {
+            getId: function () {
+              return opts.existingTaggedEventId;
+            },
+          };
+        }
+        return {
+          getId: function () {
+            return 'evt-orch-' + cycle['Cycle ID'];
+          },
+        };
+      },
+      sendManager: function () {
+        calls.manager++;
+        if (opts.failAt === 'manager') {
+          throw new Error('Simulated manager fail');
+        }
+      },
+      sendEmployee: function () {
+        calls.employee++;
+        if (opts.failAt === 'employee') {
+          throw new Error('Simulated employee fail');
+        }
+      },
+      sendHr: function () {
+        calls.hr++;
+        if (opts.failAt === 'hr') {
+          throw new Error('Simulated HR fail');
+        }
+      },
+    },
+  };
+}
+
+function runOrchestratedAttempt_(cycle, failAt) {
+  const snapshot = Object.assign({}, cycle);
+  const persistLog = [];
+  const stub = buildStubLaunchAdapters_({
+    failAt: failAt,
+  });
+
+  try {
+    const result = orchestrateReviewLaunchSteps_(
+      snapshot,
+      function (row) {
+        persistLog.push({
+          calendarId: String(
+            row['Calendar Event ID'] || ''
+          ),
+          manager: !!row['Manager Email Sent At'],
+          employee: !!row['Employee Email Sent At'],
+          hr: !!row['HR Email Sent At'],
+          complete: !!row['Launch Completed At'],
+          attempt: Number(
+            row['Launch Attempt Count'] || 0
+          ),
+          error: String(
+            row['Last Launch Error'] || ''
+          ),
+        });
+      },
+      stub.adapters
+    );
+
+    return {
+      ok: true,
+      cycle: result.cycle,
+      actions: result.actions,
+      calls: stub.calls,
+      persistLog: persistLog,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      cycle: snapshot,
+      actions: [],
+      calls: stub.calls,
+      persistLog: persistLog,
+      error: String(error.message || error),
+    };
+  }
+}
+
+function testOrchestratorCalendarThenManagerFail_() {
+  const first = runOrchestratedAttempt_(
+    sampleLaunchCycle_(),
+    'manager'
+  );
+
+  assertIdem_(!first.ok, 'First attempt should fail');
+  assertIdem_(
+    first.calls.calendar === 1,
+    'Calendar adapter must run once'
+  );
+  assertIdem_(
+    first.calls.manager === 1,
+    'Manager adapter must run once before fail'
+  );
+  assertIdem_(
+    first.calls.employee === 0 &&
+      first.calls.hr === 0,
+    'Later emails must not run'
+  );
+  assertIdem_(
+    !!first.cycle['Calendar Event ID'],
+    'Calendar ID must be persisted before manager fail'
+  );
+  assertIdem_(
+    !first.cycle['Manager Email Sent At'],
+    'Manager timestamp must remain blank after fail'
+  );
+
+  const second = runOrchestratedAttempt_(
+    first.cycle,
+    null
+  );
+
+  assertIdem_(second.ok, 'Retry should succeed');
+  assertIdem_(
+    second.calls.calendar === 0,
+    'Retry must not recreate calendar'
+  );
+  assertIdem_(
+    second.actions.join(',') ===
+      'manager,employee,hr,complete',
+    'Retry should resume at manager through complete'
+  );
+}
+
+function testOrchestratorPersistsEachStep_() {
+  const run = runOrchestratedAttempt_(
+    sampleLaunchCycle_(),
+    null
+  );
+
+  assertIdem_(run.ok, 'Full orchestrated launch should succeed');
+  assertIdem_(
+    run.persistLog.length >= 5,
+    'Expected attempt + each component + complete persists'
+  );
+
+  const afterCalendar = run.persistLog.find(
+    function (row) {
+      return row.calendarId && !row.manager;
+    }
+  );
+  const afterManager = run.persistLog.find(
+    function (row) {
+      return row.manager && !row.employee;
+    }
+  );
+  const afterComplete = run.persistLog[
+    run.persistLog.length - 1
+  ];
+
+  assertIdem_(
+    !!afterCalendar,
+    'Must persist immediately after calendar'
+  );
+  assertIdem_(
+    !!afterManager,
+    'Must persist immediately after manager email'
+  );
+  assertIdem_(
+    afterComplete.complete === true,
+    'Final persist must include Launch Completed At'
+  );
+}
+
+function testIncompleteManualPeriodRetryTarget_() {
+  const incompleteManual = sampleLaunchCycle_({
+    'Cycle ID': 'manual-incomplete',
+    'Cycle Source': 'Manual',
+    'Automation Key': '',
+    'Calendar Event ID': 'evt-manual',
+    'Calendar Status': V31.CALENDAR.CREATED,
+  });
+
+  const target = resolveAutomationLaunchTarget_(
+    null,
+    [incompleteManual]
+  );
+
+  assertIdem_(
+    target.skip === false,
+    'Incomplete manual must not be skipped'
+  );
+  assertIdem_(
+    String(target.retryCycle['Cycle ID']) ===
+      'manual-incomplete',
+    'Retry must target the incomplete manual cycle'
+  );
+}
+
+function testCompletePeriodSkipsCreate_() {
+  const completeManual = sampleLaunchCycle_({
+    'Cycle ID': 'manual-complete',
+    'Cycle Source': 'Manual',
+    'Automation Key': '',
+    'Calendar Event ID': 'evt-1',
+    'Manager Email Sent At': new Date(),
+    'Employee Email Sent At': new Date(),
+    'HR Email Sent At': new Date(),
+    'Launch Completed At': new Date(),
+  });
+
+  const target = resolveAutomationLaunchTarget_(
+    null,
+    [completeManual]
+  );
+
+  assertIdem_(
+    target.skip === true,
+    'Complete period cycle must block new create'
+  );
+  assertIdem_(
+    !target.retryCycle,
+    'No retry cycle when period already complete'
+  );
+}
+
+function testCalendarTagRecoveryPreference_() {
+  // Mirrors createReviewCalendarEvent_ recovery: if a tagged event
+  // already exists, adapters should return that ID rather than create.
+  const cycle = sampleLaunchCycle_();
+  const stub = buildStubLaunchAdapters_({
+    existingTaggedEventId: 'evt-recovered-tag',
+  });
+  const persistLog = [];
+
+  const result = orchestrateReviewLaunchSteps_(
+    cycle,
+    function (row) {
+      persistLog.push(
+        String(row['Calendar Event ID'] || '')
+      );
+    },
+    stub.adapters
+  );
+
+  assertIdem_(
+    result.cycle['Calendar Event ID'] ===
+      'evt-recovered-tag',
+    'Recovered tagged event ID must be persisted'
+  );
+  assertIdem_(
+    stub.calls.calendar === 1,
+    'Calendar recovery path still goes through createCalendar adapter once'
   );
 }

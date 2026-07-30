@@ -214,19 +214,21 @@ Complete the included test plan using fake employee records before enabling Live
 
 After the V3.1 baseline is deployed:
 
-1. Replace `V31_Automation.gs` with the Phase 1 DROP-IN file.
-2. Add a new script file `V31_Idempotency_Tests` and paste `V31_Idempotency_Tests.gs`.
-3. Leave `Code.gs` and `Index.html` unchanged unless a separately explained compatibility fix is required.
-4. Run `upgradeToV31()` again (idempotent) so new launch columns are appended.
-5. Run `runV31IdempotencyTests()` from the Apps Script editor and confirm all cases pass.
-6. Keep `AUTOMATION_MODE` in **Preview** until partial-failure Workspace tests pass.
+1. Replace `V31_Automation.gs` with the current DROP-IN file.
+2. Add or replace script file `V31_Idempotency_Tests` with `V31_Idempotency_Tests.gs`.
+3. Replace `Index.html` only if deploying the HR **Retry Launch** control (narrow compatibility change).
+4. Leave `Code.gs` unchanged.
+5. Run `upgradeToV31()` again (idempotent) so new launch columns are appended.
+6. Run `runV31IdempotencyTests()` from the Apps Script editor and confirm all cases pass.
+7. Keep `AUTOMATION_MODE` in **Preview** until partial-failure Workspace tests pass.
 
 Launch reliability rules now in effect:
 
-- Calendar event ID is persisted immediately after creation.
+- Calendar event ID is persisted immediately after creation (with spreadsheet flush).
+- Before creating an event, the system looks for an existing event tagged with the cycle ID.
 - Manager, employee, and HR launch emails each persist their own Sent At timestamp immediately after send.
 - `Launch Completed At` is set only when all four components succeed.
 - Retries skip completed components and leave their timestamps untouched.
-- HR Resend remains an intentional audited override and does not clear timestamps or recreate Calendar events.
-
+- Incomplete manual same-period cycles are resumed rather than blocking automation.
+- HR **Retry Launch** resumes unfinished steps; **Resend Instructions** remains an intentional audited override after launch is complete.
 The JavaScript in all packaged files passed syntax checks. The workflow has not been executed inside the AITHERAS Google Workspace, so Calendar ownership, Workspace invitation behavior, and email delivery should be verified with test AITHERAS accounts. **Do not enable Live automation until retry tests pass in Workspace.**

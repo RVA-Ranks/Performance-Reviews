@@ -1900,10 +1900,35 @@ function renderCycleHeaderActions(cycle) {
   let html = '';
   if (cycle.canStartMeeting) html += '<button class="button success" onclick="confirmStartMeeting()">Start Review Meeting</button>';
   if (cycle.canReleaseSignatures) html += '<button class="button warning" onclick="openReleaseModal()">Finalize & Release</button>';
-  if (cycle.isHr && cycle.v31 && cycle.v31.noticeSentAt && cycle.status !== 'Complete') html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
+  if (cycle.isHr && cycle.v31 && cycle.status !== 'Complete') {
+    if (!cycle.v31.launchComplete) {
+      html += '<button class="button outline" onclick="retryIncompleteLaunch()">Retry Launch</button>';
+    } else {
+      html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
+    }
+  }
   if (cycle.canDownloadManager) html += '<button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button>';
   if (cycle.canDownloadSelf) html += '<button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button>';
   return html;
+}
+
+async function retryIncompleteLaunch() {
+  openModal({
+    title: 'Retry incomplete launch?',
+    body: '<p>This resumes only the unfinished launch steps (calendar and/or missing role emails). Completed steps are not repeated.</p>',
+    confirmLabel: 'Retry Launch',
+    tone: 'primary',
+    onConfirm: async function() {
+      closeModal();
+      try {
+        const result = await server('retryReviewLaunch', currentCycle.cycleId);
+        showToast(result.ok ? 'success' : 'error', 'Launch retry', result.message);
+        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+      } catch (error) {
+        showToast('error', 'Could not retry launch', errorMessage(error));
+      }
+    }
+  });
 }
 
 async function resendLaunchInstructions() {

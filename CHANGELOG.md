@@ -11,6 +11,14 @@
 - Kept intentional HR resend as an audited manual override that does not clear timestamps
 - Production remains Preview-first; do not enable Live until Workspace retry tests pass
 
+## Launch hardening (post Phase 1)
+
+- Incomplete same-period cycles (including manual) are resumed by automation instead of blocking as duplicates
+- Added HR `retryReviewLaunch` + **Retry Launch** control for unfinished launches (distinct from Resend)
+- Each launch persist flushes the spreadsheet so concurrent readers see component progress
+- Calendar creation recovers an existing event tagged `AITHERAS_REVIEW_CYCLE_ID` before creating a new one
+- Idempotency tests now drive `orchestrateReviewLaunchSteps_` with stubbed Calendar/Mail adapters
+
 ## Automation
 
 - Added daily hire-date review automation

@@ -49,16 +49,18 @@
 
 ## Failure behavior
 
-- Each external launch step persists its own completion state before the next step runs.
+- Each external launch step persists its own completion state (with spreadsheet flush) before the next step runs.
 - Failed actions are recorded in `Last Launch Error` and `ReviewAutomationLog`.
-- An automated cycle whose launch is incomplete appears in the preview as `Launch needs retry` with per-component status.
-- Running Live automation again retries only unfinished components rather than creating another cycle.
-- Calendar event creation is skipped when the cycle already contains a Calendar Event ID.
-- Completed recipient timestamps are never cleared by an automatic retry.
+- An automated or manual cycle whose launch is incomplete appears in the preview as `Launch needs retry` with per-component status.
+- Running Live automation again retries unfinished components on the existing cycle rather than creating another cycle for the same employee and period.
+- Incomplete manual cycles for the same employee and period end are resumed instead of blocking automation.
+- Calendar event creation is skipped when the cycle already contains a Calendar Event ID, or when a tagged event for the cycle ID already exists on the calendar.
+- Completed recipient timestamps are never cleared by an automatic or HR retry.
 - `Launch Attempt Count` increments at the start of each launch attempt.
-- HR may intentionally resend the three launch emails without creating another event; that resend is audited and does not clear completion timestamps.
+- HR may use **Retry Launch** to resume unfinished steps; that path is audited and does not clear completed timestamps.
+- HR may intentionally **Resend Instructions** after a complete launch without creating another event; that resend is audited and does not clear completion timestamps.
 - Preview mode creates no cycles, events, emails, or launch triggers.
-- Concurrent launch mutations share the script lock held by `createReviewCycle` / `runReviewAutomation`.
+- Concurrent launch mutations share the script lock held by `createReviewCycle` / `runReviewAutomation` / `retryReviewLaunch`.
 
 ## Launch completion fields
 

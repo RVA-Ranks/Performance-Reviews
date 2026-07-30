@@ -940,9 +940,14 @@ The upgrade is intended to be idempotent and starts automation in Preview mode.
 ### Calendar and communications
 
 - `launchReviewCycleCommunications_(...)`
+- `orchestrateReviewLaunchSteps_(...)`
+- `resolveAutomationLaunchTarget_(...)`
+- `persistLaunchCycle_(rowNumber, cycle)`
 - `createReviewCalendarEvent_(cycle)`
+- `findExistingReviewCalendarEventByTag_(...)`
 - `buildReviewCalendarDescription_(cycle)`
 - `sendV31LaunchEmails_(cycle)`
+- `retryReviewLaunch(cycleId)`
 - `resendReviewLaunchEmails(cycleId)`
 
 ### Logging and dates
@@ -1578,6 +1583,14 @@ Implemented per-step persisted statuses for:
 - Manager email
 - Employee email
 - HR email
+
+Post-review hardening also landed:
+
+- Incomplete same-period cycles (including manual) resume via automation
+- HR `retryReviewLaunch` + UI **Retry Launch** for unfinished launches
+- Spreadsheet flush after each launch persist
+- Calendar tag recovery before creating a second event
+- Tests drive `orchestrateReviewLaunchSteps_` with stubbed adapters
 
 Keep automation in Preview until Workspace retry tests and `runV31IdempotencyTests()` pass. Do not enable Live until those checks succeed.
 

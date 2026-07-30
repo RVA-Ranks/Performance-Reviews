@@ -187,3 +187,8 @@ Run `runV31IdempotencyTests()` in the Apps Script editor first.
 - [ ] Preview mode still creates no cycles, events, or emails
 - [ ] HR intentional resend still sends three emails without duplicating the Calendar event
 - [ ] Automation preview shows per-component pending/done state for incomplete launches
+- [ ] Incomplete manual cycle for the same employee/period is retried (not skipped as a duplicate)
+- [ ] HR sees **Retry Launch** when `launchComplete` is false; **Resend Instructions** when complete
+- [ ] `retryReviewLaunch` finishes only pending components and does not clear completed timestamps
+- [ ] Crash after Calendar create but before ID write: retry recovers tagged event instead of creating a second
+- [ ] `runV31IdempotencyTests()` passes orchestrator-stub and incomplete-manual-target cases
