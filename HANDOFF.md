@@ -927,8 +927,12 @@ The upgrade is intended to be idempotent and starts automation in Preview mode.
 
 ### Trigger management
 
-- `installReviewAutomationTrigger_()`
-- `removeReviewAutomationTriggers_()`
+- `getOwnedReviewAutomationTriggers_()`
+- `createReviewAutomationTrigger_()`
+- `installReviewAutomationTriggerSafely_()`
+- `removeOwnedReviewAutomationTriggers_()`
+- `verifyStoredAutomationTrigger_()`
+- `getAutomationTriggerHealth_()`
 - `hasReviewAutomationTrigger_()`
 
 ### Daily automation

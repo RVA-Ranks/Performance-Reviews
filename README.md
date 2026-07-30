@@ -115,6 +115,8 @@ In the existing Apps Script project:
 3. Replace `appsscript.json`
 4. Add a new script file named:
    - `V31_Automation`
+   - `V31_Trigger_Tests`
+   - `V31_Production_Readiness_Tests`
 5. Paste the contents of `V31_Automation.gs`
 
 ### 3. Run the upgrade
@@ -126,10 +128,11 @@ Run:
 Approve the new permissions.
 
 V3.1 adds Calendar access and permission to create the daily installable trigger.
-Run the upgrade from the designated deployment-owner account. The upgrade
-persists that effective user as `AUTOMATION_OWNER_EMAIL`; only that account may
-install or migrate automation triggers. Apps Script cannot see triggers owned
-by other editors, so every former administrator must also remove legacy review
+`AUTOMATION_OWNER_EMAIL` has no fallback and must be set explicitly to the
+Daniel-approved AITHERAS account. Until then, upgrade forces Preview and Live
+activation is blocked. Only that effective user may install, replace, or
+migrate automation triggers. Apps Script cannot see triggers owned by other
+editors, so every former administrator must also remove legacy review
 automation triggers from **My Triggers**.
 
 The upgrade adds:
@@ -161,12 +164,16 @@ Open the web app as HR and go to:
 
 Then:
 
-1. Paste the live Compensation Adjustment workflow URL
-2. Confirm the 28-day notice
-3. Confirm the 7-day form deadline
-4. Confirm the calendar and event time
-5. Review the upcoming-review preview
-6. Enable Live Automation
+1. Confirm `ENVIRONMENT=Production`
+2. Enter the approved `AUTOMATION_OWNER_EMAIL` directly in ReviewSettings
+3. Confirm `ENABLE_FAULT_INJECTION=false`
+4. Paste the live Compensation Adjustment workflow URL
+5. Confirm the 28-day notice
+6. Confirm the 7-day form deadline
+7. Confirm the calendar and event time
+8. Review the upcoming-review preview
+9. Run `runProductionReadinessChecks_({liveProbes:false})`
+10. Do not enable Live until Daniel's sandbox evidence has zero blockers
 
 ### 6. Confirm employee assignments
 
@@ -186,11 +193,41 @@ An unchecked `Review Automation` box excludes that employee from automatic launc
 
 ## Calendar ownership
 
-The daily trigger and Calendar events run as the account that enables Live Automation.
+The daily trigger and Calendar events run as the explicitly configured
+automation-owner account. Live enablement verifies the effective user before
+creating a replacement.
 
 With `CALENDAR_ID` set to `primary`, events are created on that account's primary calendar.
 
 A shared HR calendar may also be used by entering its Calendar ID, provided the trigger owner has permission to create events on it.
+
+## Transactional trigger replacement
+
+Live activation creates and verifies a replacement trigger before persisting
+its metadata and Live mode. Existing owner-visible triggers are removed only
+after the replacement and mode are re-read successfully. Creation or
+persistence failures remove the uncommitted replacement and restore the prior
+mode and metadata. A cleanup failure leaves the verified replacement active
+and shows an amber manual-cleanup warning.
+
+Trigger health verifies only triggers visible to the effective owner. Triggers
+installed by other accounts cannot be inspected in code.
+
+## Delivery A rollback
+
+1. Set `AUTOMATION_MODE=Preview`.
+2. Run `setReviewAutomationMode('Preview')` from the HR portal or remove the
+   automation owner's visible review triggers in **My Triggers**.
+3. Redeploy commit `ced5333` if the transactional trigger release must be
+   reverted.
+4. Restore the prior `AUTOMATION_TRIGGER_UNIQUE_ID`,
+   `AUTOMATION_TRIGGER_INSTALLED_AT`, and trigger hour only when the prior
+   trigger still exists.
+5. Keep audit and automation logs; do not delete failure evidence.
+6. Have every former administrator inspect their own **My Triggers** page.
+
+Do not restore Live until the configured owner, stored trigger ID, and single
+owner-visible handler all match.
 
 ## Existing review cycles
 

@@ -40,6 +40,8 @@ jobs:
             "Code.gs"
             "V31_Automation.gs"
             "V31_Idempotency_Tests.gs"
+            "V31_Trigger_Tests.gs"
+            "V31_Production_Readiness_Tests.gs"
             "Index.html"
             "appsscript.json"
             "README.md"
@@ -210,5 +212,21 @@ jobs:
             V31_Workflow_Notification_Tests.gs; then
             echo \
               "::error file=V31_Workflow_Notification_Tests.gs::Missing runV31WorkflowNotificationTests_()."
+            exit 1
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+runV31TriggerTests_[[:space:]]*\(' \
+            V31_Trigger_Tests.gs; then
+            echo \
+              "::error file=V31_Trigger_Tests.gs::Missing runV31TriggerTests_()."
+            exit 1
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+runV31ProductionReadinessTests_[[:space:]]*\(' \
+            V31_Production_Readiness_Tests.gs; then
+            echo \
+              "::error file=V31_Production_Readiness_Tests.gs::Missing runV31ProductionReadinessTests_()."
             exit 1
           fi

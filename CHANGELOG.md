@@ -6,6 +6,17 @@
 - Added explicit `APP_VERSION` and `ENVIRONMENT` settings; existing deployments default to `Production`
 - Added settings placeholders for automation run health and sandbox-only fault controls without enabling Live or fault injection
 
+## Transactional trigger activation
+
+- Replaced delete-before-create behavior with create, verify, persist metadata, persist Live, re-read, then cleanup
+- Added a user-scoped trigger administration lock; ScriptApp operations no longer hold the global review-data lock
+- Restored prior mode and metadata and removed uncommitted replacements on activation failure
+- Preserved verified replacements on partial old-trigger cleanup and surfaced failed trigger IDs for manual recovery
+- Added owner-visible trigger health with verified ID/handler facts, expected schedule labels, and the cross-account visibility limitation
+- Removed automation-owner fallback behavior; blank or mismatched owners block Live
+- Added Production-safe fault guards and private Delivery A readiness checks
+- Added structured trigger and readiness test suites; live and concurrency cases remain `Requires Daniel Sandbox`
+
 ## Automation recovery and administrative surface
 
 - Eligible stale workflow-notification `Sending` claims now transition to `Delivery Unknown` without automatic resend and are surfaced to HR with their attempt IDs

@@ -1426,6 +1426,7 @@ function executeAutomationTriggerReplacement_(
   let rollbackError = '';
 
   try {
+    svc.fault('BEFORE_TRIGGER_CREATION');
     replacement = svc.createTrigger(hour, timeZone);
     replacementId = verifyReplacementAutomationTrigger_(
       replacement,
@@ -1582,36 +1583,57 @@ function installReviewAutomationTriggerSafely_(options, services) {
 
   let result;
   try {
-    result = executeAutomationTriggerReplacement_(
-      options,
-      defaultTriggerAdministrationServices_()
-    );
+    try {
+      result = executeAutomationTriggerReplacement_(
+        options,
+        defaultTriggerAdministrationServices_()
+      );
+    } catch (error) {
+      result = {
+        ok: false,
+        partial: false,
+        newTriggerActive: false,
+        cleanupRequired: false,
+        preservedMode: String(
+          getSettings_().AUTOMATION_MODE || 'Preview'
+        ),
+        error: String(error.message || error),
+      };
+    }
   } finally {
     lock.releaseLock();
   }
 
-  logReviewAutomation_({
-    mode: result.mode || result.preservedMode || '',
-    action: 'Automation trigger replacement',
-    result: result.ok
-      ? result.partial
-        ? 'Partial'
-        : 'Success'
-      : 'Failed',
-    details: automationLogDetails_({
-      component: 'Review Automation Trigger',
-      attemptId: result.newTriggerId || '',
-      previousState: result.preservedMode || '',
-      newState: result.mode || result.preservedMode || '',
-      error: result.error || result.warning || '',
-      recoveryRecommendation: result.cleanupRequired
-        ? 'The automation owner must inspect My Triggers and remove owner-visible duplicates.'
-        : result.ok
-        ? ''
-        : 'Correct the reported problem and retry Live activation.',
-      metadata: result,
-    }),
-  });
+  try {
+    logReviewAutomation_({
+      mode: result.mode || result.preservedMode || '',
+      action: 'Automation trigger replacement',
+      result: result.ok
+        ? result.partial
+          ? 'Partial'
+          : 'Success'
+        : 'Failed',
+      details: automationLogDetails_({
+        component: 'Review Automation Trigger',
+        attemptId: result.newTriggerId || '',
+        previousState: result.preservedMode || '',
+        newState: result.mode || result.preservedMode || '',
+        error: result.error || result.warning || '',
+        recoveryRecommendation: result.cleanupRequired
+          ? 'The automation owner must inspect My Triggers and remove owner-visible duplicates.'
+          : result.ok
+          ? ''
+          : 'Correct the reported problem and retry Live activation.',
+        metadata: result,
+      }),
+    });
+  } catch (logError) {
+    result.partial = result.ok ? true : !!result.partial;
+    result.auditError = String(logError.message || logError);
+    result.warning =
+      String(result.warning || '') +
+      ' The trigger outcome could not be written to the automation log.';
+  }
 
   return result;
 }
@@ -1642,34 +1664,42 @@ function disableReviewAutomationSafely_(mode, actorEmail) {
     lock.releaseLock();
   }
 
-  logReviewAutomation_({
-    mode: mode,
-    action: 'Automation mode changed',
-    result: cleanup.ok ? 'Success' : 'Partial',
-    details: automationLogDetails_({
-      component: 'Review Automation Trigger',
-      previousState: 'Live',
-      newState: mode,
-      error: cleanup.errors.join('; '),
-      recoveryRecommendation: cleanup.ok
-        ? ''
-        : 'The automation owner must remove remaining triggers from My Triggers.',
-      metadata: {
-        actor: actorEmail,
-        cleanup: cleanup,
-      },
-    }),
-  });
+  let logError = '';
+  try {
+    logReviewAutomation_({
+      mode: mode,
+      action: 'Automation mode changed',
+      result: cleanup.ok ? 'Success' : 'Partial',
+      details: automationLogDetails_({
+        component: 'Review Automation Trigger',
+        previousState: 'Live',
+        newState: mode,
+        error: cleanup.errors.join('; '),
+        recoveryRecommendation: cleanup.ok
+          ? ''
+          : 'The automation owner must remove remaining triggers from My Triggers.',
+        metadata: {
+          actor: actorEmail,
+          cleanup: cleanup,
+        },
+      }),
+    });
+  } catch (error) {
+    logError = String(error.message || error);
+  }
 
   return {
     ok: true,
-    partial: !cleanup.ok,
-    message: cleanup.ok
+    partial: !cleanup.ok || !!logError,
+    message: cleanup.ok && !logError
       ? mode === 'Preview'
         ? 'Automation returned to Preview mode. No automatic cycles will be sent.'
         : 'Automation paused and owner-visible triggers were removed.'
-      : 'Automation is no longer Live, but one or more owner-visible triggers require manual cleanup.',
+      : !cleanup.ok
+      ? 'Automation is no longer Live, but one or more owner-visible triggers require manual cleanup.'
+      : 'Automation is no longer Live, but the outcome could not be written to the automation log.',
     cleanup: cleanup,
+    auditError: logError,
     automation: getAutomationAdminData_(),
   };
 }
@@ -1703,6 +1733,20 @@ function getAutomationTriggerHealth_(settings, triggers) {
   const visibleTriggers =
     triggers || getOwnedReviewAutomationTriggers_();
   const effectiveEmail = getEffectiveAutomationUserEmail_();
+  return buildAutomationTriggerHealth_(
+    currentSettings,
+    visibleTriggers,
+    effectiveEmail,
+    String(Session.getScriptTimeZone() || 'America/New_York')
+  );
+}
+
+function buildAutomationTriggerHealth_(
+  currentSettings,
+  visibleTriggers,
+  effectiveEmail,
+  timeZone
+) {
   const ownerEmail = normalizeEmail_(
     currentSettings.AUTOMATION_OWNER_EMAIL
   );
@@ -1769,16 +1813,12 @@ function getAutomationTriggerHealth_(settings, triggers) {
     expectedHour: Number(
       currentSettings.AUTOMATION_TRIGGER_HOUR || 8
     ),
-    timeZone: String(
-      Session.getScriptTimeZone() || 'America/New_York'
-    ),
+    timeZone: String(timeZone || 'America/New_York'),
     expectedSchedule:
       'Daily at ' +
       Number(currentSettings.AUTOMATION_TRIGGER_HOUR || 8) +
       ':00 ' +
-      String(
-        Session.getScriptTimeZone() || 'America/New_York'
-      ),
+      String(timeZone || 'America/New_York'),
     healthy: ownerMatches && modeConsistent,
     warning: warnings.join(' '),
     mode: mode,
@@ -1811,28 +1851,151 @@ function refreshReviewAutomationHealth() {
   };
 }
 
+function buildProductionReadinessReport_(
+  settings,
+  triggerHealth,
+  options
+) {
+  const opts = options || {};
+  const blocking = [];
+  const warnings = [];
+  const requiredSettings = [
+    'APP_VERSION',
+    'ENVIRONMENT',
+    'AUTOMATION_OWNER_EMAIL',
+    'AUTOMATION_MODE',
+    'AUTOMATION_TRIGGER_HOUR',
+    'AUTOMATION_TRIGGER_UNIQUE_ID',
+    'AUTOMATION_TRIGGER_INSTALLED_AT',
+    'AUTOMATION_LAST_RUN',
+    'AUTOMATION_LAST_SUCCESS',
+    'AUTOMATION_LAST_FAILURE',
+    'AUTOMATION_LAST_ERROR',
+    'ENABLE_FAULT_INJECTION',
+    'FAULT_POINT',
+    'FAULT_CYCLE_ID',
+    'FAULT_ONCE',
+  ];
+
+  requiredSettings.forEach(function (key) {
+    if (!Object.prototype.hasOwnProperty.call(settings, key)) {
+      blocking.push({
+        code: 'MISSING_SETTING',
+        setting: key,
+        message: 'Required setting is missing: ' + key,
+      });
+    }
+  });
+
+  if (String(settings.APP_VERSION || '') !== APP_VERSION) {
+    blocking.push({
+      code: 'APP_VERSION_MISMATCH',
+      message:
+        'APP_VERSION setting does not match the deployed source version.',
+    });
+  }
+
+  if (
+    ['Sandbox', 'Production'].indexOf(
+      String(settings.ENVIRONMENT || '')
+    ) < 0
+  ) {
+    blocking.push({
+      code: 'INVALID_ENVIRONMENT',
+      message:
+        'ENVIRONMENT must be exactly Sandbox or Production.',
+    });
+  }
+
+  if (!normalizeEmail_(settings.AUTOMATION_OWNER_EMAIL)) {
+    blocking.push({
+      code: 'AUTOMATION_OWNER_REQUIRED',
+      message:
+        'AUTOMATION_OWNER_EMAIL must be explicitly configured before Live activation.',
+    });
+  }
+
+  if (
+    String(settings.ENVIRONMENT || 'Production') ===
+      'Production' &&
+    v31Boolean_(settings.ENABLE_FAULT_INJECTION, false)
+  ) {
+    blocking.push({
+      code: 'PRODUCTION_FAULT_INJECTION',
+      message:
+        'Fault injection must be disabled in Production.',
+    });
+  }
+
+  if (!triggerHealth.healthy) {
+    blocking.push({
+      code: 'TRIGGER_HEALTH',
+      message:
+        triggerHealth.warning ||
+        'Automation trigger health requires attention.',
+    });
+  }
+
+  if (opts.liveProbes) {
+    const sandboxAllowed =
+      String(settings.ENVIRONMENT || '') === 'Sandbox' &&
+      opts.sandboxConfirmed === true &&
+      String(opts.confirmationToken || '') ===
+        'SANDBOX_LIVE_PROBES';
+
+    if (!sandboxAllowed) {
+      blocking.push({
+        code: 'LIVE_PROBE_GUARD',
+        message:
+          'Live probes require Sandbox, sandboxConfirmed=true, and the SANDBOX_LIVE_PROBES confirmation token.',
+      });
+    } else {
+      warnings.push({
+        code: 'REQUIRES_DANIEL_SANDBOX',
+        message:
+          'Live trigger probes require Daniel-provided sandbox resources and recorded evidence.',
+      });
+    }
+  }
+
+  return {
+    appVersion: APP_VERSION,
+    environment: String(
+      settings.ENVIRONMENT || 'Production'
+    ),
+    checkedAt: new Date().toISOString(),
+    ok: blocking.length === 0,
+    blocking: blocking,
+    warnings: warnings,
+    triggerHealth: triggerHealth,
+    liveProbesExecuted: false,
+  };
+}
+
+function runProductionReadinessChecks_(options) {
+  const settings = getSettings_();
+  return buildProductionReadinessReport_(
+    settings,
+    getAutomationTriggerHealth_(settings),
+    options || { liveProbes: false }
+  );
+}
+
 function maybeInjectTriggerFault_(point) {
   const settings = getSettings_();
-  const enabled = v31Boolean_(
-    settings.ENABLE_FAULT_INJECTION,
-    false
-  );
+  const decision = decideTriggerFault_(settings, point);
 
-  if (!enabled) {
+  if (!decision.enabled) {
     return;
   }
 
-  const environment = String(
-    settings.ENVIRONMENT || 'Production'
-  );
-
-  if (environment !== 'Sandbox') {
+  if (decision.prohibited) {
     throw new Error(
       'Fault injection is prohibited unless ENVIRONMENT is Sandbox.'
     );
   }
 
-  if (String(settings.FAULT_POINT || '') !== String(point)) {
+  if (!decision.inject) {
     return;
   }
 
@@ -1846,6 +2009,27 @@ function maybeInjectTriggerFault_(point) {
   throw new Error(
     'Sandbox fault injected at ' + String(point) + '.'
   );
+}
+
+function decideTriggerFault_(settings, point) {
+  const enabled = v31Boolean_(
+    settings.ENABLE_FAULT_INJECTION,
+    false
+  );
+  const environment = String(
+    settings.ENVIRONMENT || 'Production'
+  );
+  const matches =
+    String(settings.FAULT_POINT || '') === String(point);
+
+  return {
+    enabled: enabled,
+    prohibited: enabled && environment !== 'Sandbox',
+    inject:
+      enabled &&
+      environment === 'Sandbox' &&
+      matches,
+  };
 }
 
 /**

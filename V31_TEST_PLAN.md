@@ -2,12 +2,53 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery A gate — production candidate and triggers
+
+Run from the Apps Script editor:
+
+1. `runV31TriggerTests_()`
+2. `runV31ProductionReadinessTests_()`
+3. `runProductionReadinessChecks_({liveProbes:false})`
+
+Expected before Daniel supplies the owner:
+
+- Trigger pure tests: zero failures; true concurrency is skipped as
+  `Requires Daniel Sandbox`
+- Readiness pure tests: zero failures; live evidence is skipped
+- Current-environment readiness: blocked by blank
+  `AUTOMATION_OWNER_EMAIL`
+- `AUTOMATION_MODE` remains `Preview`
+
+Transactional trigger cases:
+
+- [ ] Preview → Live creates and verifies a replacement before deleting old
+- [ ] Trigger creation failure preserves prior trigger and mode
+- [ ] Metadata persistence failure deletes the replacement and restores metadata
+- [ ] Live persistence failure restores prior mode and trigger metadata
+- [ ] Old-trigger cleanup failure keeps the replacement and returns partial success
+- [ ] Stored trigger ID matches the surviving owner-visible handler
+- [ ] Non-owner Live activation is rejected
+- [ ] Live with no verified trigger is unhealthy
+- [ ] Preview with an owner-visible trigger is unhealthy
+- [ ] Expected hour/time zone are not labeled as independently verified
+- [ ] Production fault injection is rejected
+
+Requires Daniel Sandbox:
+
+- [ ] True concurrent Live-enable attempts
+- [ ] Real replacement-trigger creation and ID evidence
+- [ ] Forced ScriptApp creation failure with prior trigger evidence
+- [ ] Partial owner-visible cleanup failure
+- [ ] Scheduled execution and last-run timestamp
+
 ## A. Upgrade and data model
 
 - [ ] Back up the current V3 code.
 - [ ] Add `V31_Automation.gs`.
 - [ ] Replace `Code.gs`, `Index.html`, and `appsscript.json`.
-- [ ] Run `upgradeToV31_()` from the intended automation-owner account.
+- [ ] Run `upgradeToV31_()` while Preview is confirmed.
+- [ ] Explicitly set the Daniel-approved `AUTOMATION_OWNER_EMAIL`; no fallback is permitted.
+- [ ] Confirm `ENVIRONMENT=Production` and `ENABLE_FAULT_INJECTION=false`.
 - [ ] Approve Calendar and trigger permissions.
 - [ ] Confirm `ReviewAutomationLog` was created.
 - [ ] Confirm `EmployeeAssignments` has `Review Automation`.
