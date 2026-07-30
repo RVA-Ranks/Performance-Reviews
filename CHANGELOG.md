@@ -1,5 +1,11 @@
 # V3.1 Changelog
 
+## Production candidate freeze
+
+- Identified the deployed build as `3.1-production-candidate` in bootstrap data and HR Administration
+- Added explicit `APP_VERSION` and `ENVIRONMENT` settings; existing deployments default to `Production`
+- Added settings placeholders for automation run health and sandbox-only fault controls without enabling Live or fault injection
+
 ## Automation recovery and administrative surface
 
 - Eligible stale workflow-notification `Sending` claims now transition to `Delivery Unknown` without automatic resend and are surfaced to HR with their attempt IDs

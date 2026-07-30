@@ -15,6 +15,8 @@ const V31 = Object.freeze({
   CALENDAR_MARKER_PREFIX: '[AITHERAS_REVIEW_CYCLE_ID:',
 
   SETTINGS_DEFAULTS: {
+    APP_VERSION: '3.1-production-candidate',
+    ENVIRONMENT: 'Production',
     AUTOMATION_MODE: 'Preview',
     REVIEW_NOTICE_DAYS: '28',
     FORM_DUE_DAYS_BEFORE_MEETING: '7',
@@ -29,9 +31,16 @@ const V31 = Object.freeze({
     COMPENSATION_DECISION_REQUIRED: 'TRUE',
     HELP_CENTER_ENABLED: 'TRUE',
     AUTOMATION_LAST_RUN: '',
+    AUTOMATION_LAST_SUCCESS: '',
+    AUTOMATION_LAST_FAILURE: '',
+    AUTOMATION_LAST_ERROR: '',
     AUTOMATION_OWNER_EMAIL: '',
     AUTOMATION_TRIGGER_UNIQUE_ID: '',
     AUTOMATION_TRIGGER_INSTALLED_AT: '',
+    ENABLE_FAULT_INJECTION: 'false',
+    FAULT_POINT: '',
+    FAULT_CYCLE_ID: '',
+    FAULT_ONCE: 'true',
   },
 
   ASSIGNMENT_HEADERS: [
@@ -841,6 +850,8 @@ function getAutomationAdminData_() {
   );
 
   return {
+    appVersion: APP_VERSION,
+    environment: String(settings.ENVIRONMENT || 'Production'),
     mode: String(settings.AUTOMATION_MODE || 'Preview'),
     noticeDays: Number(settings.REVIEW_NOTICE_DAYS || 28),
     formDueDays: Number(
@@ -890,6 +901,9 @@ function getAutomationAdminData_() {
     triggerOwnerWarning:
       'Apps Script triggers are visible only to the account that installed them. Other editors must remove any legacy triggers from My Triggers.',
     lastRun: String(settings.AUTOMATION_LAST_RUN || ''),
+    lastSuccess: String(settings.AUTOMATION_LAST_SUCCESS || ''),
+    lastFailure: String(settings.AUTOMATION_LAST_FAILURE || ''),
+    lastError: String(settings.AUTOMATION_LAST_ERROR || ''),
     preview: findReviewAutomationCandidates_(
       Number(settings.REVIEW_NOTICE_DAYS || 28)
     ).slice(0, 20),

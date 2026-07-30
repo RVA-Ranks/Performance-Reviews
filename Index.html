@@ -1614,7 +1614,12 @@ function renderAdminView() {
     '<div><label for="hireDate">Hire Date</label><input id="hireDate" type="date"></div>' +
     '<div><label for="managerName">Manager Name *</label><input id="managerName" readonly required></div>' +
     '<div><label for="managerEmail">Manager Email *</label><input id="managerEmail" readonly required></div></div>' +
-    '<div class="button-row" style="margin-top:18px"><button id="createCycleButton" class="button primary" type="submit">Create, Notify, and Add Calendar Event</button></div></form></div>';
+    '<div class="button-row" style="margin-top:18px"><button id="createCycleButton" class="button primary" type="submit">Create, Notify, and Add Calendar Event</button></div></form></div>' +
+    '<div class="field-help" style="margin-top:16px;text-align:center">Version ' +
+    escapeHtml(state.appVersion || automation.appVersion || 'unknown') +
+    ' · ' +
+    escapeHtml(state.environment || automation.environment || 'Production') +
+    '</div>';
 
   populateAssignments();
 }

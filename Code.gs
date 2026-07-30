@@ -11,6 +11,8 @@
  *   Each signature is applied to both final review documents.
  */
 
+const APP_VERSION = '3.1-production-candidate';
+
 const PR = Object.freeze({
   SHEETS: {
     SETTINGS: 'ReviewSettings',
@@ -54,6 +56,8 @@ const PR = Object.freeze({
 
   SETTINGS_DEFAULTS: {
     APP_NAME: 'AITHERAS Performance Reviews',
+    APP_VERSION: '3.1-production-candidate',
+    ENVIRONMENT: 'Production',
     ALLOWED_DOMAIN: 'aitheras.com',
     REVIEW_FOLDER_ID: '',
     MANAGER_TEMPLATE_ID: '',
@@ -347,6 +351,8 @@ function getReviewBootstrapData(initialCycleId) {
   const cycles = listVisibleCycles_(email, isHr);
 
   return {
+    appVersion: APP_VERSION,
+    environment: String(settings.ENVIRONMENT || 'Production'),
     currentUserEmail: email,
     isHr: isHr,
     user: getUserProfile_(email, isHr),
