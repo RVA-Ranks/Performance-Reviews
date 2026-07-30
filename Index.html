@@ -1627,6 +1627,7 @@ function renderAdminView() {
 function renderAutomationPanel(automation) {
   const mode = automation.mode || 'Preview';
   const modeClass = mode.toLowerCase();
+  const triggerHealth = automation.triggerHealth || {};
   const triggerText = automation.triggerInstalled
     ? 'Daily trigger installed'
     : 'No daily trigger installed';
@@ -1650,8 +1651,20 @@ function renderAutomationPanel(automation) {
     (automation.triggerInstalled ? '✓' : '△') +
     '</span><span><strong>Trigger:</strong> ' +
     escapeHtml(triggerText) +
+    (triggerHealth.storedTriggerId ? ' · ID ' + escapeHtml(triggerHealth.storedTriggerId) : '') +
     (automation.lastRun ? ' · Last run ' + escapeHtml(formatLocalDateTime(automation.lastRun)) : '') +
     '</span></div>' +
+    '<div class="automation-check"><span>' +
+    (triggerHealth.healthy ? '✓' : '!') +
+    '</span><span><strong>Trigger health:</strong> ' +
+    (triggerHealth.healthy ? 'Healthy' : 'Attention required') +
+    '<br><span class="field-help">Verified owner-visible trigger count: ' +
+    escapeHtml(String(triggerHealth.visibleTriggerCount == null ? 0 : triggerHealth.visibleTriggerCount)) +
+    (triggerHealth.handlerName ? ' · Verified handler: ' + escapeHtml(triggerHealth.handlerName) : '') +
+    '<br>Expected schedule: ' +
+    escapeHtml(triggerHealth.expectedSchedule || ('Daily at ' + formatHourLabel(automation.triggerHour || 8) + ' America/New_York')) +
+    (triggerHealth.warning ? '<br>' + escapeHtml(triggerHealth.warning) : '') +
+    '</span></span></div>' +
     '<div class="automation-check"><span>' +
     (ownerMatches ? '✓' : '!') +
     '</span><span><strong>Automation owner:</strong> ' +
@@ -1669,7 +1682,7 @@ function renderAutomationPanel(automation) {
     (mode === 'Live'
       ? '<button class="button warning" onclick="confirmPauseAutomation()">Pause Automation</button><button class="button success" onclick="runAutomationNow()">Run Now</button>'
       : '<button class="button success" onclick="confirmEnableAutomation()" ' + (ownerMatches ? '' : 'disabled title="Only the configured automation owner may enable Live mode."') + '>Enable Live Automation</button>') +
-    '<button class="button outline" onclick="refreshAutomationPreview()">Refresh Preview</button></div></div>' +
+    '<button class="button outline" onclick="refreshAutomationPreview()">Refresh Preview</button><button class="button outline" onclick="refreshTriggerHealth()">Refresh Trigger Health</button></div></div>' +
     '<div class="card"><div class="card-header"><div><h2>Next Scheduled Reviews</h2><p>Preview only. No emails are sent from this table.</p></div></div>' +
     '<div id="automationPreview">' + renderAutomationPreviewTable(automation.preview || []) + '</div></div></div>' +
     '<div class="card"><div class="card-header"><div><h2>Automation Settings</h2><p>These settings control when cycles launch, when forms are due, and where calendar events are created.</p></div></div>' +
@@ -1723,7 +1736,7 @@ async function saveAutomationSettings(event) {
     state.v31.automation = result.automation;
     state.v31.compensationAdjustmentUrl = result.automation.compensationAdjustmentUrl;
     state.v31.compensationDecisionRequired = result.automation.compensationDecisionRequired;
-    showToast('success', 'Automation settings saved', result.message);
+    showToast(result.partial ? 'warning' : result.ok ? 'success' : 'error', 'Automation settings saved', result.message);
     renderAdminView();
   } catch (error) {
     showToast('error', 'Could not save settings', errorMessage(error));
@@ -1762,10 +1775,25 @@ async function changeAutomationMode(mode) {
   try {
     const result = await server('setReviewAutomationMode', mode);
     state.v31.automation = result.automation;
-    showToast(mode === 'Live' ? 'success' : 'warning', 'Automation updated', result.message);
+    showToast(result.partial ? 'warning' : result.ok ? (mode === 'Live' ? 'success' : 'warning') : 'error', 'Automation updated', result.message);
     renderAdminView();
   } catch (error) {
     showToast('error', 'Could not update automation', errorMessage(error));
+  }
+}
+
+async function refreshTriggerHealth() {
+  try {
+    const result = await server('refreshReviewAutomationHealth');
+    state.v31.automation.triggerHealth = result.triggerHealth;
+    renderAdminView();
+    showToast(
+      result.triggerHealth.healthy ? 'success' : 'warning',
+      'Trigger health refreshed',
+      'Checked ' + formatLocalDateTime(result.checkedAt) + '.'
+    );
+  } catch (error) {
+    showToast('error', 'Could not refresh trigger health', errorMessage(error));
   }
 }
 

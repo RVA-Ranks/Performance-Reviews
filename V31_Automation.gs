@@ -172,10 +172,24 @@ const V31 = Object.freeze({
 /* =========================== DATA MODEL / UPGRADE ======================== */
 
 function upgradeToV31_() {
-  ensureAutomationOwnerConfigured_();
-  assertAutomationOwner_(getSettings_());
   ensureV31DataModel_();
-  const triggerMigration = migrateLegacyReviewAutomationTrigger_();
+  const settings = getSettings_();
+  const ownerEmail = normalizeEmail_(
+    settings.AUTOMATION_OWNER_EMAIL
+  );
+  const triggerMigration = ownerEmail
+    ? migrateLegacyReviewAutomationTrigger_()
+    : disableReviewAutomationSafely_(
+        'Preview',
+        getEffectiveAutomationUserEmail_()
+      );
+
+  if (!ownerEmail) {
+    triggerMigration.partial = true;
+    triggerMigration.mode = 'Preview';
+    triggerMigration.message =
+      'AUTOMATION_OWNER_EMAIL is blank. Automation was forced to Preview and Live remains blocked.';
+  }
 
   SpreadsheetApp.getUi().alert(
     'V3.1 upgrade complete.\n\n' +
@@ -842,6 +856,11 @@ function getReviewAutomationAdminData() {
 
 function getAutomationAdminData_() {
   const settings = getSettings_();
+  const visibleTriggers = getOwnedReviewAutomationTriggers_();
+  const triggerHealth = getAutomationTriggerHealth_(
+    settings,
+    visibleTriggers
+  );
   const effectiveEmail = normalizeEmail_(
     Session.getEffectiveUser().getEmail()
   );
@@ -887,7 +906,12 @@ function getAutomationAdminData_() {
         true
       ),
     triggerInstalled:
-      hasReviewAutomationTrigger_(),
+      visibleTriggers.some(function (trigger) {
+        return (
+          getTriggerHandlerName_(trigger) ===
+          'runReviewAutomationTrigger_'
+        );
+      }),
     automationOwnerEmail: ownerEmail,
     effectiveAutomationUser: effectiveEmail,
     triggerUniqueId: String(
@@ -904,6 +928,7 @@ function getAutomationAdminData_() {
     lastSuccess: String(settings.AUTOMATION_LAST_SUCCESS || ''),
     lastFailure: String(settings.AUTOMATION_LAST_FAILURE || ''),
     lastError: String(settings.AUTOMATION_LAST_ERROR || ''),
+    triggerHealth: triggerHealth,
     preview: findReviewAutomationCandidates_(
       Number(settings.REVIEW_NOTICE_DAYS || 28)
     ).slice(0, 20),
@@ -911,207 +936,203 @@ function getAutomationAdminData_() {
 }
 
 function saveReviewAutomationSettings(payload) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
+  const email = getCurrentUserEmail_();
 
-    if (!isHrUser_(email)) {
-      throw new Error(
-        'Only HR may change review automation settings.'
-      );
-    }
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may change review automation settings.'
+    );
+  }
 
-    const settingsSheet = getSpreadsheet_().getSheetByName(
-      PR.SHEETS.SETTINGS
-    );
+  const clean = validateReviewAutomationSettings_(payload || {});
+  const before = getSettings_();
+  const mode = String(before.AUTOMATION_MODE || 'Preview');
 
-    const noticeDays = v31Integer_(
-      payload.noticeDays,
-      7,
-      60,
-      'Notice days'
-    );
-    const formDueDays = v31Integer_(
-      payload.formDueDays,
-      1,
-      21,
-      'Form due days'
-    );
-    const triggerHour = v31Integer_(
-      payload.triggerHour,
-      0,
-      23,
-      'Trigger hour'
-    );
-    const eventStartHour = v31Integer_(
-      payload.eventStartHour,
-      0,
-      23,
-      'Event start hour'
-    );
-    const eventDuration = v31Integer_(
-      payload.eventDurationMinutes,
-      15,
-      240,
-      'Event duration'
-    );
-    const emailReminderDays = v31Integer_(
-      payload.eventEmailReminderDays,
-      0,
-      28,
-      'Email reminder days'
-    );
-    const popupReminderHours = v31Integer_(
-      payload.eventPopupReminderHours,
-      0,
-      672,
-      'Popup reminder hours'
-    );
-    const compensationUrl = cleanText_(
-      payload.compensationAdjustmentUrl
-    );
+  if (mode === 'Live') {
+    assertAutomationOwner_(before);
+  }
 
-    if (
-      compensationUrl &&
-      !/^https:\/\/.+/i.test(compensationUrl)
-    ) {
-      throw new Error(
-        'The Compensation Adjustment URL must begin with https://.'
-      );
-    }
+  withLock_(function () {
+    persistAutomationSettings_(clean);
+  });
 
-    setSetting_(
-      settingsSheet,
-      'REVIEW_NOTICE_DAYS',
-      noticeDays
-    );
-    setSetting_(
-      settingsSheet,
-      'FORM_DUE_DAYS_BEFORE_MEETING',
-      formDueDays
-    );
-    setSetting_(
-      settingsSheet,
-      'AUTOMATION_TRIGGER_HOUR',
-      triggerHour
-    );
-    setSetting_(
-      settingsSheet,
-      'REVIEW_EVENT_START_HOUR',
-      eventStartHour
-    );
-    setSetting_(
-      settingsSheet,
-      'REVIEW_EVENT_DURATION_MINUTES',
-      eventDuration
-    );
-    setSetting_(
-      settingsSheet,
-      'SHIFT_WEEKEND_MEETINGS',
-      payload.shiftWeekendMeetings ? 'TRUE' : 'FALSE'
-    );
-    setSetting_(
-      settingsSheet,
-      'CALENDAR_ID',
-      cleanText_(payload.calendarId) || 'primary'
-    );
-    setSetting_(
-      settingsSheet,
-      'EVENT_EMAIL_REMINDER_DAYS',
-      emailReminderDays
-    );
-    setSetting_(
-      settingsSheet,
-      'EVENT_POPUP_REMINDER_HOURS',
-      popupReminderHours
-    );
-    setSetting_(
-      settingsSheet,
-      'COMPENSATION_ADJUSTMENT_URL',
-      compensationUrl
-    );
-    setSetting_(
-      settingsSheet,
-      'COMPENSATION_DECISION_REQUIRED',
-      payload.compensationDecisionRequired
-        ? 'TRUE'
-        : 'FALSE'
-    );
+  let triggerResult = null;
 
-    const mode = String(
-      getSettings_().AUTOMATION_MODE || 'Preview'
-    );
-
-    if (mode === 'Live') {
-      installReviewAutomationTrigger_();
-    }
-
-    logReviewAutomation_({
-      mode: mode,
-      action: 'Settings updated',
-      result: 'Success',
-      details: 'Updated by ' + email,
+  if (mode === 'Live') {
+    triggerResult = installReviewAutomationTriggerSafely_({
+      actorEmail: email,
+      reason: 'Live automation settings changed',
     });
 
-    return {
-      ok: true,
-      message: 'Review automation settings saved.',
-      automation: getAutomationAdminData_(),
-    };
+    if (!triggerResult.ok) {
+      withLock_(function () {
+        persistAutomationSettings_({
+          AUTOMATION_TRIGGER_HOUR: String(
+            before.AUTOMATION_TRIGGER_HOUR || 8
+          ),
+        });
+      });
+    }
+  }
+
+  const result = triggerResult && !triggerResult.ok
+    ? 'Partial'
+    : triggerResult && triggerResult.partial
+    ? 'Partial'
+    : 'Success';
+  const message =
+    triggerResult && !triggerResult.ok
+      ? 'Settings were saved, but the trigger replacement failed. The prior trigger and trigger hour were preserved.'
+      : triggerResult && triggerResult.partial
+      ? 'Settings were saved and the new trigger is active, but older triggers require manual cleanup.'
+      : 'Review automation settings saved.';
+
+  logReviewAutomation_({
+    mode: mode,
+    action: 'Settings updated',
+    result: result,
+    details: automationLogDetails_({
+      component: 'Automation Settings',
+      previousState: mode,
+      newState: mode,
+      error:
+        triggerResult && !triggerResult.ok
+          ? triggerResult.error || triggerResult.warning || ''
+          : '',
+      recoveryRecommendation:
+        triggerResult && (triggerResult.partial || !triggerResult.ok)
+          ? 'The automation owner must review trigger health and My Triggers.'
+          : '',
+      metadata: {
+        actor: email,
+        triggerResult: triggerResult,
+      },
+    }),
   });
+
+  return {
+    ok: !triggerResult || triggerResult.ok,
+    partial: !!(
+      triggerResult &&
+      (triggerResult.partial || !triggerResult.ok)
+    ),
+    message: message,
+    triggerResult: triggerResult,
+    automation: getAutomationAdminData_(),
+  };
+}
+
+function validateReviewAutomationSettings_(payload) {
+  const compensationUrl = cleanText_(
+    payload.compensationAdjustmentUrl
+  );
+
+  if (
+    compensationUrl &&
+    !/^https:\/\/.+/i.test(compensationUrl)
+  ) {
+    throw new Error(
+      'The Compensation Adjustment URL must begin with https://.'
+    );
+  }
+
+  return {
+    REVIEW_NOTICE_DAYS: String(
+      v31Integer_(payload.noticeDays, 7, 60, 'Notice days')
+    ),
+    FORM_DUE_DAYS_BEFORE_MEETING: String(
+      v31Integer_(payload.formDueDays, 1, 21, 'Form due days')
+    ),
+    AUTOMATION_TRIGGER_HOUR: String(
+      v31Integer_(payload.triggerHour, 0, 23, 'Trigger hour')
+    ),
+    REVIEW_EVENT_START_HOUR: String(
+      v31Integer_(
+        payload.eventStartHour,
+        0,
+        23,
+        'Event start hour'
+      )
+    ),
+    REVIEW_EVENT_DURATION_MINUTES: String(
+      v31Integer_(
+        payload.eventDurationMinutes,
+        15,
+        240,
+        'Event duration'
+      )
+    ),
+    SHIFT_WEEKEND_MEETINGS: payload.shiftWeekendMeetings
+      ? 'TRUE'
+      : 'FALSE',
+    CALENDAR_ID: cleanText_(payload.calendarId) || 'primary',
+    EVENT_EMAIL_REMINDER_DAYS: String(
+      v31Integer_(
+        payload.eventEmailReminderDays,
+        0,
+        28,
+        'Email reminder days'
+      )
+    ),
+    EVENT_POPUP_REMINDER_HOURS: String(
+      v31Integer_(
+        payload.eventPopupReminderHours,
+        0,
+        672,
+        'Popup reminder hours'
+      )
+    ),
+    COMPENSATION_ADJUSTMENT_URL: compensationUrl,
+    COMPENSATION_DECISION_REQUIRED:
+      payload.compensationDecisionRequired ? 'TRUE' : 'FALSE',
+  };
+}
+
+function persistAutomationSettings_(values) {
+  const settingsSheet = getSpreadsheet_().getSheetByName(
+    PR.SHEETS.SETTINGS
+  );
+
+  Object.keys(values || {}).forEach(function (key) {
+    setSetting_(settingsSheet, key, values[key]);
+  });
+  SpreadsheetApp.flush();
 }
 
 function setReviewAutomationMode(mode) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
+  const email = getCurrentUserEmail_();
 
-    if (!isHrUser_(email)) {
-      throw new Error(
-        'Only HR may enable or pause review automation.'
-      );
-    }
-
-    if (!['Preview', 'Live', 'Paused'].includes(mode)) {
-      throw new Error('Unsupported automation mode.');
-    }
-
-    if (mode === 'Live') {
-      assertAutomationOwner_(getSettings_());
-    }
-
-    const settingsSheet = getSpreadsheet_().getSheetByName(
-      PR.SHEETS.SETTINGS
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may enable or pause review automation.'
     );
+  }
 
-    setSetting_(
-      settingsSheet,
-      'AUTOMATION_MODE',
-      mode
-    );
+  if (!['Preview', 'Live', 'Paused'].includes(mode)) {
+    throw new Error('Unsupported automation mode.');
+  }
 
-    if (mode === 'Live') {
-      installReviewAutomationTrigger_();
-    } else {
-      removeReviewAutomationTriggers_();
-    }
-
-    logReviewAutomation_({
-      mode: mode,
-      action: 'Automation mode changed',
-      result: 'Success',
-      details: 'Changed by ' + email,
+  if (mode === 'Live') {
+    const liveResult = installReviewAutomationTriggerSafely_({
+      actorEmail: email,
+      reason: 'Live automation enabled',
     });
 
     return {
-      ok: true,
-      message:
-        mode === 'Live'
-          ? 'Live automation enabled. The daily trigger is installed.'
-          : mode === 'Preview'
-          ? 'Automation returned to Preview mode. No automatic cycles will be sent.'
-          : 'Automation paused and the daily trigger was removed.',
+      ok: liveResult.ok,
+      partial: !!liveResult.partial,
+      message: liveResult.ok
+        ? liveResult.partial
+          ? 'Live automation is enabled, but older triggers require manual cleanup in My Triggers.'
+          : 'Live automation enabled with a verified owner-controlled daily trigger.'
+        : 'Live automation was not enabled. The prior mode and trigger were preserved. ' +
+          String(liveResult.error || liveResult.warning || ''),
+      triggerResult: liveResult,
       automation: getAutomationAdminData_(),
     };
-  });
+  }
+
+  return disableReviewAutomationSafely_(mode, email);
 }
 
 function getReviewAutomationPreview(days) {
@@ -1163,85 +1184,77 @@ function runReviewAutomationNow() {
   }
 
   assertAutomationOwner_(settings);
-  return runReviewAutomationCore_();
+  try {
+    return runReviewAutomationCore_();
+  } catch (error) {
+    recordAutomationRunHealth_(
+      false,
+      String(error.message || error)
+    );
+    throw error;
+  }
 }
 
-function installReviewAutomationTrigger_() {
-  const settings = getSettings_();
-  assertAutomationOwner_(settings);
-  removeReviewAutomationTriggers_();
+function getOwnedReviewAutomationTriggers_() {
+  return ScriptApp.getProjectTriggers().filter(function (trigger) {
+    const handler = trigger.getHandlerFunction();
+    return (
+      handler === 'runReviewAutomationTrigger_' ||
+      handler === 'runReviewAutomation'
+    );
+  });
+}
 
-  const hour = Number(
-    settings.AUTOMATION_TRIGGER_HOUR || 8
-  );
+function getTriggerUniqueId_(trigger) {
+  return trigger && typeof trigger.getUniqueId === 'function'
+    ? String(trigger.getUniqueId() || '')
+    : '';
+}
 
-  const trigger = ScriptApp.newTrigger(
-    'runReviewAutomationTrigger_'
-  )
+function getTriggerHandlerName_(trigger) {
+  return trigger && typeof trigger.getHandlerFunction === 'function'
+    ? String(trigger.getHandlerFunction() || '')
+    : '';
+}
+
+function createReviewAutomationTrigger_(hour, timeZone) {
+  return ScriptApp.newTrigger('runReviewAutomationTrigger_')
     .timeBased()
     .atHour(hour)
     .nearMinute(0)
     .everyDays(1)
-    .inTimezone(
-      Session.getScriptTimeZone() ||
-        'America/New_York'
-    )
+    .inTimezone(timeZone)
     .create();
-
-  const settingsSheet = getSpreadsheet_().getSheetByName(
-    PR.SHEETS.SETTINGS
-  );
-  setSetting_(
-    settingsSheet,
-    'AUTOMATION_TRIGGER_UNIQUE_ID',
-    trigger.getUniqueId()
-  );
-  setSetting_(
-    settingsSheet,
-    'AUTOMATION_TRIGGER_INSTALLED_AT',
-    new Date().toISOString()
-  );
 }
 
-function removeReviewAutomationTriggers_() {
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    const handler = trigger.getHandlerFunction();
+function removeOwnedReviewAutomationTriggers_(
+  triggers,
+  deleteTrigger
+) {
+  const removedIds = [];
+  const failedIds = [];
+  const errors = [];
+  const remove = deleteTrigger || function (trigger) {
+    ScriptApp.deleteTrigger(trigger);
+  };
 
-    if (
-      handler === 'runReviewAutomationTrigger_' ||
-      handler === 'runReviewAutomation'
-    ) {
-      ScriptApp.deleteTrigger(trigger);
+  (triggers || []).forEach(function (trigger) {
+    const id = getTriggerUniqueId_(trigger);
+    try {
+      remove(trigger);
+      removedIds.push(id);
+    } catch (error) {
+      failedIds.push(id);
+      errors.push(String(error.message || error));
     }
   });
 
-  const settingsSheet = getSpreadsheet_().getSheetByName(
-    PR.SHEETS.SETTINGS
-  );
-
-  if (settingsSheet) {
-    setSetting_(
-      settingsSheet,
-      'AUTOMATION_TRIGGER_UNIQUE_ID',
-      ''
-    );
-    setSetting_(
-      settingsSheet,
-      'AUTOMATION_TRIGGER_INSTALLED_AT',
-      ''
-    );
-  }
-}
-
-function hasReviewAutomationTrigger_() {
-  return ScriptApp.getProjectTriggers().some(
-    function (trigger) {
-      return (
-        trigger.getHandlerFunction() ===
-        'runReviewAutomationTrigger_'
-      );
-    }
-  );
+  return {
+    ok: failedIds.length === 0,
+    removedIds: removedIds,
+    failedIds: failedIds,
+    errors: errors,
+  };
 }
 
 function getEffectiveAutomationUserEmail_() {
@@ -1250,57 +1263,589 @@ function getEffectiveAutomationUserEmail_() {
   );
 }
 
-function ensureAutomationOwnerConfigured_() {
-  const settings = getSettings_();
-  const configured = normalizeEmail_(
-    settings.AUTOMATION_OWNER_EMAIL
-  );
+function assertAutomationOwnerValues_(ownerEmail, effectiveEmail) {
+  const owner = normalizeEmail_(ownerEmail);
+  const effective = normalizeEmail_(effectiveEmail);
 
-  if (configured) {
-    return configured;
-  }
-
-  const effectiveEmail = getEffectiveAutomationUserEmail_();
-
-  if (!effectiveEmail) {
+  if (!owner) {
     throw new Error(
-      'Unable to determine the effective automation owner.'
+      'AUTOMATION_OWNER_EMAIL is not configured. Live automation remains blocked until Daniel supplies the designated AITHERAS account.'
     );
   }
 
-  setSetting_(
-    getSpreadsheet_().getSheetByName(PR.SHEETS.SETTINGS),
-    'AUTOMATION_OWNER_EMAIL',
-    effectiveEmail
-  );
-
-  return effectiveEmail;
-}
-
-function assertAutomationOwner_(settings) {
-  const currentSettings = settings || getSettings_();
-  const ownerEmail = normalizeEmail_(
-    currentSettings.AUTOMATION_OWNER_EMAIL
-  );
-  const effectiveEmail = getEffectiveAutomationUserEmail_();
-
-  if (!ownerEmail) {
-    throw new Error(
-      'AUTOMATION_OWNER_EMAIL is not configured. Run upgradeToV31_ from the intended deployment-owner account.'
-    );
-  }
-
-  if (effectiveEmail !== ownerEmail) {
+  if (effective !== owner) {
     throw new Error(
       'Only the designated automation owner (' +
-        ownerEmail +
-        ') may install or migrate triggers. Current effective user: ' +
-        (effectiveEmail || 'unknown') +
+        owner +
+        ') may install, replace, or migrate triggers. Current effective user: ' +
+        (effective || 'unknown') +
         '.'
     );
   }
 
-  return ownerEmail;
+  return owner;
+}
+
+function assertAutomationOwner_(settings) {
+  const currentSettings = settings || getSettings_();
+  return assertAutomationOwnerValues_(
+    currentSettings.AUTOMATION_OWNER_EMAIL,
+    getEffectiveAutomationUserEmail_()
+  );
+}
+
+function validateAutomationTriggerConfiguration_(settings) {
+  assertAutomationOwner_(settings);
+  const hour = Number(settings.AUTOMATION_TRIGGER_HOUR);
+  const timeZone = String(
+    Session.getScriptTimeZone() || ''
+  );
+
+  if (
+    !Number.isInteger(hour) ||
+    hour < 0 ||
+    hour > 23
+  ) {
+    throw new Error(
+      'AUTOMATION_TRIGGER_HOUR must be an integer from 0 through 23.'
+    );
+  }
+
+  if (!timeZone) {
+    throw new Error(
+      'The Apps Script project time zone is not configured.'
+    );
+  }
+
+  return {
+    hour: hour,
+    timeZone: timeZone,
+  };
+}
+
+function defaultTriggerAdministrationServices_() {
+  return {
+    readSettings: function () {
+      return getSettings_();
+    },
+    effectiveEmail: function () {
+      return getEffectiveAutomationUserEmail_();
+    },
+    listTriggers: function () {
+      return getOwnedReviewAutomationTriggers_();
+    },
+    createTrigger: function (hour, timeZone) {
+      return createReviewAutomationTrigger_(hour, timeZone);
+    },
+    deleteTrigger: function (trigger) {
+      ScriptApp.deleteTrigger(trigger);
+    },
+    persist: function (values) {
+      persistAutomationSettings_(values);
+    },
+    nowIso: function () {
+      return new Date().toISOString();
+    },
+    fault: function (point) {
+      maybeInjectTriggerFault_(point);
+    },
+    timeZone: function () {
+      return String(Session.getScriptTimeZone() || '');
+    },
+  };
+}
+
+function verifyReplacementAutomationTrigger_(
+  trigger,
+  visibleTriggers
+) {
+  const id = getTriggerUniqueId_(trigger);
+  const handler = getTriggerHandlerName_(trigger);
+  const visible = (visibleTriggers || []).some(function (item) {
+    return (
+      getTriggerUniqueId_(item) === id &&
+      getTriggerHandlerName_(item) ===
+        'runReviewAutomationTrigger_'
+    );
+  });
+
+  if (!id) {
+    throw new Error(
+      'The replacement trigger did not return a unique ID.'
+    );
+  }
+
+  if (handler !== 'runReviewAutomationTrigger_') {
+    throw new Error(
+      'The replacement trigger has an unexpected handler: ' +
+        (handler || 'unknown') +
+        '.'
+    );
+  }
+
+  if (!visible) {
+    throw new Error(
+      'The replacement trigger was not visible after creation.'
+    );
+  }
+
+  return id;
+}
+
+function executeAutomationTriggerReplacement_(
+  options,
+  services
+) {
+  const opts = options || {};
+  const svc = services || defaultTriggerAdministrationServices_();
+  const before = svc.readSettings();
+  const owner = normalizeEmail_(before.AUTOMATION_OWNER_EMAIL);
+  const effective = normalizeEmail_(svc.effectiveEmail());
+  assertAutomationOwnerValues_(owner, effective);
+
+  const hour = Number(before.AUTOMATION_TRIGGER_HOUR);
+  const timeZone = String(svc.timeZone() || '');
+
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new Error(
+      'AUTOMATION_TRIGGER_HOUR must be an integer from 0 through 23.'
+    );
+  }
+
+  if (!timeZone) {
+    throw new Error(
+      'The Apps Script project time zone is not configured.'
+    );
+  }
+
+  const oldTriggers = svc.listTriggers().slice();
+  const oldIds = oldTriggers.map(getTriggerUniqueId_);
+  let replacement = null;
+  let replacementId = '';
+  let liveVerified = false;
+  let rollbackError = '';
+
+  try {
+    replacement = svc.createTrigger(hour, timeZone);
+    replacementId = verifyReplacementAutomationTrigger_(
+      replacement,
+      svc.listTriggers()
+    );
+    svc.fault('AFTER_TRIGGER_CREATION');
+
+    const installedAt = svc.nowIso();
+    svc.persist({
+      AUTOMATION_TRIGGER_UNIQUE_ID: replacementId,
+      AUTOMATION_TRIGGER_INSTALLED_AT: installedAt,
+    });
+    svc.fault('AFTER_TRIGGER_METADATA_PERSISTENCE');
+
+    let stored = svc.readSettings();
+    if (
+      String(stored.AUTOMATION_TRIGGER_UNIQUE_ID || '') !==
+        replacementId ||
+      String(stored.AUTOMATION_TRIGGER_INSTALLED_AT || '') !==
+        installedAt
+    ) {
+      throw new Error(
+        'Replacement trigger metadata could not be verified.'
+      );
+    }
+
+    svc.fault('BEFORE_LIVE_MODE_PERSISTENCE');
+    svc.persist({ AUTOMATION_MODE: 'Live' });
+    stored = svc.readSettings();
+
+    if (
+      String(stored.AUTOMATION_MODE || '') !== 'Live' ||
+      String(stored.AUTOMATION_TRIGGER_UNIQUE_ID || '') !==
+        replacementId
+    ) {
+      throw new Error(
+        'Live mode and replacement trigger metadata could not be verified together.'
+      );
+    }
+    liveVerified = true;
+
+    let cleanup;
+    try {
+      svc.fault('BEFORE_OLD_TRIGGER_CLEANUP');
+      cleanup = removeOwnedReviewAutomationTriggers_(
+        oldTriggers,
+        svc.deleteTrigger
+      );
+    } catch (cleanupError) {
+      cleanup = {
+        ok: false,
+        removedIds: [],
+        failedIds: oldIds,
+        errors: [String(cleanupError.message || cleanupError)],
+      };
+    }
+
+    return {
+      ok: true,
+      partial: !cleanup.ok,
+      newTriggerActive: true,
+      cleanupRequired: !cleanup.ok,
+      newTriggerId: replacementId,
+      oldTriggerIds: oldIds,
+      removedTriggerIds: cleanup.removedIds,
+      failedRemovalIds: cleanup.failedIds,
+      installedAt: installedAt,
+      mode: 'Live',
+      warning: cleanup.ok
+        ? ''
+        : 'The new trigger is active, but one or more older triggers could not be removed. Review My Triggers.',
+      cleanupErrors: cleanup.errors,
+      actorEmail: opts.actorEmail || effective,
+    };
+  } catch (error) {
+    if (liveVerified) {
+      return {
+        ok: true,
+        partial: true,
+        newTriggerActive: true,
+        cleanupRequired: true,
+        newTriggerId: replacementId,
+        oldTriggerIds: oldIds,
+        removedTriggerIds: [],
+        failedRemovalIds: oldIds,
+        mode: 'Live',
+        warning:
+          'The new trigger is active, but old-trigger cleanup could not be completed.',
+        error: String(error.message || error),
+      };
+    }
+
+    if (replacement) {
+      try {
+        svc.deleteTrigger(replacement);
+      } catch (deleteError) {
+        rollbackError =
+          ' Replacement cleanup failed: ' +
+          String(deleteError.message || deleteError);
+      }
+    }
+
+    try {
+      svc.persist({
+        AUTOMATION_TRIGGER_UNIQUE_ID: String(
+          before.AUTOMATION_TRIGGER_UNIQUE_ID || ''
+        ),
+        AUTOMATION_TRIGGER_INSTALLED_AT: String(
+          before.AUTOMATION_TRIGGER_INSTALLED_AT || ''
+        ),
+        AUTOMATION_MODE: String(
+          before.AUTOMATION_MODE || 'Preview'
+        ),
+      });
+    } catch (restoreError) {
+      rollbackError +=
+        ' Prior settings restoration failed: ' +
+        String(restoreError.message || restoreError);
+    }
+
+    return {
+      ok: false,
+      partial: !!rollbackError,
+      newTriggerActive: false,
+      cleanupRequired: !!rollbackError,
+      oldTriggerIds: oldIds,
+      preservedMode: String(
+        before.AUTOMATION_MODE || 'Preview'
+      ),
+      error: String(error.message || error) + rollbackError,
+      actorEmail: opts.actorEmail || effective,
+    };
+  }
+}
+
+function installReviewAutomationTriggerSafely_(options, services) {
+  if (services) {
+    return executeAutomationTriggerReplacement_(
+      options,
+      services
+    );
+  }
+
+  const lock = LockService.getUserLock();
+
+  if (!lock.tryLock(30000)) {
+    return {
+      ok: false,
+      partial: false,
+      error:
+        'Another trigger-administration operation is in progress. Try again after it completes.',
+    };
+  }
+
+  let result;
+  try {
+    result = executeAutomationTriggerReplacement_(
+      options,
+      defaultTriggerAdministrationServices_()
+    );
+  } finally {
+    lock.releaseLock();
+  }
+
+  logReviewAutomation_({
+    mode: result.mode || result.preservedMode || '',
+    action: 'Automation trigger replacement',
+    result: result.ok
+      ? result.partial
+        ? 'Partial'
+        : 'Success'
+      : 'Failed',
+    details: automationLogDetails_({
+      component: 'Review Automation Trigger',
+      attemptId: result.newTriggerId || '',
+      previousState: result.preservedMode || '',
+      newState: result.mode || result.preservedMode || '',
+      error: result.error || result.warning || '',
+      recoveryRecommendation: result.cleanupRequired
+        ? 'The automation owner must inspect My Triggers and remove owner-visible duplicates.'
+        : result.ok
+        ? ''
+        : 'Correct the reported problem and retry Live activation.',
+      metadata: result,
+    }),
+  });
+
+  return result;
+}
+
+function disableReviewAutomationSafely_(mode, actorEmail) {
+  const lock = LockService.getUserLock();
+
+  if (!lock.tryLock(30000)) {
+    throw new Error(
+      'Another trigger-administration operation is in progress.'
+    );
+  }
+
+  let cleanup;
+  try {
+    persistAutomationSettings_({ AUTOMATION_MODE: mode });
+    cleanup = removeOwnedReviewAutomationTriggers_(
+      getOwnedReviewAutomationTriggers_()
+    );
+
+    if (cleanup.ok) {
+      persistAutomationSettings_({
+        AUTOMATION_TRIGGER_UNIQUE_ID: '',
+        AUTOMATION_TRIGGER_INSTALLED_AT: '',
+      });
+    }
+  } finally {
+    lock.releaseLock();
+  }
+
+  logReviewAutomation_({
+    mode: mode,
+    action: 'Automation mode changed',
+    result: cleanup.ok ? 'Success' : 'Partial',
+    details: automationLogDetails_({
+      component: 'Review Automation Trigger',
+      previousState: 'Live',
+      newState: mode,
+      error: cleanup.errors.join('; '),
+      recoveryRecommendation: cleanup.ok
+        ? ''
+        : 'The automation owner must remove remaining triggers from My Triggers.',
+      metadata: {
+        actor: actorEmail,
+        cleanup: cleanup,
+      },
+    }),
+  });
+
+  return {
+    ok: true,
+    partial: !cleanup.ok,
+    message: cleanup.ok
+      ? mode === 'Preview'
+        ? 'Automation returned to Preview mode. No automatic cycles will be sent.'
+        : 'Automation paused and owner-visible triggers were removed.'
+      : 'Automation is no longer Live, but one or more owner-visible triggers require manual cleanup.',
+    cleanup: cleanup,
+    automation: getAutomationAdminData_(),
+  };
+}
+
+function hasReviewAutomationTrigger_() {
+  return getOwnedReviewAutomationTriggers_().some(
+    function (trigger) {
+      return (
+        getTriggerHandlerName_(trigger) ===
+        'runReviewAutomationTrigger_'
+      );
+    }
+  );
+}
+
+function verifyStoredAutomationTrigger_(settings, triggers) {
+  const storedId = String(
+    settings.AUTOMATION_TRIGGER_UNIQUE_ID || ''
+  );
+  return (triggers || []).find(function (trigger) {
+    return (
+      getTriggerUniqueId_(trigger) === storedId &&
+      getTriggerHandlerName_(trigger) ===
+        'runReviewAutomationTrigger_'
+    );
+  }) || null;
+}
+
+function getAutomationTriggerHealth_(settings, triggers) {
+  const currentSettings = settings || getSettings_();
+  const visibleTriggers =
+    triggers || getOwnedReviewAutomationTriggers_();
+  const effectiveEmail = getEffectiveAutomationUserEmail_();
+  const ownerEmail = normalizeEmail_(
+    currentSettings.AUTOMATION_OWNER_EMAIL
+  );
+  const mode = String(
+    currentSettings.AUTOMATION_MODE || 'Preview'
+  );
+  const current = visibleTriggers.filter(function (trigger) {
+    return (
+      getTriggerHandlerName_(trigger) ===
+      'runReviewAutomationTrigger_'
+    );
+  });
+  const stored = verifyStoredAutomationTrigger_(
+    currentSettings,
+    current
+  );
+  const ownerMatches =
+    !!ownerEmail && ownerEmail === effectiveEmail;
+  const modeConsistent =
+    mode === 'Live'
+      ? current.length === 1 &&
+        visibleTriggers.length === 1 &&
+        !!stored
+      : visibleTriggers.length === 0;
+  const warnings = [];
+
+  if (!ownerEmail) {
+    warnings.push(
+      'AUTOMATION_OWNER_EMAIL is blank; Live activation is blocked.'
+    );
+  } else if (!ownerMatches) {
+    warnings.push(
+      'The effective user does not match the configured automation owner.'
+    );
+  }
+
+  if (!modeConsistent) {
+    warnings.push(
+      mode === 'Live'
+        ? 'Live mode does not have exactly one matching owner-visible trigger.'
+        : 'An owner-visible automation trigger exists while automation is not Live.'
+    );
+  }
+
+  warnings.push(
+    'Triggers installed by other accounts cannot be inspected here.'
+  );
+
+  return {
+    configuredOwnerEmail: ownerEmail,
+    effectiveUserEmail: effectiveEmail,
+    ownerMatches: ownerMatches,
+    storedTriggerId: String(
+      currentSettings.AUTOMATION_TRIGGER_UNIQUE_ID || ''
+    ),
+    visibleTriggerIds: visibleTriggers.map(getTriggerUniqueId_),
+    visibleTriggerCount: visibleTriggers.length,
+    installedAt: String(
+      currentSettings.AUTOMATION_TRIGGER_INSTALLED_AT || ''
+    ),
+    handlerName: stored
+      ? getTriggerHandlerName_(stored)
+      : '',
+    expectedHour: Number(
+      currentSettings.AUTOMATION_TRIGGER_HOUR || 8
+    ),
+    timeZone: String(
+      Session.getScriptTimeZone() || 'America/New_York'
+    ),
+    expectedSchedule:
+      'Daily at ' +
+      Number(currentSettings.AUTOMATION_TRIGGER_HOUR || 8) +
+      ':00 ' +
+      String(
+        Session.getScriptTimeZone() || 'America/New_York'
+      ),
+    healthy: ownerMatches && modeConsistent,
+    warning: warnings.join(' '),
+    mode: mode,
+    lastRun: String(currentSettings.AUTOMATION_LAST_RUN || ''),
+    lastSuccess: String(
+      currentSettings.AUTOMATION_LAST_SUCCESS || ''
+    ),
+    lastFailure: String(
+      currentSettings.AUTOMATION_LAST_FAILURE || ''
+    ),
+    lastError: String(
+      currentSettings.AUTOMATION_LAST_ERROR || ''
+    ),
+  };
+}
+
+function refreshReviewAutomationHealth() {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error(
+      'Only HR may refresh automation health.'
+    );
+  }
+
+  return {
+    ok: true,
+    checkedAt: new Date().toISOString(),
+    triggerHealth: getAutomationTriggerHealth_(),
+  };
+}
+
+function maybeInjectTriggerFault_(point) {
+  const settings = getSettings_();
+  const enabled = v31Boolean_(
+    settings.ENABLE_FAULT_INJECTION,
+    false
+  );
+
+  if (!enabled) {
+    return;
+  }
+
+  const environment = String(
+    settings.ENVIRONMENT || 'Production'
+  );
+
+  if (environment !== 'Sandbox') {
+    throw new Error(
+      'Fault injection is prohibited unless ENVIRONMENT is Sandbox.'
+    );
+  }
+
+  if (String(settings.FAULT_POINT || '') !== String(point)) {
+    return;
+  }
+
+  if (v31Boolean_(settings.FAULT_ONCE, true)) {
+    persistAutomationSettings_({
+      ENABLE_FAULT_INJECTION: 'false',
+      FAULT_POINT: '',
+    });
+  }
+
+  throw new Error(
+    'Sandbox fault injected at ' + String(point) + '.'
+  );
 }
 
 /**
@@ -1314,100 +1859,26 @@ function migrateLegacyReviewAutomationTrigger_() {
   const mode = String(
     settings.AUTOMATION_MODE || 'Preview'
   );
-  let removedLegacy = 0;
-  let removedDuplicate = 0;
-  let foundCurrent = false;
 
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    const handler = trigger.getHandlerFunction();
-
-    if (handler === 'runReviewAutomation') {
-      ScriptApp.deleteTrigger(trigger);
-      removedLegacy++;
-      return;
-    }
-
-    if (handler !== 'runReviewAutomationTrigger_') {
-      return;
-    }
-
-    if (mode !== 'Live' || foundCurrent) {
-      ScriptApp.deleteTrigger(trigger);
-      removedDuplicate++;
-      return;
-    }
-
-    foundCurrent = true;
-  });
-
-  let installed = false;
-  let currentTriggerId = '';
-
-  if (mode === 'Live' && !foundCurrent) {
-    const hour = Number(
-      settings.AUTOMATION_TRIGGER_HOUR || 8
-    );
-
-    const trigger = ScriptApp.newTrigger(
-      'runReviewAutomationTrigger_'
-    )
-      .timeBased()
-      .atHour(hour)
-      .nearMinute(0)
-      .everyDays(1)
-      .inTimezone(
-        Session.getScriptTimeZone() ||
-          'America/New_York'
-      )
-      .create();
-    currentTriggerId = trigger.getUniqueId();
-    installed = true;
-  } else if (mode === 'Live' && foundCurrent) {
-    const current = ScriptApp.getProjectTriggers().filter(
-      function (trigger) {
-        return (
-          trigger.getHandlerFunction() ===
-          'runReviewAutomationTrigger_'
-        );
-      }
-    )[0];
-    currentTriggerId = current ? current.getUniqueId() : '';
+  if (mode === 'Live') {
+    const result = installReviewAutomationTriggerSafely_({
+      actorEmail: getEffectiveAutomationUserEmail_(),
+      reason: 'Legacy trigger migration',
+    });
+    result.message = result.ok
+      ? result.partial
+        ? 'A verified replacement is active; owner-visible legacy triggers require manual cleanup.'
+        : 'A verified private-handler trigger replaced owner-visible legacy triggers.'
+      : 'Legacy trigger migration failed; the prior trigger and mode were preserved.';
+    return result;
   }
 
-  const settingsSheet = getSpreadsheet_().getSheetByName(
-    PR.SHEETS.SETTINGS
+  const result = disableReviewAutomationSafely_(
+    mode,
+    getEffectiveAutomationUserEmail_()
   );
-  setSetting_(
-    settingsSheet,
-    'AUTOMATION_TRIGGER_UNIQUE_ID',
-    mode === 'Live' ? currentTriggerId : ''
-  );
-  setSetting_(
-    settingsSheet,
-    'AUTOMATION_TRIGGER_INSTALLED_AT',
-    mode === 'Live'
-      ? String(
-          settings.AUTOMATION_TRIGGER_INSTALLED_AT ||
-            new Date().toISOString()
-        )
-      : ''
-  );
-
-  return {
-    ok: true,
-    mode: mode,
-    removedLegacy: removedLegacy,
-    removedDuplicate: removedDuplicate,
-    installed: installed,
-    message:
-      'removed ' +
-      removedLegacy +
-      ' legacy and ' +
-      removedDuplicate +
-      ' duplicate trigger(s); current trigger ' +
-      (mode === 'Live' ? 'installed/retained' : 'disabled') +
-      '. Other editor accounts must clear their own triggers manually.',
-  };
+  result.mode = mode;
+  return result;
 }
 
 /* ============================ AUTOMATION RUN ============================= */
@@ -1431,8 +1902,36 @@ function claimAutomationCycleForRetry_(existingCycleId) {
 }
 
 function runReviewAutomationTrigger_() {
-  assertAutomationOwner_(getSettings_());
-  return runReviewAutomationCore_();
+  try {
+    assertAutomationOwner_(getSettings_());
+    return runReviewAutomationCore_();
+  } catch (error) {
+    recordAutomationRunHealth_(
+      false,
+      String(error.message || error)
+    );
+    throw error;
+  }
+}
+
+function recordAutomationRunHealth_(successful, errorMessage) {
+  const now = new Date().toISOString();
+  const values = {
+    AUTOMATION_LAST_RUN: now,
+    AUTOMATION_LAST_ERROR: successful
+      ? ''
+      : String(errorMessage || 'Automation run failed.'),
+  };
+
+  if (successful) {
+    values.AUTOMATION_LAST_SUCCESS = now;
+  } else {
+    values.AUTOMATION_LAST_FAILURE = now;
+  }
+
+  withLock_(function () {
+    persistAutomationSettings_(values);
+  });
 }
 
 /**
@@ -1576,17 +2075,16 @@ function runReviewAutomationCore_() {
     }
   });
 
-  const now = new Date();
-
-  withLock_(function () {
-    setSetting_(
-      getSpreadsheet_().getSheetByName(
-        PR.SHEETS.SETTINGS
-      ),
-      'AUTOMATION_LAST_RUN',
-      now.toISOString()
-    );
-  });
+  const runFailed =
+    failed > 0 || (outbox && outbox.ok === false);
+  recordAutomationRunHealth_(
+    !runFailed,
+    runFailed
+      ? failed +
+          ' launch failure(s); outbox failures: ' +
+          Number((outbox && outbox.failed) || 0)
+      : ''
+  );
 
   return {
     ok: failed === 0,
@@ -5286,6 +5784,23 @@ function reconcileLaunchDelivery(cycleId, component, action) {
 }
 
 /* =============================== LOG ===================================== */
+
+function automationLogDetails_(details) {
+  const value = details || {};
+  return JSON.stringify({
+    schemaVersion: 1,
+    appVersion: APP_VERSION,
+    component: String(value.component || ''),
+    attemptId: String(value.attemptId || ''),
+    previousState: String(value.previousState || ''),
+    newState: String(value.newState || ''),
+    error: String(value.error || ''),
+    recoveryRecommendation: String(
+      value.recoveryRecommendation || ''
+    ),
+    metadata: value.metadata || {},
+  });
+}
 
 function logReviewAutomation_(entry) {
   appendObject_(
