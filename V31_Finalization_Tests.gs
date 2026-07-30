@@ -54,6 +54,18 @@ function runV31FinalizationTests() {
       testHtmlToPlainTextFallback_
     )
   );
+  results.push(
+    runFinalCase_(
+      'Finalizing is visible in meetingOpen and primary action',
+      testFinalizingVisibilityAndPrimaryAction_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'PDF filename uses cycle ID not employee name',
+      testPdfFileNameUsesCycleId_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -244,5 +256,62 @@ function testHtmlToPlainTextFallback_() {
   assertFinal_(
     plain.indexOf('<p>') < 0,
     'Plain text must strip HTML tags'
+  );
+}
+
+function testFinalizingVisibilityAndPrimaryAction_() {
+  const meetingOpen = [
+    PR.CYCLE.MEETING,
+    PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
+    PR.CYCLE.COMPLETE,
+  ].includes(PR.CYCLE.FINALIZING);
+
+  assertFinal_(
+    meetingOpen,
+    'Finalizing must be treated as meeting-open for visibility'
+  );
+
+  const action = determinePrimaryAction_(
+    {
+      Status: PR.CYCLE.FINALIZING,
+      'Manager Review Status': PR.DOC.SUBMITTED,
+      'Self Evaluation Status': PR.DOC.SUBMITTED,
+      'MGR Manager Signature ID': 'a',
+      'SELF Manager Signature ID': 'a',
+      'MGR Employee Signature ID': 'b',
+      'SELF Employee Signature ID': 'b',
+      'MGR HR Signature ID': 'c',
+      'SELF HR Signature ID': 'c',
+      'Manager Email': 'mgr@example.com',
+      'Employee Email': 'emp@example.com',
+    },
+    'hr@example.com',
+    true
+  );
+
+  assertFinal_(
+    action.label === 'Retry Final Documents',
+    'HR primary action in Finalizing must be Retry Final Documents'
+  );
+  assertFinal_(
+    action.required === true,
+    'HR finalization retry must be required'
+  );
+}
+
+function testPdfFileNameUsesCycleId_() {
+  const name = buildReviewPdfFileName_(
+    'CYCLE-9',
+    'Self-Evaluation'
+  );
+
+  assertFinal_(
+    name === 'Self-Evaluation - CYCLE-9.pdf',
+    'PDF recovery name must key on cycle ID'
+  );
+  assertFinal_(
+    name.indexOf('Employee') < 0,
+    'PDF recovery name must not rely on employee display name'
   );
 }

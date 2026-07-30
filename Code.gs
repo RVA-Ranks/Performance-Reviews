@@ -608,14 +608,14 @@ function saveIndependentReview_(
 }
 
 function startReviewMeeting(cycleId) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
+  const email = getCurrentUserEmail_();
+  const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
-    const cycle = location.object;
+    const stored = location.object;
 
     const authorized =
       isHrUser_(email) ||
-      normalizeEmail_(cycle['Manager Email']) === email;
+      normalizeEmail_(stored['Manager Email']) === email;
 
     if (!authorized) {
       throw new Error(
@@ -623,18 +623,18 @@ function startReviewMeeting(cycleId) {
       );
     }
 
-    if (String(cycle['Status']) !== PR.CYCLE.READY) {
+    if (String(stored['Status']) !== PR.CYCLE.READY) {
       throw new Error(
         'Both reviews must be submitted before the meeting can be opened.'
       );
     }
 
-    cycle['Status'] = PR.CYCLE.MEETING;
-    cycle['Meeting Opened At'] = new Date();
-    cycle['Meeting Opened By'] = email;
-    cycle['Updated At'] = new Date();
+    stored['Status'] = PR.CYCLE.MEETING;
+    stored['Meeting Opened At'] = new Date();
+    stored['Meeting Opened By'] = email;
+    stored['Updated At'] = new Date();
 
-    writeCycle_(location.rowNumber, cycle);
+    writeCycle_(location.rowNumber, stored);
 
     audit_(
       cycleId,
@@ -645,14 +645,16 @@ function startReviewMeeting(cycleId) {
       ''
     );
 
-    sendMeetingOpenedEmails_(cycle);
-
-    return {
-      ok: true,
-      message:
-        'The meeting is open. Both reviews are now visible to the manager and employee.',
-    };
+    return stored;
   });
+
+  sendMeetingOpenedEmails_(cycle);
+
+  return {
+    ok: true,
+    message:
+      'The meeting is open. Both reviews are now visible to the manager and employee.',
+  };
 }
 
 function saveMeetingOutcomes(cycleId, payload) {
@@ -736,14 +738,14 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
 }
 
 function releaseReviewSignatures(cycleId) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
+  const email = getCurrentUserEmail_();
+  const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
-    const cycle = location.object;
+    const stored = location.object;
 
     const authorized =
       isHrUser_(email) ||
-      normalizeEmail_(cycle['Manager Email']) === email;
+      normalizeEmail_(stored['Manager Email']) === email;
 
     if (!authorized) {
       throw new Error(
@@ -751,30 +753,30 @@ function releaseReviewSignatures(cycleId) {
       );
     }
 
-    if (String(cycle['Status']) !== PR.CYCLE.MEETING) {
+    if (String(stored['Status']) !== PR.CYCLE.MEETING) {
       throw new Error(
         'The review meeting must be open before signatures are released.'
       );
     }
 
-    if (!isV31CompensationComplete_(cycle)) {
+    if (!isV31CompensationComplete_(stored)) {
       throw new Error(
         'Record the compensation decision before releasing the review packet for signature.'
       );
     }
 
-    clearCombinedSignatureFields_(cycle);
+    clearCombinedSignatureFields_(stored);
 
-    cycle['Status'] = PR.CYCLE.SIGNATURES;
-    cycle['Manager Review Status'] =
+    stored['Status'] = PR.CYCLE.SIGNATURES;
+    stored['Manager Review Status'] =
       PR.DOC.PENDING_PARTICIPANTS;
-    cycle['Self Evaluation Status'] =
+    stored['Self Evaluation Status'] =
       PR.DOC.PENDING_PARTICIPANTS;
-    cycle['Signatures Released At'] = new Date();
-    cycle['Signatures Released By'] = email;
-    cycle['Updated At'] = new Date();
+    stored['Signatures Released At'] = new Date();
+    stored['Signatures Released By'] = email;
+    stored['Updated At'] = new Date();
 
-    writeCycle_(location.rowNumber, cycle);
+    writeCycle_(location.rowNumber, stored);
 
     audit_(
       cycleId,
@@ -785,15 +787,17 @@ function releaseReviewSignatures(cycleId) {
       ''
     );
 
-    sendCombinedSignatureEmail_(cycle, PR.ROLE.MANAGER);
-    sendCombinedSignatureEmail_(cycle, PR.ROLE.EMPLOYEE);
-
-    return {
-      ok: true,
-      message:
-        'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.',
-    };
+    return stored;
   });
+
+  sendCombinedSignatureEmail_(cycle, PR.ROLE.MANAGER);
+  sendCombinedSignatureEmail_(cycle, PR.ROLE.EMPLOYEE);
+
+  return {
+    ok: true,
+    message:
+      'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.',
+  };
 }
 
 /**
@@ -869,7 +873,7 @@ function signReviewCycle(cycleId, signatureDataUrl) {
   const email = getCurrentUserEmail_();
   validateSignatureDataUrl_(signatureDataUrl);
 
-  const signed = withLock_(function () {
+  const claim = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
 
@@ -880,7 +884,6 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     }
 
     const state = getCombinedSignatureState_(cycle);
-    const now = new Date();
     let role = '';
 
     if (
@@ -912,23 +915,72 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       );
     }
 
-    const signatureId = saveSignature_(
-      cycleId,
-      'Combined Review Packet - ' + role,
-      signatureDataUrl
-    );
+    return { role: role, cycle: cycle };
+  });
 
-    if (role === PR.ROLE.MANAGER) {
+  // Drive write happens outside the global lock.
+  const signatureId = saveSignature_(
+    cycleId,
+    'Combined Review Packet - ' + claim.role,
+    signatureDataUrl
+  );
+
+  const signed = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const now = new Date();
+    const state = getCombinedSignatureState_(cycle);
+
+    if (String(cycle['Status']) !== PR.CYCLE.SIGNATURES) {
+      throw new Error(
+        'This review cycle is not currently awaiting signatures.'
+      );
+    }
+
+    if (claim.role === PR.ROLE.MANAGER) {
+      if (state.managerSigned) {
+        return {
+          role: claim.role,
+          cycle: cycle,
+          updatedState: state,
+          alreadySigned: true,
+        };
+      }
+
       cycle['MGR Manager Signature ID'] = signatureId;
       cycle['MGR Manager Signed At'] = now;
       cycle['SELF Manager Signature ID'] = signatureId;
       cycle['SELF Manager Signed At'] = now;
-    } else if (role === PR.ROLE.EMPLOYEE) {
+    } else if (claim.role === PR.ROLE.EMPLOYEE) {
+      if (state.employeeSigned) {
+        return {
+          role: claim.role,
+          cycle: cycle,
+          updatedState: state,
+          alreadySigned: true,
+        };
+      }
+
       cycle['MGR Employee Signature ID'] = signatureId;
       cycle['MGR Employee Signed At'] = now;
       cycle['SELF Employee Signature ID'] = signatureId;
       cycle['SELF Employee Signed At'] = now;
     } else {
+      if (state.hrSigned) {
+        return {
+          role: claim.role,
+          cycle: cycle,
+          updatedState: state,
+          alreadySigned: true,
+        };
+      }
+
+      if (!state.managerSigned || !state.employeeSigned) {
+        throw new Error(
+          'HR may sign only after both the manager and employee have signed.'
+        );
+      }
+
       cycle['MGR HR Signature ID'] = signatureId;
       cycle['MGR HR Signed At'] = now;
       cycle['SELF HR Signature ID'] = signatureId;
@@ -943,7 +995,7 @@ function signReviewCycle(cycleId, signatureDataUrl) {
 
     audit_(
       cycleId,
-      'Both review documents signed by ' + role,
+      'Both review documents signed by ' + claim.role,
       email,
       PR.CYCLE.SIGNATURES,
       String(cycle['Status']),
@@ -951,13 +1003,15 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     );
 
     return {
-      role: role,
+      role: claim.role,
       cycle: cycle,
       updatedState: getCombinedSignatureState_(cycle),
+      alreadySigned: false,
     };
   });
 
   if (
+    !signed.alreadySigned &&
     signed.role !== PR.ROLE.HR &&
     signed.updatedState.managerSigned &&
     signed.updatedState.employeeSigned
@@ -1263,6 +1317,7 @@ function getCycleView_(cycleId, email, isHr) {
   const meetingOpen = [
     PR.CYCLE.MEETING,
     PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
     PR.CYCLE.COMPLETE,
   ].includes(String(cycle['Status']));
 
@@ -1481,6 +1536,17 @@ function determinePrimaryAction_(cycle, email, isHr) {
       label: 'Continue Review Meeting',
       tone: 'primary',
       required: isManager || isEmployee,
+    };
+  }
+
+  if (String(cycle['Status']) === PR.CYCLE.FINALIZING) {
+    return {
+      key: 'overview',
+      label: isHr
+        ? 'Retry Final Documents'
+        : 'Final Documents Preparing',
+      tone: isHr ? 'warning' : 'secondary',
+      required: isHr,
     };
   }
 
@@ -2002,9 +2068,21 @@ function ensureFinalPdfComponent_(
   statusField,
   documentType
 ) {
+  const attemptField =
+    documentType === PR.TYPE.MANAGER
+      ? 'Manager PDF Attempt ID'
+      : 'Self PDF Attempt ID';
+  const startedField =
+    documentType === PR.TYPE.MANAGER
+      ? 'Manager PDF Started At'
+      : 'Self PDF Started At';
+
   const before = withLock_(function () {
     const location = findCycle_(cycleId);
-    const cycle = location.object;
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] || 'Manual'
+    );
 
     if (cycle[idField]) {
       if (String(cycle[statusField]) !== V31.DELIVERY.SENT) {
@@ -2017,15 +2095,50 @@ function ensureFinalPdfComponent_(
       return { skip: true };
     }
 
-    const status = String(cycle[statusField] || V31.DELIVERY.PENDING);
+    // Recover an orphaned PDF created before its ID was persisted.
+    const recoveredId = findExistingReviewPdfId_(
+      cycleId,
+      documentType
+    );
 
-    if (status === V31.DELIVERY.SENDING) {
-      if (!isDeliveryClaimStale_(cycle['Updated At'])) {
+    if (recoveredId) {
+      cycle[idField] = recoveredId;
+      cycle[statusField] = V31.DELIVERY.SENT;
+      cycle['Finalization Last Error'] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+
+      return { skip: true };
+    }
+
+    const status = String(cycle[statusField] || V31.DELIVERY.PENDING);
+    const decision = decideLaunchComponentAction_(
+      status,
+      false,
+      cycle[startedField],
+      V31.DELIVERY.SENDING,
+      false
+    );
+
+    if (decision.action === 'skip') {
+      if (decision.reason === 'in-progress') {
         throw new Error(
           label + ' PDF generation is already in progress.'
         );
       }
 
+      if (decision.reason === 'unknown') {
+        throw new Error(
+          label +
+            ' PDF is Delivery Unknown. Confirm whether a Drive file already exists, then retry with reconciliation.'
+        );
+      }
+
+      return { skip: true };
+    }
+
+    if (decision.action === 'mark-unknown') {
       cycle[statusField] = V31.DELIVERY.UNKNOWN;
       cycle['Finalization Last Error'] =
         label +
@@ -2040,19 +2153,16 @@ function ensureFinalPdfComponent_(
       );
     }
 
-    if (status === V31.DELIVERY.UNKNOWN) {
-      throw new Error(
-        label +
-          ' PDF is Delivery Unknown. Confirm whether a Drive file already exists, then retry with reconciliation.'
-      );
-    }
+    const attemptId = Utilities.getUuid();
 
     cycle[statusField] = V31.DELIVERY.SENDING;
+    cycle[attemptField] = attemptId;
+    cycle[startedField] = new Date();
     cycle['Updated At'] = new Date();
     writeCycle_(location.rowNumber, cycle);
     SpreadsheetApp.flush();
 
-    return { skip: false };
+    return { skip: false, attemptId: attemptId };
   });
 
   if (before.skip) {
@@ -2065,6 +2175,14 @@ function ensureFinalPdfComponent_(
     withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
+
+      if (
+        String(cycle[attemptField] || '') !==
+        String(before.attemptId)
+      ) {
+        return;
+      }
+
       cycle[idField] = pdfId;
       cycle[statusField] = V31.DELIVERY.SENT;
       cycle['Finalization Last Error'] = '';
@@ -2077,19 +2195,75 @@ function ensureFinalPdfComponent_(
       const location = findCycle_(cycleId);
       const cycle = location.object;
 
-      if (!cycle[idField]) {
-        cycle[statusField] = V31.DELIVERY.FAILED;
-        cycle['Finalization Last Error'] = String(
-          error.message || error
-        );
-        cycle['Updated At'] = new Date();
-        writeCycle_(location.rowNumber, cycle);
-        SpreadsheetApp.flush();
+      if (
+        String(cycle[attemptField] || '') !==
+        String(before.attemptId)
+      ) {
+        return;
       }
+
+      // Ambiguous: Drive may have created the PDF before the error.
+      // Recovery-by-name on the next attempt will find it.
+      cycle[statusField] = V31.DELIVERY.UNKNOWN;
+      cycle['Finalization Last Error'] = String(
+        error.message || error
+      );
+      cycle['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
     });
 
     throw error;
   }
+}
+
+/**
+ * Deterministic PDF artifact name used for orphan recovery.
+ */
+function buildReviewPdfFileName_(cycleId, documentType) {
+  return (
+    String(documentType) +
+    ' - ' +
+    String(cycleId) +
+    '.pdf'
+  );
+}
+
+/**
+ * Search the review folder for an existing PDF created for this
+ * cycle/document before regenerating another copy.
+ */
+function findExistingReviewPdfId_(cycleId, documentType) {
+  const settings = getSettings_();
+  const folder = DriveApp.getFolderById(
+    settings.REVIEW_FOLDER_ID
+  );
+  const wanted = buildReviewPdfFileName_(
+    cycleId,
+    documentType
+  );
+  const matches = [];
+  const files = folder.getFilesByName(wanted);
+
+  while (files.hasNext()) {
+    matches.push(files.next());
+  }
+
+  if (matches.length === 1) {
+    return matches[0].getId();
+  }
+
+  if (matches.length > 1) {
+    throw new Error(
+      'Multiple ' +
+        documentType +
+        ' PDF artifacts exist for cycle ' +
+        cycleId +
+        '. HR must choose which file to keep.'
+    );
+  }
+
+  return '';
 }
 
 function ensureFinalDistribution_(cycleId, allowUnknownResend) {
@@ -2598,12 +2772,7 @@ function generateReviewPdf_(cycleId, type) {
   const pdf = folder.createFile(
     copy
       .getAs(MimeType.PDF)
-      .setName(
-        type +
-          ' - ' +
-          cycle['Employee Name'] +
-          '.pdf'
-      )
+      .setName(buildReviewPdfFileName_(cycleId, type))
   );
 
   copy.setTrashed(true);
@@ -3382,22 +3551,71 @@ function saveSignature_(cycleId, label, dataUrl) {
   validateSignatureDataUrl_(dataUrl);
 
   const settings = getSettings_();
+  const folder = DriveApp.getFolderById(
+    settings.REVIEW_FOLDER_ID
+  );
+  const fileName = buildSignatureFileName_(cycleId, label);
+  const recoveredId = findExistingSignatureFileId_(
+    folder,
+    fileName
+  );
+
+  if (recoveredId) {
+    return recoveredId;
+  }
+
   const bytes = Utilities.base64Decode(
     String(dataUrl).split(',')[1]
   );
 
-  return DriveApp.getFolderById(
-    settings.REVIEW_FOLDER_ID
-  ).createFile(
-    Utilities.newBlob(
-      bytes,
-      'image/png',
-      cycleId +
-        ' - ' +
-        label.replace(/[^A-Za-z0-9_-]/g, '_') +
-        '.png'
+  return folder
+    .createFile(
+      Utilities.newBlob(bytes, 'image/png', fileName)
     )
-  ).getId();
+    .getId();
+}
+
+/**
+ * Deterministic signature image name used for orphan recovery.
+ */
+function buildSignatureFileName_(cycleId, label) {
+  return (
+    String(cycleId) +
+    ' - ' +
+    String(label).replace(/[^A-Za-z0-9_-]/g, '_') +
+    '.png'
+  );
+}
+
+/**
+ * Recover an existing signature image before writing a replacement.
+ */
+function findExistingSignatureFileId_(folder, fileName) {
+  const matches = [];
+  const files = folder.getFilesByName(fileName);
+
+  while (files.hasNext()) {
+    matches.push(files.next());
+  }
+
+  if (matches.length === 1) {
+    return matches[0].getId();
+  }
+
+  if (matches.length > 1) {
+    // Prefer the most recently updated artifact and leave extras for
+    // HR cleanup rather than blocking the signer.
+    matches.sort(function (left, right) {
+      return (
+        right.getLastUpdated().getTime() -
+        left.getLastUpdated().getTime()
+      );
+    });
+
+    return matches[0].getId();
+  }
+
+  return '';
 }
 
 function getUserProfile_(email, isHr) {

@@ -1909,8 +1909,13 @@ function renderCycleHeaderActions(cycle) {
       if (cycle.v31.launchHasUnknownDelivery) {
         html += '<button class="button outline" onclick="openLaunchReconcileModal()">Reconcile Launch Delivery</button>';
       }
-    } else if (cycle.status !== 'Finalizing') {
-      html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
+    } else {
+      if (cycle.v31.calendarConfigWarning) {
+        html += '<button class="button outline" onclick="retryIncompleteLaunch()">Retry Calendar Config</button>';
+      }
+      if (cycle.status !== 'Finalizing') {
+        html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
+      }
     }
   }
   if (cycle.canDownloadManager) html += '<button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button>';
@@ -2055,7 +2060,13 @@ function renderCycleOverview(cycle) {
     ['Self-Evaluation', humanDocumentStatus(cycle.selfEvaluationStatus)],
     ['Manager Form Due', cycle.v31 && cycle.v31.managerDueDate ? cycle.v31.managerDueDate : 'Not set'],
     ['Employee Form Due', cycle.v31 && cycle.v31.employeeDueDate ? cycle.v31.employeeDueDate : 'Not set'],
-    ['Calendar Event', cycle.v31 && cycle.v31.calendarEventId ? 'Created' : 'Not created'],
+    ['Calendar Event', cycle.v31 && cycle.v31.calendarEventId
+      ? (cycle.v31.calendarConfigWarning
+          ? 'Created — not Configured'
+          : (cycle.v31.launchComponents && cycle.v31.launchComponents.calendarConfigured
+              ? 'Configured'
+              : 'Created'))
+      : 'Not created'],
     ['Meeting Opened', cycle.meetingOpenedAt || 'Not yet'],
     ['Completed', cycle.completedAt || 'Not yet']
   ];

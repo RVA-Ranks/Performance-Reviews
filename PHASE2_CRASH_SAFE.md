@@ -37,6 +37,12 @@ Calendar recovery uses:
 - Event tag `AITHERAS_REVIEW_CYCLE_ID`
 - Description marker `[AITHERAS_REVIEW_CYCLE_ID:<cycleId>]` present at `createEvent()`
 
+Calendar configuration (`setTag` / reminders) is best-effort after create:
+
+- Launch may complete at `Created` (event exists)
+- Config failure persists `Last Launch Error` and is **not** cleared by later email success
+- HR sees “not Configured” warning + **Retry Calendar Config** until status is `Configured`
+
 ## New finalization behavior
 
 ```text
@@ -48,6 +54,11 @@ Awaiting Signatures → Finalizing → Complete
 - Manager PDF ID persisted
 - Self PDF ID persisted
 - Final distribution status = `Sent`
+
+Artifact recovery:
+
+- PDFs: `{documentType} - {cycleId}.pdf`
+- Signatures: `{cycleId} - {sanitizedLabel}.png`
 
 HR recovery: `retryReviewFinalization(cycleId, { allowUnknownResend })`
 

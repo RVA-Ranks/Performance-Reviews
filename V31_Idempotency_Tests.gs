@@ -160,6 +160,18 @@ function runV31IdempotencyTests() {
       testStatusBasedComponentsCompleteLaunch_
     )
   );
+  results.push(
+    runIdemCase_(
+      'calendar Created-but-not-Configured warning survives email success',
+      testCalendarConfigWarningSurvivesEmailSuccess_
+    )
+  );
+  results.push(
+    runIdemCase_(
+      'PDF and signature filenames are deterministic for orphan recovery',
+      testDeterministicArtifactFileNames_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -1048,5 +1060,63 @@ function testStatusBasedComponentsCompleteLaunch_() {
   assertIdem_(
     isReviewLaunchComplete_(cycle),
     'Configured calendar + three Sent statuses must be launch-complete without Launch Completed At or legacy notice'
+  );
+}
+
+function testCalendarConfigWarningSurvivesEmailSuccess_() {
+  const cycle = sampleLaunchCycle_({
+    'Calendar Event ID': 'evt-created',
+    'Calendar Status': V31.CALENDAR.CREATED,
+    'Launch Completed At': new Date(),
+    'Last Launch Error':
+      'Calendar tag/reminder configuration failed: simulated',
+    'Manager Email Status': V31.DELIVERY.SENT,
+    'Employee Email Status': V31.DELIVERY.SENT,
+    'HR Email Status': V31.DELIVERY.SENT,
+  });
+
+  assertIdem_(
+    isReviewLaunchComplete_(cycle),
+    'Created calendar still completes launch'
+  );
+  assertIdem_(
+    hasCalendarConfigWarning_(cycle) === true,
+    'Created + config error must surface calendarConfigWarning'
+  );
+
+  clearLastLaunchErrorUnlessCalendarConfig_(cycle);
+
+  assertIdem_(
+    isCalendarConfigWarning_(cycle['Last Launch Error']),
+    'Email/completion success must not clear calendar config warning'
+  );
+
+  const summary = getReviewLaunchComponentSummary_(cycle);
+
+  assertIdem_(
+    summary.calendarConfigWarning === true &&
+      summary.calendarConfigured === false,
+    'Component summary must expose calendarConfigWarning'
+  );
+
+  cycle['Calendar Status'] = V31.CALENDAR.CONFIGURED;
+  cycle['Last Launch Error'] = '';
+
+  assertIdem_(
+    hasCalendarConfigWarning_(cycle) === false,
+    'Configured calendar must clear the warning'
+  );
+}
+
+function testDeterministicArtifactFileNames_() {
+  assertIdem_(
+    buildReviewPdfFileName_('C-100', 'Manager Review') ===
+      'Manager Review - C-100.pdf',
+    'PDF filename must include cycle ID for orphan recovery'
+  );
+  assertIdem_(
+    buildSignatureFileName_('C-100', 'MGR Employee') ===
+      'C-100 - MGR_Employee.png',
+    'Signature filename must include cycle ID and sanitized label'
   );
 }

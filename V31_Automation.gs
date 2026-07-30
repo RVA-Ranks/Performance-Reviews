@@ -62,7 +62,11 @@ const V31 = Object.freeze({
     'Last Launch Error',
     'Launch Attempt Count',
     'Manager PDF Status',
+    'Manager PDF Attempt ID',
+    'Manager PDF Started At',
     'Self PDF Status',
+    'Self PDF Attempt ID',
+    'Self PDF Started At',
     'Final Distribution Status',
     'Final Distribution Started At',
     'Final Distribution Sent At',
@@ -378,6 +382,9 @@ function getV31CycleData_(cycle, email, isHr) {
     launchHasUnknownDelivery: isHr
       ? getReviewLaunchComponentSummary_(cycle).hasUnknown
       : false,
+    calendarConfigWarning: isHr
+      ? hasCalendarConfigWarning_(cycle)
+      : false,
     finalization: isHr
       ? getFinalizationSummary_(cycle)
       : null,
@@ -579,6 +586,43 @@ function buildV31Guidance_(
         'The manager and employee each sign once. HR signs last after both participants. The same signatures are placed on both final documents.',
       action: 'signature',
       actionLabel: 'View Signature Status',
+    });
+  }
+
+  if (status === PR.CYCLE.FINALIZING) {
+    items.push({
+      tone: isHr ? 'warning' : 'info',
+      title: isHr
+        ? 'Final documents still preparing'
+        : 'Final documents are preparing',
+      message: isHr
+        ? 'Signatures are complete. Retry finalization to resume PDF generation and packet distribution. Complete is set only after both PDFs and Sent distribution.'
+        : 'Signatures are complete. Final PDFs and distribution are still preparing. You will receive the completed packet by email when ready.',
+      action: 'overview',
+      actionLabel: isHr ? 'Retry Final Documents' : 'View Status',
+    });
+  }
+
+  if (isHr && !isReviewLaunchComplete_(cycle)) {
+    items.push({
+      tone: 'warning',
+      title: 'Launch is incomplete',
+      message: describeReviewLaunchStatus_(cycle),
+      action: 'overview',
+      actionLabel: 'Retry Launch',
+    });
+  } else if (isHr && hasCalendarConfigWarning_(cycle)) {
+    items.push({
+      tone: 'warning',
+      title: 'Calendar event is not fully configured',
+      message:
+        'The shared calendar event exists, but tags/reminders are not Configured yet. Launch emails may already be complete. Use Retry Launch to finish calendar configuration without duplicating Sent emails.' +
+        (isCalendarConfigWarning_(cycle['Last Launch Error'])
+          ? ' Last error: ' +
+            String(cycle['Last Launch Error'])
+          : ''),
+      action: 'overview',
+      actionLabel: 'Retry Calendar Config',
     });
   }
 
@@ -1573,6 +1617,17 @@ function createAutomatedReviewCycle_(candidate) {
     'Launch Completed At': '',
     'Last Launch Error': '',
     'Launch Attempt Count': 0,
+    'Manager PDF Status': '',
+    'Manager PDF Attempt ID': '',
+    'Manager PDF Started At': '',
+    'Self PDF Status': '',
+    'Self PDF Attempt ID': '',
+    'Self PDF Started At': '',
+    'Final Distribution Status': '',
+    'Final Distribution Started At': '',
+    'Final Distribution Sent At': '',
+    'Finalization Last Error': '',
+    'Finalization Attempt Count': 0,
     'Compensation Decision':
       V31.COMPENSATION.PENDING,
     'Compensation Decision Notes': '',
@@ -1717,6 +1772,42 @@ function applyV31DefaultsToCycle_(
     cycle['Launch Attempt Count'] == null
       ? 0
       : Number(cycle['Launch Attempt Count'] || 0);
+
+  cycle['Manager PDF Status'] =
+    cycle['Manager PDF Status'] ||
+    (cycle['Manager Review PDF ID']
+      ? V31.DELIVERY.SENT
+      : V31.DELIVERY.PENDING);
+  cycle['Manager PDF Attempt ID'] =
+    cycle['Manager PDF Attempt ID'] || '';
+  cycle['Manager PDF Started At'] =
+    cycle['Manager PDF Started At'] || '';
+  cycle['Self PDF Status'] =
+    cycle['Self PDF Status'] ||
+    (cycle['Self Evaluation PDF ID']
+      ? V31.DELIVERY.SENT
+      : V31.DELIVERY.PENDING);
+  cycle['Self PDF Attempt ID'] =
+    cycle['Self PDF Attempt ID'] || '';
+  cycle['Self PDF Started At'] =
+    cycle['Self PDF Started At'] || '';
+  cycle['Final Distribution Status'] =
+    cycle['Final Distribution Status'] ||
+    (cycle['Final Distribution Sent At']
+      ? V31.DELIVERY.SENT
+      : V31.DELIVERY.PENDING);
+  cycle['Final Distribution Started At'] =
+    cycle['Final Distribution Started At'] || '';
+  cycle['Final Distribution Sent At'] =
+    cycle['Final Distribution Sent At'] || '';
+  cycle['Finalization Last Error'] =
+    cycle['Finalization Last Error'] || '';
+  cycle['Finalization Attempt Count'] =
+    cycle['Finalization Attempt Count'] === '' ||
+    cycle['Finalization Attempt Count'] == null
+      ? 0
+      : Number(cycle['Finalization Attempt Count'] || 0);
+
   cycle['Compensation Decision'] =
     cycle['Compensation Decision'] ||
     V31.COMPENSATION.PENDING;
@@ -1834,6 +1925,51 @@ function isReviewLaunchComponentsComplete_(cycle) {
   );
 }
 
+function isCalendarConfigWarning_(message) {
+  return (
+    String(message || '').indexOf(
+      'Calendar tag/reminder configuration failed'
+    ) === 0
+  );
+}
+
+/**
+ * Clear transient launch errors without wiping a persisted calendar
+ * Created-but-not-Configured warning that HR still needs to see.
+ */
+function clearLastLaunchErrorUnlessCalendarConfig_(cycle) {
+  if (!isCalendarConfigWarning_(cycle['Last Launch Error'])) {
+    cycle['Last Launch Error'] = '';
+  }
+}
+
+/**
+ * True when the shared calendar event exists but tag/reminder
+ * configuration has not reached Configured. Launch can still complete.
+ * Warn when configuration failed, or when launch finished while still
+ * at Created (tags/reminders never confirmed).
+ */
+function hasCalendarConfigWarning_(cycle) {
+  if (!cycle || !cycle['Calendar Event ID']) {
+    return false;
+  }
+
+  const calendarStatus = String(cycle['Calendar Status'] || '');
+
+  if (calendarStatus === V31.CALENDAR.CONFIGURED) {
+    return false;
+  }
+
+  if (isCalendarConfigWarning_(cycle['Last Launch Error'])) {
+    return true;
+  }
+
+  return (
+    !!cycle['Launch Completed At'] &&
+    calendarStatus === V31.CALENDAR.CREATED
+  );
+}
+
 function getReviewLaunchComponentSummary_(cycle) {
   const calendarStatus = String(
     cycle['Calendar Status'] ||
@@ -1859,11 +1995,15 @@ function getReviewLaunchComponentSummary_(cycle) {
         ? V31.DELIVERY.SENT
         : V31.DELIVERY.PENDING)
   );
+  const calendarConfigWarning = hasCalendarConfigWarning_(cycle);
 
   return {
     calendar: !!cycle['Calendar Event ID'],
     calendarStatus: calendarStatus,
     calendarUnknown: calendarStatus === V31.CALENDAR.UNKNOWN,
+    calendarConfigured:
+      calendarStatus === V31.CALENDAR.CONFIGURED,
+    calendarConfigWarning: calendarConfigWarning,
     managerEmail: managerStatus === V31.DELIVERY.SENT,
     managerEmailStatus: managerStatus,
     managerEmailUnknown: managerStatus === V31.DELIVERY.UNKNOWN,
@@ -2200,7 +2340,8 @@ function commitLaunchEmailStep_(
     } else {
       cycle[component.statusField] = V31.DELIVERY.SENT;
       cycle[component.sentAtField] = new Date();
-      cycle['Last Launch Error'] = '';
+      // Do not clear a calendar-config warning when a later email succeeds.
+      clearLastLaunchErrorUnlessCalendarConfig_(cycle);
     }
 
     cycle['Updated At'] = new Date();
@@ -2359,8 +2500,10 @@ function commitCalendarCreatedStep_(
 
 /**
  * Best-effort setTag()/reminders pass. Created is already sufficient
- * for launch completion, so a failure here never blocks the launch —
- * it just leaves Calendar Status at Created for a later retry.
+ * for launch completion (the event exists and is discoverable), but
+ * configuration failure is persisted as a Calendar warning until a
+ * later retry reaches Configured. The warning is not cleared by
+ * successful email steps.
  */
 function configureCalendarLaunchStepBestEffort_(cycleId, event) {
   if (!event) return;
@@ -2370,7 +2513,10 @@ function configureCalendarLaunchStepBestEffort_(cycleId, event) {
       const location = findCycle_(cycleId);
       const cycle = location.object;
 
-      if (cycle['Calendar Status'] === V31.CALENDAR.CREATED) {
+      if (
+        cycle['Calendar Status'] === V31.CALENDAR.CREATED ||
+        cycle['Calendar Status'] === V31.CALENDAR.CONFIGURING
+      ) {
         cycle['Calendar Status'] = V31.CALENDAR.CONFIGURING;
         cycle['Updated At'] = new Date();
         persistLaunchCycle_(location.rowNumber, cycle);
@@ -2386,8 +2532,19 @@ function configureCalendarLaunchStepBestEffort_(cycleId, event) {
       const location = findCycle_(cycleId);
       const fresh = location.object;
 
-      if (fresh['Calendar Status'] === V31.CALENDAR.CONFIGURING) {
+      if (
+        fresh['Calendar Status'] === V31.CALENDAR.CONFIGURING ||
+        fresh['Calendar Status'] === V31.CALENDAR.CREATED
+      ) {
         fresh['Calendar Status'] = V31.CALENDAR.CONFIGURED;
+        // Clear only a prior calendar-config warning, not unrelated errors.
+        if (
+          String(fresh['Last Launch Error'] || '').indexOf(
+            'Calendar tag/reminder configuration failed'
+          ) === 0
+        ) {
+          fresh['Last Launch Error'] = '';
+        }
         fresh['Updated At'] = new Date();
         persistLaunchCycle_(location.rowNumber, fresh);
       }
@@ -2398,6 +2555,8 @@ function configureCalendarLaunchStepBestEffort_(cycleId, event) {
       const cycle = location.object;
 
       if (cycle['Calendar Status'] === V31.CALENDAR.CONFIGURING) {
+        // Leave Created so launch can still complete, but keep the
+        // warning visible until configuration succeeds on retry.
         cycle['Calendar Status'] = V31.CALENDAR.CREATED;
       }
 
@@ -2500,7 +2659,9 @@ function maybeCompleteReviewLaunch_(cycleId) {
     cycle['Launch Completed At'] = completedAt;
     cycle['Automation Notice Sent At'] =
       cycle['Automation Notice Sent At'] || completedAt;
-    cycle['Last Launch Error'] = '';
+    // Launch may complete at Created; keep a calendar-config warning until
+    // a later configure retry reaches Configured.
+    clearLastLaunchErrorUnlessCalendarConfig_(cycle);
     cycle['Updated At'] = completedAt;
     persistLaunchCycle_(location.rowNumber, cycle);
 
@@ -3313,15 +3474,16 @@ function reconcileLaunchDelivery(cycleId, component, action) {
         }
 
         cycle['Calendar Status'] = V31.CALENDAR.CREATED;
+        cycle['Last Launch Error'] = '';
       } else {
         const fields = getLaunchEmailComponentByKey_(component);
 
         cycle[fields.statusField] = V31.DELIVERY.SENT;
         cycle[fields.sentAtField] =
           cycle[fields.sentAtField] || new Date();
+        clearLastLaunchErrorUnlessCalendarConfig_(cycle);
       }
 
-      cycle['Last Launch Error'] = '';
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
