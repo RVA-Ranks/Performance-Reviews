@@ -86,26 +86,32 @@ const V31 = Object.freeze({
     'Ready Notification Attempt ID',
     'Ready Notification Started At',
     'Ready Notification Sent At',
+    'Ready Notification Last Error',
     'Meeting Manager Email Status',
     'Meeting Manager Email Attempt ID',
     'Meeting Manager Email Started At',
     'Meeting Manager Email Sent At',
+    'Meeting Manager Email Last Error',
     'Meeting Employee Email Status',
     'Meeting Employee Email Attempt ID',
     'Meeting Employee Email Started At',
     'Meeting Employee Email Sent At',
+    'Meeting Employee Email Last Error',
     'Manager Signature Email Status',
     'Manager Signature Email Attempt ID',
     'Manager Signature Email Started At',
     'Manager Signature Email Sent At',
+    'Manager Signature Email Last Error',
     'Employee Signature Email Status',
     'Employee Signature Email Attempt ID',
     'Employee Signature Email Started At',
     'Employee Signature Email Sent At',
+    'Employee Signature Email Last Error',
     'HR Signature Email Status',
     'HR Signature Email Attempt ID',
     'HR Signature Email Started At',
     'HR Signature Email Sent At',
+    'HR Signature Email Last Error',
     'Compensation Decision',
     'Compensation Decision Notes',
     'Compensation Decision At',
@@ -432,6 +438,33 @@ function getV31CycleData_(cycle, email, isHr) {
       String(cycle['Status']) === PR.CYCLE.FINALIZING,
     notifications: isHr
       ? getWorkflowNotificationSummary_(cycle)
+      : null,
+    signatureClaims: isHr
+      ? {
+          manager: String(
+            cycle['Manager Signature Status'] || ''
+          ),
+          employee: String(
+            cycle['Employee Signature Status'] || ''
+          ),
+          hr: String(cycle['HR Signature Status'] || ''),
+          managerUnknown:
+            String(cycle['Manager Signature Status'] || '') ===
+            V31.DELIVERY.UNKNOWN,
+          employeeUnknown:
+            String(cycle['Employee Signature Status'] || '') ===
+            V31.DELIVERY.UNKNOWN,
+          hrUnknown:
+            String(cycle['HR Signature Status'] || '') ===
+            V31.DELIVERY.UNKNOWN,
+          needsAttention:
+            String(cycle['Manager Signature Status'] || '') ===
+              V31.DELIVERY.UNKNOWN ||
+            String(cycle['Employee Signature Status'] || '') ===
+              V31.DELIVERY.UNKNOWN ||
+            String(cycle['HR Signature Status'] || '') ===
+              V31.DELIVERY.UNKNOWN,
+        }
       : null,
     daysUntilMeeting: daysUntilMeeting,
 
@@ -1148,6 +1181,9 @@ function claimAutomationCycleForRetry_(existingCycleId) {
 function runReviewAutomation() {
   ensureV31DataModel_();
 
+  // Drain eligible pending workflow emails even when Live creation is off.
+  const outbox = dispatchPendingWorkflowNotificationsForAllCycles();
+
   const settings = getSettings_();
   const mode = String(
     settings.AUTOMATION_MODE || 'Preview'
@@ -1159,7 +1195,9 @@ function runReviewAutomation() {
       action: 'Scheduled automation check',
       result: 'Skipped',
       details:
-        'Automation is not in Live mode.',
+        'Automation is not in Live mode. Outbox drain sent ' +
+        Number(outbox.dispatched || 0) +
+        ' notification(s).',
     });
 
     return {
@@ -1169,8 +1207,9 @@ function runReviewAutomation() {
       retriedSuccessfully: 0,
       failed: 0,
       skipped: true,
+      outbox: outbox,
       message:
-        'Automation is not Live. No cycles were created.',
+        'Automation is not Live. No cycles were created. Pending workflow notifications were drained.',
     };
   }
 
@@ -1871,36 +1910,42 @@ function applyV31DefaultsToCycle_(
       'Ready Notification Attempt ID',
       'Ready Notification Started At',
       'Ready Notification Sent At',
+      'Ready Notification Last Error',
     ],
     [
       'Meeting Manager Email Status',
       'Meeting Manager Email Attempt ID',
       'Meeting Manager Email Started At',
       'Meeting Manager Email Sent At',
+      'Meeting Manager Email Last Error',
     ],
     [
       'Meeting Employee Email Status',
       'Meeting Employee Email Attempt ID',
       'Meeting Employee Email Started At',
       'Meeting Employee Email Sent At',
+      'Meeting Employee Email Last Error',
     ],
     [
       'Manager Signature Email Status',
       'Manager Signature Email Attempt ID',
       'Manager Signature Email Started At',
       'Manager Signature Email Sent At',
+      'Manager Signature Email Last Error',
     ],
     [
       'Employee Signature Email Status',
       'Employee Signature Email Attempt ID',
       'Employee Signature Email Started At',
       'Employee Signature Email Sent At',
+      'Employee Signature Email Last Error',
     ],
     [
       'HR Signature Email Status',
       'HR Signature Email Attempt ID',
       'HR Signature Email Started At',
       'HR Signature Email Sent At',
+      'HR Signature Email Last Error',
     ],
   ]);
 
@@ -1927,9 +1972,14 @@ function ensureDeliveryFieldDefaults_(cycle, groups) {
     const attemptField = group[1];
     const startedField = group[2];
     const sentAtField = group[3];
+    const errorField = group[4];
 
     if (sentAtField) {
       cycle[sentAtField] = cycle[sentAtField] || '';
+    }
+
+    if (errorField) {
+      cycle[errorField] = cycle[errorField] || '';
     }
 
     cycle[statusField] =
@@ -3201,54 +3251,105 @@ function rebuildReviewCalendarEvent(cycleId) {
     );
   }
 
-  const location = findCycle_(cycleId);
-  const cycle = applyV31DefaultsToCycle_(
-    location.object,
-    location.object['Cycle Source'] || 'Manual'
+  const claim = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = applyV31DefaultsToCycle_(
+      location.object,
+      location.object['Cycle Source'] || 'Manual'
+    );
+    const status = String(
+      cycle['Calendar Status'] || V31.CALENDAR.PENDING
+    );
+
+    if (status === V31.CALENDAR.CREATING) {
+      if (!isDeliveryClaimStale_(cycle['Calendar Started At'])) {
+        throw new Error(
+          'Calendar rebuild is already in progress.'
+        );
+      }
+
+      cycle['Calendar Status'] = V31.CALENDAR.UNKNOWN;
+      cycle['Last Launch Error'] =
+        'Calendar rebuild claim went stale before an event ID was persisted.';
+      cycle['Updated At'] = new Date();
+      persistLaunchCycle_(location.rowNumber, cycle);
+
+      throw new Error(
+        'Calendar rebuild is Delivery Unknown. Retry after confirming whether an event already exists.'
+      );
+    }
+
+    if (
+      status === V31.CALENDAR.UNKNOWN &&
+      !isDeliveryClaimStale_(cycle['Calendar Started At'])
+    ) {
+      throw new Error(
+        'Calendar rebuild is Delivery Unknown. Confirm no event exists, then retry.'
+      );
+    }
+
+    const attemptId = Utilities.getUuid();
+
+    cycle['Calendar Status'] = V31.CALENDAR.CREATING;
+    cycle['Calendar Attempt ID'] = attemptId;
+    cycle['Calendar Started At'] = new Date();
+    cycle['Updated At'] = new Date();
+    persistLaunchCycle_(location.rowNumber, cycle);
+
+    return { attemptId: attemptId, cycle: cycle };
+  });
+
+  // Re-run marker recovery after owning the claim so a concurrent
+  // create is visible before we create another event.
+  const resolved = resolveReviewCalendarEvent_(
+    findCycle_(cycleId).object,
+    false
   );
 
-  const existing = resolveReviewCalendarEvent_(cycle, false);
+  if (resolved.event) {
+    const eventId = resolved.event.getId();
 
-  if (existing.event) {
-    if (existing.recoveredId) {
-      withLock_(function () {
-        const freshLocation = findCycle_(cycleId);
-        const fresh = freshLocation.object;
-        fresh['Calendar Event ID'] = existing.recoveredId;
-        fresh['Calendar Status'] = V31.CALENDAR.CREATED;
-        fresh['Updated At'] = new Date();
-        persistLaunchCycle_(freshLocation.rowNumber, fresh);
-      });
-    }
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+
+      if (
+        String(cycle['Calendar Attempt ID'] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
+
+      cycle['Calendar Event ID'] = eventId;
+      cycle['Calendar Status'] = V31.CALENDAR.CREATED;
+      cycle['Calendar Created At'] =
+        cycle['Calendar Created At'] || new Date();
+      clearLastLaunchErrorUnlessCalendarConfig_(cycle);
+      cycle['Updated At'] = new Date();
+      persistLaunchCycle_(location.rowNumber, cycle);
+    });
 
     configureCalendarLaunchStepBestEffort_(
       cycleId,
-      existing.event
+      resolved.event
     );
 
+    const after = findCycle_(cycleId).object;
+    const configured =
+      String(after['Calendar Status']) ===
+      V31.CALENDAR.CONFIGURED;
+
     return {
-      ok: true,
+      ok: configured,
       rebuilt: false,
-      message:
-        'An existing event was recovered. Configuration was retried instead of creating a duplicate.',
-      launchComponents: getReviewLaunchComponentSummary_(
-        findCycle_(cycleId).object
-      ),
+      configured: configured,
+      warning: !configured,
+      message: configured
+        ? 'An existing event was recovered and configured.'
+        : 'An existing event was recovered, but configuration still needs attention.',
+      launchComponents: getReviewLaunchComponentSummary_(after),
     };
   }
-
-  const attemptId = Utilities.getUuid();
-
-  withLock_(function () {
-    const freshLocation = findCycle_(cycleId);
-    const fresh = freshLocation.object;
-    fresh['Calendar Status'] = V31.CALENDAR.CREATING;
-    fresh['Calendar Attempt ID'] = attemptId;
-    fresh['Calendar Started At'] = new Date();
-    fresh['Calendar Event ID'] = '';
-    fresh['Updated At'] = new Date();
-    persistLaunchCycle_(freshLocation.rowNumber, fresh);
-  });
 
   let event = null;
   let error = null;
@@ -3261,7 +3362,12 @@ function rebuildReviewCalendarEvent(cycleId) {
     error = err;
   }
 
-  commitCalendarCreatedStep_(cycleId, attemptId, event, error);
+  commitCalendarCreatedStep_(
+    cycleId,
+    claim.attemptId,
+    event,
+    error
+  );
 
   if (error) {
     throw new Error(
@@ -3271,23 +3377,28 @@ function rebuildReviewCalendarEvent(cycleId) {
 
   configureCalendarLaunchStepBestEffort_(cycleId, event);
 
+  const after = findCycle_(cycleId).object;
+  const configured =
+    String(after['Calendar Status']) === V31.CALENDAR.CONFIGURED;
+
   audit_(
     cycleId,
     'Calendar event rebuilt',
     email,
     '',
-    String(findCycle_(cycleId).object['Calendar Event ID'] || ''),
-    ''
+    String(after['Calendar Event ID'] || ''),
+    JSON.stringify({ configured: configured })
   );
 
   return {
-    ok: true,
+    ok: configured,
     rebuilt: true,
-    message:
-      'A replacement calendar event was created and configuration was attempted.',
-    launchComponents: getReviewLaunchComponentSummary_(
-      findCycle_(cycleId).object
-    ),
+    configured: configured,
+    warning: !configured,
+    message: configured
+      ? 'A replacement calendar event was created and configured.'
+      : 'A replacement calendar event was created, but configuration still needs attention.',
+    launchComponents: getReviewLaunchComponentSummary_(after),
   };
 }
 
@@ -3303,6 +3414,7 @@ function deliverWorkflowNotification_(
 ) {
   const opts = options || {};
   const allowUnknownResend = !!opts.allowUnknownResend;
+  const skipEligibility = !!opts.skipEligibility;
 
   const claim = withLock_(function () {
     const location = findCycle_(cycleId);
@@ -3310,6 +3422,17 @@ function deliverWorkflowNotification_(
       location.object,
       location.object['Cycle Source'] || 'Manual'
     );
+
+    if (
+      !skipEligibility &&
+      !isWorkflowNotificationEligible_(cycle, component.key)
+    ) {
+      return {
+        action: 'skip',
+        reason: 'ineligible',
+        cycle: cycle,
+      };
+    }
 
     const decision = decideLaunchComponentAction_(
       String(cycle[component.statusField] || V31.DELIVERY.PENDING),
@@ -3329,6 +3452,11 @@ function deliverWorkflowNotification_(
 
     if (decision.action === 'mark-unknown') {
       cycle[component.statusField] = V31.DELIVERY.UNKNOWN;
+      if (component.errorField) {
+        cycle[component.errorField] =
+          component.label +
+          ' claim went stale before send confirmation.';
+      }
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
@@ -3376,6 +3504,9 @@ function deliverWorkflowNotification_(
 
       cycle[component.statusField] = V31.DELIVERY.SENT;
       cycle[component.sentAtField] = new Date();
+      if (component.errorField) {
+        cycle[component.errorField] = '';
+      }
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
@@ -3395,10 +3526,24 @@ function deliverWorkflowNotification_(
       }
 
       cycle[component.statusField] = V31.DELIVERY.UNKNOWN;
+      if (component.errorField) {
+        cycle[component.errorField] = String(
+          error.message || error
+        );
+      }
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
     });
+
+    audit_(
+      cycleId,
+      'Workflow notification delivery unknown',
+      Session.getEffectiveUser().getEmail(),
+      component.key,
+      V31.DELIVERY.UNKNOWN,
+      String(error.message || error)
+    );
 
     return {
       action: 'error',
@@ -3417,6 +3562,7 @@ function getWorkflowNotificationComponent_(key) {
       attemptField: 'Ready Notification Attempt ID',
       startedField: 'Ready Notification Started At',
       sentAtField: 'Ready Notification Sent At',
+      errorField: 'Ready Notification Last Error',
     },
     meetingManager: {
       key: 'meetingManager',
@@ -3425,6 +3571,7 @@ function getWorkflowNotificationComponent_(key) {
       attemptField: 'Meeting Manager Email Attempt ID',
       startedField: 'Meeting Manager Email Started At',
       sentAtField: 'Meeting Manager Email Sent At',
+      errorField: 'Meeting Manager Email Last Error',
     },
     meetingEmployee: {
       key: 'meetingEmployee',
@@ -3433,6 +3580,7 @@ function getWorkflowNotificationComponent_(key) {
       attemptField: 'Meeting Employee Email Attempt ID',
       startedField: 'Meeting Employee Email Started At',
       sentAtField: 'Meeting Employee Email Sent At',
+      errorField: 'Meeting Employee Email Last Error',
     },
     signatureManager: {
       key: 'signatureManager',
@@ -3441,6 +3589,7 @@ function getWorkflowNotificationComponent_(key) {
       attemptField: 'Manager Signature Email Attempt ID',
       startedField: 'Manager Signature Email Started At',
       sentAtField: 'Manager Signature Email Sent At',
+      errorField: 'Manager Signature Email Last Error',
     },
     signatureEmployee: {
       key: 'signatureEmployee',
@@ -3449,6 +3598,7 @@ function getWorkflowNotificationComponent_(key) {
       attemptField: 'Employee Signature Email Attempt ID',
       startedField: 'Employee Signature Email Started At',
       sentAtField: 'Employee Signature Email Sent At',
+      errorField: 'Employee Signature Email Last Error',
     },
     signatureHr: {
       key: 'signatureHr',
@@ -3457,6 +3607,7 @@ function getWorkflowNotificationComponent_(key) {
       attemptField: 'HR Signature Email Attempt ID',
       startedField: 'HR Signature Email Started At',
       sentAtField: 'HR Signature Email Sent At',
+      errorField: 'HR Signature Email Last Error',
     },
   };
 
@@ -3465,6 +3616,174 @@ function getWorkflowNotificationComponent_(key) {
   }
 
   return map[key];
+}
+
+function getWorkflowNotificationKeys_() {
+  return [
+    'ready',
+    'meetingManager',
+    'meetingEmployee',
+    'signatureManager',
+    'signatureEmployee',
+    'signatureHr',
+  ];
+}
+
+/**
+ * Business-stage eligibility for workflow outbox components.
+ */
+function isWorkflowNotificationEligible_(cycle, key) {
+  if (!cycle || !key) {
+    return false;
+  }
+
+  const status = String(cycle['Status'] || '');
+  const signatures = getCombinedSignatureState_(cycle);
+
+  if (key === 'ready') {
+    return status === PR.CYCLE.READY;
+  }
+
+  if (key === 'meetingManager' || key === 'meetingEmployee') {
+    return !!cycle['Meeting Opened At'];
+  }
+
+  if (key === 'signatureManager') {
+    return (
+      !!cycle['Signatures Released At'] && !signatures.managerSigned
+    );
+  }
+
+  if (key === 'signatureEmployee') {
+    return (
+      !!cycle['Signatures Released At'] && !signatures.employeeSigned
+    );
+  }
+
+  if (key === 'signatureHr') {
+    return (
+      !!cycle['Signatures Released At'] &&
+      signatures.managerSigned &&
+      signatures.employeeSigned &&
+      !signatures.hrSigned
+    );
+  }
+
+  return false;
+}
+
+/**
+ * Drain eligible Pending/Failed workflow notifications for one cycle.
+ * Does not auto-resend Delivery Unknown.
+ */
+function dispatchPendingWorkflowNotifications(cycleId) {
+  const results = [];
+  const keys = getWorkflowNotificationKeys_();
+
+  keys.forEach(function (key) {
+    const cycle = applyV31DefaultsToCycle_(
+      findCycle_(cycleId).object,
+      findCycle_(cycleId).object['Cycle Source'] || 'Manual'
+    );
+    const component = getWorkflowNotificationComponent_(key);
+
+    if (!isWorkflowNotificationEligible_(cycle, key)) {
+      return;
+    }
+
+    const status = String(
+      cycle[component.statusField] || V31.DELIVERY.PENDING
+    );
+
+    if (
+      status !== V31.DELIVERY.PENDING &&
+      status !== V31.DELIVERY.FAILED
+    ) {
+      return;
+    }
+
+    const result = deliverWorkflowNotification_(
+      cycleId,
+      component,
+      function (fresh) {
+        sendWorkflowNotificationBody_(key, fresh);
+      },
+      { allowUnknownResend: false }
+    );
+
+    results.push({
+      key: key,
+      action: result.action,
+      reason: result.reason || '',
+    });
+  });
+
+  return {
+    ok: true,
+    cycleId: cycleId,
+    results: results,
+    notifications: getWorkflowNotificationSummary_(
+      findCycle_(cycleId).object
+    ),
+  };
+}
+
+/**
+ * Drain eligible pending workflow notifications across active cycles.
+ * Invoked by the daily automation trigger even when Live creation is off.
+ */
+function dispatchPendingWorkflowNotificationsForAllCycles() {
+  const cycles = getAllObjects_(PR.SHEETS.CYCLES);
+  const active = [
+    PR.CYCLE.READY,
+    PR.CYCLE.MEETING,
+    PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
+  ];
+  let scanned = 0;
+  let dispatched = 0;
+  const details = [];
+
+  cycles.forEach(function (cycle) {
+    if (active.indexOf(String(cycle['Status'] || '')) < 0) {
+      return;
+    }
+
+    scanned++;
+    const result = dispatchPendingWorkflowNotifications(
+      cycle['Cycle ID']
+    );
+    const sent = (result.results || []).filter(function (row) {
+      return row.action === 'sent';
+    }).length;
+
+    if (sent) {
+      dispatched += sent;
+      details.push({
+        cycleId: cycle['Cycle ID'],
+        sent: sent,
+      });
+    }
+  });
+
+  logReviewAutomation_({
+    mode: String(getSettings_().AUTOMATION_MODE || 'Preview'),
+    action: 'Workflow outbox drain',
+    result: 'Success',
+    details:
+      'Scanned ' +
+      scanned +
+      ' active cycles; sent ' +
+      dispatched +
+      ' pending notifications.',
+  });
+
+  return {
+    ok: true,
+    scanned: scanned,
+    dispatched: dispatched,
+    details: details,
+  };
 }
 
 /**
@@ -3483,16 +3802,33 @@ function retryWorkflowNotification(
     );
   }
 
+  const effectiveOptions = options || {};
+  if (
+    effectiveOptions.allowUnknownResend === undefined ||
+    effectiveOptions.allowUnknownResend === null
+  ) {
+    effectiveOptions.allowUnknownResend = true;
+  }
+
   const component = getWorkflowNotificationComponent_(
     componentKey
   );
+  const cycle = findCycle_(cycleId).object;
+
+  if (!isWorkflowNotificationEligible_(cycle, componentKey)) {
+    throw new Error(
+      component.label +
+        ' is not eligible for the current cycle stage.'
+    );
+  }
+
   const result = deliverWorkflowNotification_(
     cycleId,
     component,
-    function (cycle) {
-      sendWorkflowNotificationBody_(componentKey, cycle);
+    function (fresh) {
+      sendWorkflowNotificationBody_(componentKey, fresh);
     },
-    options || { allowUnknownResend: true }
+    effectiveOptions
   );
 
   audit_(
@@ -3502,7 +3838,8 @@ function retryWorkflowNotification(
     componentKey,
     result.action,
     JSON.stringify({
-      allowUnknownResend: !!(options && options.allowUnknownResend),
+      allowUnknownResend: !!effectiveOptions.allowUnknownResend,
+      reason: result.reason || '',
     })
   );
 
@@ -3531,27 +3868,43 @@ function retryWorkflowNotification(
 }
 
 function getWorkflowNotificationSummary_(cycle) {
-  const keys = [
-    'ready',
-    'meetingManager',
-    'meetingEmployee',
-    'signatureManager',
-    'signatureEmployee',
-    'signatureHr',
-  ];
-
-  const summary = {};
+  const keys = getWorkflowNotificationKeys_();
+  const summary = {
+    components: {},
+  };
+  const eligibleUnresolved = [];
 
   keys.forEach(function (key) {
     const component = getWorkflowNotificationComponent_(key);
-    summary[key] = String(
+    const status = String(
       cycle[component.statusField] || V31.DELIVERY.PENDING
     );
+    const eligible = isWorkflowNotificationEligible_(cycle, key);
+    const unresolved =
+      status === V31.DELIVERY.PENDING ||
+      status === V31.DELIVERY.FAILED ||
+      status === V31.DELIVERY.UNKNOWN;
+
+    summary[key] = status;
+    summary.components[key] = {
+      status: status,
+      eligible: eligible,
+      lastError: String(
+        (component.errorField && cycle[component.errorField]) || ''
+      ),
+      needsAttention: eligible && unresolved,
+    };
+
+    if (eligible && unresolved) {
+      eligibleUnresolved.push(key);
+    }
   });
 
   summary.hasUnknown = keys.some(function (key) {
     return summary[key] === V31.DELIVERY.UNKNOWN;
   });
+  summary.eligibleUnresolved = eligibleUnresolved;
+  summary.needsAttention = eligibleUnresolved.length > 0;
 
   return summary;
 }

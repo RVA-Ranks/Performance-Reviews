@@ -1912,6 +1912,9 @@ function renderCycleHeaderActions(cycle) {
         html += '<button class="button outline" onclick="openPdfReconcileModal()">Reconcile PDF</button>';
       }
     }
+    if (cycle.v31.signatureClaims && cycle.v31.signatureClaims.needsAttention) {
+      html += '<button class="button outline" onclick="openSignatureReconcileModal()">Reconcile Signature</button>';
+    }
     if (!cycle.v31.launchComplete) {
       html += '<button class="button outline" onclick="retryIncompleteLaunch()">Retry Launch</button>';
       if (cycle.v31.launchHasUnknownDelivery) {
@@ -1927,8 +1930,9 @@ function renderCycleHeaderActions(cycle) {
         html += '<button class="button outline" onclick="resendLaunchInstructions()">Resend Instructions</button>';
       }
     }
-    if (cycle.v31.notifications && cycle.v31.notifications.hasUnknown) {
+    if (cycle.v31.notifications && cycle.v31.notifications.needsAttention) {
       html += '<button class="button outline" onclick="openNotificationRetryModal()">Retry Workflow Email</button>';
+      html += '<button class="button outline" onclick="dispatchPendingNotifications()">Drain Pending Emails</button>';
     }
   }
   if (cycle.canDownloadManager) html += '<button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button>';
@@ -1984,7 +1988,7 @@ async function rebuildCalendarEvent() {
       closeModal();
       try {
         const result = await server('rebuildReviewCalendarEvent', currentCycle.cycleId);
-        showToast('success', 'Calendar rebuild', result.message);
+        showToast(result.warning ? 'warning' : 'success', 'Calendar rebuild', result.message);
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not rebuild calendar', errorMessage(error));
@@ -2016,17 +2020,34 @@ async function retryFinalization() {
 async function openPdfReconcileModal() {
   const finalization = currentCycle.v31 && currentCycle.v31.finalization ? currentCycle.v31.finalization : {};
   const defaultType = finalization.managerPdfUnknown ? 'Manager Review' : 'Self-Evaluation';
+
+  let candidateOptions = '<option value="">Loading candidates…</option>';
+  try {
+    const listed = await server('listFinalPdfCandidates', currentCycle.cycleId, defaultType);
+    const files = listed.files || [];
+    candidateOptions = files.length
+      ? files.map(function(file) {
+          return '<option value="' + escapeAttr(file.id) + '">' +
+            escapeHtml(file.name) + ' — ' + escapeHtml(file.id) +
+            (file.updatedAt ? ' (' + escapeHtml(file.updatedAt) + ')' : '') +
+            '</option>';
+        }).join('')
+      : '<option value="">No matching candidates in the review folder</option>';
+  } catch (error) {
+    candidateOptions = '<option value="">' + escapeHtml(errorMessage(error)) + '</option>';
+  }
+
   openModal({
     title: 'Reconcile Delivery Unknown PDF',
     body:
-      '<p>Choose the document and action. Regeneration requires explicit confirmation that no usable file exists.</p>' +
+      '<p>Only validated candidates from the review folder are accepted. Free-form Drive IDs are rejected.</p>' +
       '<label>Document<br><select id="pdfReconcileType"><option value="Manager Review"' +
       (defaultType === 'Manager Review' ? ' selected' : '') +
       '>Manager Review</option><option value="Self-Evaluation"' +
       (defaultType === 'Self-Evaluation' ? ' selected' : '') +
       '>Self-Evaluation</option></select></label>' +
-      '<label style="display:block;margin-top:12px;">Action<br><select id="pdfReconcileAction"><option value="useFileId">Use existing file ID</option><option value="chooseFile">Choose one duplicate file ID</option><option value="regenerate">Confirm missing and regenerate</option><option value="cancel">Cancel and leave Unknown</option></select></label>' +
-      '<label style="display:block;margin-top:12px;">Drive file ID (when attaching)<br><input id="pdfReconcileFileId" style="width:100%"></label>' +
+      '<label style="display:block;margin-top:12px;">Action<br><select id="pdfReconcileAction"><option value="useFileId">Use selected candidate</option><option value="chooseFile">Choose one duplicate candidate</option><option value="regenerate">Confirm missing and regenerate</option><option value="cancel">Cancel and leave Unknown</option></select></label>' +
+      '<label style="display:block;margin-top:12px;">Candidate<br><select id="pdfReconcileFileId" style="width:100%">' + candidateOptions + '</select></label>' +
       '<label style="display:block;margin-top:12px;"><input type="checkbox" id="pdfConfirmMissing"> Confirm no usable Drive file exists (required to regenerate)</label>',
     confirmLabel: 'Apply PDF Reconciliation',
     tone: 'warning',
@@ -2050,19 +2071,89 @@ async function openPdfReconcileModal() {
   });
 }
 
+async function openSignatureReconcileModal() {
+  const claims = currentCycle.v31 && currentCycle.v31.signatureClaims ? currentCycle.v31.signatureClaims : {};
+  const defaultRole = claims.managerUnknown ? 'Manager' : (claims.employeeUnknown ? 'Employee' : 'HR');
+  let candidateOptions = '<option value="">Loading candidates…</option>';
+
+  try {
+    const listed = await server('listSignatureCandidates', currentCycle.cycleId, defaultRole);
+    const files = listed.files || [];
+    candidateOptions = files.length
+      ? files.map(function(file) {
+          return '<option value="' + escapeAttr(file.id) + '">' +
+            escapeHtml(file.name) + ' — ' + escapeHtml(file.id) + '</option>';
+        }).join('')
+      : '<option value="">No matching signature candidates</option>';
+  } catch (error) {
+    candidateOptions = '<option value="">' + escapeHtml(errorMessage(error)) + '</option>';
+  }
+
+  openModal({
+    title: 'Reconcile Delivery Unknown signature',
+    body:
+      '<p>Attach a validated signature image, choose among duplicates, or reset the role to Pending after confirming no file exists.</p>' +
+      '<label>Role<br><select id="signatureReconcileRole"><option value="Manager"' +
+      (defaultRole === 'Manager' ? ' selected' : '') +
+      '>Manager</option><option value="Employee"' +
+      (defaultRole === 'Employee' ? ' selected' : '') +
+      '>Employee</option><option value="HR"' +
+      (defaultRole === 'HR' ? ' selected' : '') +
+      '>HR</option></select></label>' +
+      '<label style="display:block;margin-top:12px;">Action<br><select id="signatureReconcileAction"><option value="useFileId">Use selected candidate</option><option value="chooseFile">Choose one duplicate candidate</option><option value="resetPending">Confirm missing and reset to Pending</option><option value="cancel">Cancel and leave Unknown</option></select></label>' +
+      '<label style="display:block;margin-top:12px;">Candidate<br><select id="signatureReconcileFileId" style="width:100%">' + candidateOptions + '</select></label>' +
+      '<label style="display:block;margin-top:12px;"><input type="checkbox" id="signatureConfirmMissing"> Confirm no usable signature file exists</label>',
+    confirmLabel: 'Apply Signature Reconciliation',
+    tone: 'warning',
+    onConfirm: async function() {
+      const role = document.getElementById('signatureReconcileRole').value;
+      const action = document.getElementById('signatureReconcileAction').value;
+      const fileId = (document.getElementById('signatureReconcileFileId').value || '').trim();
+      const confirmMissing = !!(document.getElementById('signatureConfirmMissing') && document.getElementById('signatureConfirmMissing').checked);
+      closeModal();
+      try {
+        const result = await server('reconcileSignature', currentCycle.cycleId, role, action, {
+          fileId: fileId,
+          confirmMissing: confirmMissing
+        });
+        showToast('success', 'Signature reconciled', result.message || 'Updated');
+        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+      } catch (error) {
+        showToast('error', 'Could not reconcile signature', errorMessage(error));
+      }
+    }
+  });
+}
+
 async function openNotificationRetryModal() {
+  const notifications = currentCycle.v31 && currentCycle.v31.notifications ? currentCycle.v31.notifications : {};
+  const eligible = notifications.eligibleUnresolved || [];
+  const labels = {
+    ready: 'Ready-for-meeting',
+    meetingManager: 'Meeting-opened manager',
+    meetingEmployee: 'Meeting-opened employee',
+    signatureManager: 'Manager signature request',
+    signatureEmployee: 'Employee signature request',
+    signatureHr: 'HR signature request'
+  };
+  const optionsHtml = eligible.length
+    ? eligible.map(function(key) {
+        const status = notifications[key] || '';
+        const error = notifications.components && notifications.components[key]
+          ? notifications.components[key].lastError
+          : '';
+        return '<option value="' + escapeAttr(key) + '">' +
+          escapeHtml(labels[key] || key) + ' — ' + escapeHtml(status) +
+          (error ? ' (' + escapeHtml(error) + ')' : '') +
+          '</option>';
+      }).join('')
+    : '<option value="">No eligible unresolved notifications</option>';
+
   openModal({
     title: 'Retry workflow notification',
     body:
-      '<p>Retry one durable notification recipient. Successful recipients are not resent unless they are Delivery Unknown and you allow reclaim.</p>' +
-      '<label>Component<br><select id="notificationComponent">' +
-      '<option value="ready">Ready-for-meeting</option>' +
-      '<option value="meetingManager">Meeting-opened manager</option>' +
-      '<option value="meetingEmployee">Meeting-opened employee</option>' +
-      '<option value="signatureManager">Manager signature request</option>' +
-      '<option value="signatureEmployee">Employee signature request</option>' +
-      '<option value="signatureHr">HR signature request</option>' +
-      '</select></label>' +
+      '<p>Only stage-eligible Pending, Failed, or Delivery Unknown components are listed.</p>' +
+      '<label>Component<br><select id="notificationComponent">' + optionsHtml + '</select></label>' +
       '<label style="display:block;margin-top:12px;"><input type="checkbox" id="allowUnknownNotificationResend" checked> Allow resend if Delivery Unknown</label>',
     confirmLabel: 'Retry Notification',
     tone: 'warning',
@@ -2070,6 +2161,10 @@ async function openNotificationRetryModal() {
       const component = document.getElementById('notificationComponent').value;
       const allowUnknown = !!(document.getElementById('allowUnknownNotificationResend') && document.getElementById('allowUnknownNotificationResend').checked);
       closeModal();
+      if (!component) {
+        showToast('warning', 'Notification', 'No eligible component selected.');
+        return;
+      }
       try {
         const result = await server('retryWorkflowNotification', currentCycle.cycleId, component, {
           allowUnknownResend: allowUnknown
@@ -2078,6 +2173,26 @@ async function openNotificationRetryModal() {
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not retry notification', errorMessage(error));
+      }
+    }
+  });
+}
+
+async function dispatchPendingNotifications() {
+  openModal({
+    title: 'Drain pending workflow emails?',
+    body: '<p>This sends eligible Pending or Failed notifications for this cycle. Delivery Unknown components are not auto-resent.</p>',
+    confirmLabel: 'Drain Pending Emails',
+    tone: 'primary',
+    onConfirm: async function() {
+      closeModal();
+      try {
+        const result = await server('dispatchPendingWorkflowNotifications', currentCycle.cycleId);
+        const sent = (result.results || []).filter(function(row) { return row.action === 'sent'; }).length;
+        showToast('success', 'Workflow outbox', 'Sent ' + sent + ' pending notification(s).');
+        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+      } catch (error) {
+        showToast('error', 'Could not drain notifications', errorMessage(error));
       }
     }
   });

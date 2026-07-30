@@ -17,68 +17,19 @@ Replace / add in the Apps Script project:
 | `Index.html` | Full replace |
 | `V31_Idempotency_Tests.gs` | Full replace |
 | `V31_Finalization_Tests.gs` | Full replace |
-| `V31_Workflow_Notification_Tests.gs` | Add new file |
+| `V31_Workflow_Notification_Tests.gs` | Full replace |
 | `appsscript.json` | Unchanged unless scopes already match |
 
 Then run `upgradeToV31()` (idempotent) to append new columns.
 
-## New launch behavior
+## Recovery highlights
 
-Per component (Calendar, manager/employee/HR email):
-
-1. Persist `Sending` / `Creating` + attempt ID under a short lock
-2. Perform external side effect **outside** the lock
-3. Persist `Sent` / `Created` under a short lock
-4. Stale in-progress claims become `Delivery Unknown` — **no automatic resend**
-5. HR reconciles Unknown via `reconcileLaunchDelivery(cycleId, component, action)`
-
-Calendar recovery uses:
-
-- Persisted event ID
-- Event tag `AITHERAS_REVIEW_CYCLE_ID`
-- Description marker `[AITHERAS_REVIEW_CYCLE_ID:<cycleId>]` present at `createEvent()`
-
-Calendar configuration (`setTag` / reminders) is best-effort after create:
-
-- Launch may complete at `Created` (event exists)
-- Config failure persists `Last Launch Error` and is **not** cleared by later email success
-- HR uses **`retryReviewCalendarConfiguration(cycleId)`** (not Retry Launch) until `Configured`
-- Missing/inaccessible events use marker recovery, then explicit **`rebuildReviewCalendarEvent(cycleId)`**
-
-Manual create:
-
-- Duplicate active cycles (employee + type + period) are rejected
-- After the row commits, the API returns partial success when launch needs attention
-
-## New finalization behavior
-
-```text
-Awaiting Signatures → Finalizing → Complete
-```
-
-`Complete` is set only after:
-
-- Manager PDF ID persisted
-- Self PDF ID persisted
-- Final distribution status = `Sent` (with Attempt ID verified on commit)
-
-Artifact recovery:
-
-- PDFs: `{documentType} - {cycleId}.pdf`
-- Signatures: `{cycleId} - {sanitizedLabel}.png` (duplicates require HR; newest is never auto-chosen)
-- HR PDF Unknown reconciliation: `reconcileFinalPdf(...)`
-
-Signature captures use per-role claim/attempt IDs before Drive writes.
-
-## Workflow notifications
-
-Durable claim/commit states for:
-
-- Ready-for-meeting
-- Meeting-opened manager / employee
-- Manager / employee / HR signature requests
-
-HR retry: `retryWorkflowNotification(cycleId, componentKey, { allowUnknownResend })`
+- PDF reconciliation validates MIME, review-folder parent, deterministic name, candidate membership, `Finalizing`, and `Delivery Unknown`
+- Signature reconciliation: `reconcileSignature` / `listSignatureCandidates`
+- Workflow outbox: `dispatchPendingWorkflowNotifications` (+ all-cycles drain from daily trigger)
+- Notification eligibility is stage-gated; HR retry lists only eligible unresolved components
+- Calendar rebuild uses Creating claim + post-claim marker recovery
+- Cancelled cycles do not block manual recreation
 
 ## Tests
 
@@ -88,14 +39,9 @@ runV31FinalizationTests()
 runV31WorkflowNotificationTests()
 ```
 
-Live Drive/Calendar/Mail/concurrency probes remain gated behind Preview sandbox flags.
-
-## Repository topology
-
-See `REPO_TOPOLOGY.md`. Set GitHub default branch to `master` (application tree), keep `archive/initial-readme`, add required CI from `.github/workflows/repository-checks.yml`.
+Keep Live probes off until Preview fault matrix passes.
 
 ## Rollback
 
 1. Restore previous Apps Script version / git tag
 2. New columns may remain empty (additive)
-3. Cycles stuck in `Finalizing` can be completed with `retryReviewFinalization` after rollback/forward fix

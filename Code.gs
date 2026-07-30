@@ -520,6 +520,13 @@ function findDuplicateActiveManualCycle_(
   const wantedType = String(reviewType || '');
   const startMs = periodStart ? new Date(periodStart).getTime() : NaN;
   const endMs = periodEnd ? new Date(periodEnd).getTime() : NaN;
+  const blockingStatuses = [
+    PR.CYCLE.OPEN,
+    PR.CYCLE.READY,
+    PR.CYCLE.MEETING,
+    PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
+  ];
 
   if (!wantedEmail || !wantedType || Number.isNaN(startMs) || Number.isNaN(endMs)) {
     return null;
@@ -530,7 +537,9 @@ function findDuplicateActiveManualCycle_(
   for (let i = 0; i < cycles.length; i++) {
     const cycle = cycles[i];
 
-    if (String(cycle['Status']) === PR.CYCLE.COMPLETE) {
+    if (
+      blockingStatuses.indexOf(String(cycle['Status'] || '')) < 0
+    ) {
       continue;
     }
 
@@ -691,6 +700,7 @@ function saveIndependentReview_(
       },
       {}
     );
+    dispatchPendingWorkflowNotifications(cycleId);
   }
 
   return {
@@ -744,6 +754,7 @@ function startReviewMeeting(cycleId) {
   });
 
   sendMeetingOpenedEmails_(cycleId);
+  dispatchPendingWorkflowNotifications(cycleId);
 
   return {
     ok: true,
@@ -887,6 +898,7 @@ function releaseReviewSignatures(cycleId) {
 
   sendCombinedSignatureEmail_(cycleId, PR.ROLE.MANAGER);
   sendCombinedSignatureEmail_(cycleId, PR.ROLE.EMPLOYEE);
+  dispatchPendingWorkflowNotifications(cycleId);
 
   return {
     ok: true,
@@ -2470,9 +2482,8 @@ function findExistingReviewPdfId_(cycleId, documentType) {
 
 function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
   const settings = getSettings_();
-  const folder = DriveApp.getFolderById(
-    settings.REVIEW_FOLDER_ID
-  );
+  const folderId = String(settings.REVIEW_FOLDER_ID || '');
+  const folder = DriveApp.getFolderById(folderId);
   const wanted = buildReviewPdfFileName_(
     cycleId,
     documentType
@@ -2482,16 +2493,138 @@ function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
 
   while (files.hasNext()) {
     const file = files.next();
-    matches.push({
-      id: file.getId(),
-      name: file.getName(),
-      updatedAt: file.getLastUpdated()
-        ? file.getLastUpdated().toISOString()
-        : '',
-    });
+
+    try {
+      assertValidReviewPdfFile_(
+        file,
+        cycleId,
+        documentType,
+        folderId
+      );
+      matches.push({
+        id: file.getId(),
+        name: file.getName(),
+        updatedAt: file.getLastUpdated()
+          ? file.getLastUpdated().toISOString()
+          : '',
+      });
+    } catch (error) {
+      // Skip non-conforming files with the same name outside policy.
+    }
   }
 
   return matches;
+}
+
+function assertValidReviewPdfFile_(
+  file,
+  cycleId,
+  documentType,
+  folderId
+) {
+  if (!file) {
+    throw new Error('Drive file was not found.');
+  }
+
+  const mime = String(file.getMimeType() || '');
+
+  if (
+    mime !== MimeType.PDF &&
+    mime !== 'application/pdf'
+  ) {
+    throw new Error(
+      'Reconciled file must be application/pdf.'
+    );
+  }
+
+  if (!isDriveFileInFolder_(file, folderId)) {
+    throw new Error(
+      'Reconciled PDF must live in the restricted review folder.'
+    );
+  }
+
+  const wanted = buildReviewPdfFileName_(
+    cycleId,
+    documentType
+  );
+
+  if (String(file.getName() || '') !== wanted) {
+    throw new Error(
+      'Reconciled PDF must use the deterministic name "' +
+        wanted +
+        '".'
+    );
+  }
+}
+
+function isDriveFileInFolder_(file, folderId) {
+  const wanted = String(folderId || '');
+
+  if (!wanted) {
+    return false;
+  }
+
+  const parents = file.getParents();
+
+  while (parents.hasNext()) {
+    if (String(parents.next().getId()) === wanted) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function assertPdfReconciliationAllowed_(cycle, documentType) {
+  if (String(cycle['Status']) !== PR.CYCLE.FINALIZING) {
+    throw new Error(
+      'PDF reconciliation is only allowed while the cycle is Finalizing.'
+    );
+  }
+
+  const fields = getFinalPdfFields_(documentType);
+  const status = String(
+    cycle[fields.statusField] || V31.DELIVERY.PENDING
+  );
+
+  if (status !== V31.DELIVERY.UNKNOWN) {
+    throw new Error(
+      documentType +
+        ' PDF reconciliation requires Delivery Unknown status.'
+    );
+  }
+}
+
+function validateAndLoadReviewPdfCandidate_(
+  fileId,
+  cycleId,
+  documentType
+) {
+  const settings = getSettings_();
+  const folderId = String(settings.REVIEW_FOLDER_ID || '');
+  const candidates = listMatchingReviewPdfArtifacts_(
+    cycleId,
+    documentType
+  );
+  const allowed = candidates.some(function (row) {
+    return String(row.id) === String(fileId);
+  });
+
+  if (!allowed) {
+    throw new Error(
+      'Choose a PDF from the current candidate list for this cycle and document.'
+    );
+  }
+
+  const file = DriveApp.getFileById(String(fileId));
+  assertValidReviewPdfFile_(
+    file,
+    cycleId,
+    documentType,
+    folderId
+  );
+
+  return file;
 }
 
 /**
@@ -2512,6 +2645,8 @@ function reconcileFinalPdf(
 
   const opts = options || {};
   const fields = getFinalPdfFields_(documentType);
+  const location = findCycle_(cycleId);
+  assertPdfReconciliationAllowed_(location.object, documentType);
 
   if (action === 'cancel') {
     return {
@@ -2519,8 +2654,10 @@ function reconcileFinalPdf(
       message:
         documentType +
         ' left as Delivery Unknown. No Drive changes were made.',
-      finalization: getFinalizationSummary_(
-        findCycle_(cycleId).object
+      finalization: getFinalizationSummary_(location.object),
+      candidates: listMatchingReviewPdfArtifacts_(
+        cycleId,
+        documentType
       ),
     };
   }
@@ -2529,17 +2666,24 @@ function reconcileFinalPdf(
     const fileId = String(opts.fileId || '').trim();
 
     if (!fileId) {
-      throw new Error('Choose a Drive file ID to attach.');
+      throw new Error('Choose a candidate PDF from the list.');
     }
 
+    const file = validateAndLoadReviewPdfCandidate_(
+      fileId,
+      cycleId,
+      documentType
+    );
+
     withLock_(function () {
-      const location = findCycle_(cycleId);
-      const cycle = location.object;
-      cycle[fields.idField] = fileId;
+      const freshLocation = findCycle_(cycleId);
+      const cycle = freshLocation.object;
+      assertPdfReconciliationAllowed_(cycle, documentType);
+      cycle[fields.idField] = file.getId();
       cycle[fields.statusField] = V31.DELIVERY.SENT;
       cycle['Finalization Last Error'] = '';
       cycle['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, cycle);
+      writeCycle_(freshLocation.rowNumber, cycle);
       SpreadsheetApp.flush();
     });
 
@@ -2548,13 +2692,13 @@ function reconcileFinalPdf(
       'Final PDF reconciled with existing file',
       email,
       documentType,
-      fileId,
+      file.getId(),
       action
     );
 
     return {
       ok: true,
-      message: documentType + ' PDF ID attached from Drive.',
+      message: documentType + ' PDF attached from validated candidate.',
       finalization: getFinalizationSummary_(
         findCycle_(cycleId).object
       ),
@@ -2567,36 +2711,29 @@ function reconcileFinalPdf(
       documentType
     );
 
-    if (matches.length > 1) {
+    if (matches.length > 0) {
       throw new Error(
-        'Multiple matching PDF files exist. Choose one file instead of regenerating.'
+        'Matching PDF candidate(s) already exist. Choose one instead of regenerating.'
       );
     }
 
-    if (matches.length === 1 && !opts.confirmOverwrite) {
-      throw new Error(
-        'A matching PDF already exists (' +
-          matches[0].id +
-          '). Use that file ID, or pass confirmOverwrite after review.'
-      );
-    }
-
-    if (matches.length === 0 && !opts.confirmMissing) {
+    if (!opts.confirmMissing) {
       throw new Error(
         'Confirm no Drive file exists (confirmMissing) before regenerating a Delivery Unknown PDF.'
       );
     }
 
     withLock_(function () {
-      const location = findCycle_(cycleId);
-      const cycle = location.object;
+      const freshLocation = findCycle_(cycleId);
+      const cycle = freshLocation.object;
+      assertPdfReconciliationAllowed_(cycle, documentType);
       cycle[fields.idField] = '';
       cycle[fields.statusField] = V31.DELIVERY.PENDING;
       cycle[fields.attemptField] = '';
       cycle[fields.startedField] = '';
       cycle['Finalization Last Error'] = '';
       cycle['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, cycle);
+      writeCycle_(freshLocation.rowNumber, cycle);
       SpreadsheetApp.flush();
     });
 
@@ -2662,9 +2799,309 @@ function listFinalPdfCandidates(cycleId, documentType) {
     throw new Error('Only HR may list final PDF candidates.');
   }
 
+  const cycle = findCycle_(cycleId).object;
+  assertPdfReconciliationAllowed_(cycle, documentType);
+
   return {
     ok: true,
     files: listMatchingReviewPdfArtifacts_(cycleId, documentType),
+  };
+}
+
+function listMatchingSignatureArtifacts_(cycleId, role) {
+  const settings = getSettings_();
+  const folderId = String(settings.REVIEW_FOLDER_ID || '');
+  const folder = DriveApp.getFolderById(folderId);
+  const fileName = buildSignatureFileName_(
+    cycleId,
+    'Combined Review Packet - ' + role
+  );
+  const matches = [];
+  const files = folder.getFilesByName(fileName);
+
+  while (files.hasNext()) {
+    const file = files.next();
+
+    try {
+      assertValidSignatureFile_(file, fileName, folderId);
+      matches.push({
+        id: file.getId(),
+        name: file.getName(),
+        updatedAt: file.getLastUpdated()
+          ? file.getLastUpdated().toISOString()
+          : '',
+      });
+    } catch (error) {
+      // Skip non-conforming files.
+    }
+  }
+
+  return matches;
+}
+
+function assertValidSignatureFile_(file, expectedName, folderId) {
+  if (!file) {
+    throw new Error('Drive signature file was not found.');
+  }
+
+  const mime = String(file.getMimeType() || '');
+
+  if (mime !== MimeType.PNG && mime !== 'image/png') {
+    throw new Error('Signature file must be image/png.');
+  }
+
+  if (!isDriveFileInFolder_(file, folderId)) {
+    throw new Error(
+      'Signature file must live in the restricted review folder.'
+    );
+  }
+
+  if (String(file.getName() || '') !== String(expectedName)) {
+    throw new Error(
+      'Signature file must use the deterministic name "' +
+        expectedName +
+        '".'
+    );
+  }
+}
+
+function assertSignatureReconciliationAllowed_(cycle, role) {
+  if (String(cycle['Status']) !== PR.CYCLE.SIGNATURES) {
+    throw new Error(
+      'Signature reconciliation is only allowed while awaiting signatures.'
+    );
+  }
+
+  const fields = getSignatureClaimFields_(role);
+  const status = String(
+    cycle[fields.statusField] || V31.DELIVERY.PENDING
+  );
+
+  if (status !== V31.DELIVERY.UNKNOWN) {
+    throw new Error(
+      role +
+        ' signature reconciliation requires Delivery Unknown status.'
+    );
+  }
+
+  const state = getCombinedSignatureState_(cycle);
+
+  if (role === PR.ROLE.MANAGER && state.managerSigned) {
+    throw new Error('Manager signature is already recorded.');
+  }
+
+  if (role === PR.ROLE.EMPLOYEE && state.employeeSigned) {
+    throw new Error('Employee signature is already recorded.');
+  }
+
+  if (role === PR.ROLE.HR) {
+    if (!state.managerSigned || !state.employeeSigned) {
+      throw new Error(
+        'HR signature reconciliation requires both participant signatures first.'
+      );
+    }
+
+    if (state.hrSigned) {
+      throw new Error('HR signature is already recorded.');
+    }
+  }
+}
+
+function applyReconciledSignatureId_(cycle, role, signatureId) {
+  const now = new Date();
+
+  if (role === PR.ROLE.MANAGER) {
+    cycle['MGR Manager Signature ID'] = signatureId;
+    cycle['MGR Manager Signed At'] = now;
+    cycle['SELF Manager Signature ID'] = signatureId;
+    cycle['SELF Manager Signed At'] = now;
+  } else if (role === PR.ROLE.EMPLOYEE) {
+    cycle['MGR Employee Signature ID'] = signatureId;
+    cycle['MGR Employee Signed At'] = now;
+    cycle['SELF Employee Signature ID'] = signatureId;
+    cycle['SELF Employee Signed At'] = now;
+  } else if (role === PR.ROLE.HR) {
+    cycle['MGR HR Signature ID'] = signatureId;
+    cycle['MGR HR Signed At'] = now;
+    cycle['SELF HR Signature ID'] = signatureId;
+    cycle['SELF HR Signed At'] = now;
+  } else {
+    throw new Error('Unsupported signature role.');
+  }
+
+  const fields = getSignatureClaimFields_(role);
+  cycle[fields.statusField] = V31.DELIVERY.SENT;
+  updateCombinedSignatureStatuses_(cycle);
+}
+
+/**
+ * HR-only reconciliation for per-role signature Delivery Unknown states.
+ */
+function reconcileSignature(cycleId, role, action, options) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may reconcile signatures.');
+  }
+
+  if (
+    [PR.ROLE.MANAGER, PR.ROLE.EMPLOYEE, PR.ROLE.HR].indexOf(
+      role
+    ) < 0
+  ) {
+    throw new Error('Unsupported signature role.');
+  }
+
+  const opts = options || {};
+  const fields = getSignatureClaimFields_(role);
+  const location = findCycle_(cycleId);
+  assertSignatureReconciliationAllowed_(location.object, role);
+
+  if (action === 'cancel') {
+    return {
+      ok: true,
+      message:
+        role +
+        ' signature left as Delivery Unknown. No Drive changes were made.',
+      candidates: listMatchingSignatureArtifacts_(cycleId, role),
+    };
+  }
+
+  if (action === 'useFileId' || action === 'chooseFile') {
+    const fileId = String(opts.fileId || '').trim();
+    const candidates = listMatchingSignatureArtifacts_(
+      cycleId,
+      role
+    );
+    const allowed = candidates.some(function (row) {
+      return String(row.id) === fileId;
+    });
+
+    if (!fileId || !allowed) {
+      throw new Error(
+        'Choose a signature file from the current candidate list.'
+      );
+    }
+
+    const settings = getSettings_();
+    const file = DriveApp.getFileById(fileId);
+    assertValidSignatureFile_(
+      file,
+      buildSignatureFileName_(
+        cycleId,
+        'Combined Review Packet - ' + role
+      ),
+      settings.REVIEW_FOLDER_ID
+    );
+
+    withLock_(function () {
+      const freshLocation = findCycle_(cycleId);
+      const cycle = freshLocation.object;
+      assertSignatureReconciliationAllowed_(cycle, role);
+      applyReconciledSignatureId_(cycle, role, file.getId());
+      cycle['Updated At'] = new Date();
+      writeCycle_(freshLocation.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    audit_(
+      cycleId,
+      'Signature reconciled with existing file',
+      email,
+      role,
+      fileId,
+      action
+    );
+
+    const signed = findCycle_(cycleId).object;
+    const state = getCombinedSignatureState_(signed);
+
+    if (
+      role !== PR.ROLE.HR &&
+      state.managerSigned &&
+      state.employeeSigned
+    ) {
+      sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
+    }
+
+    if (role === PR.ROLE.HR) {
+      finalizeReviewCycle_(cycleId);
+    }
+
+    return {
+      ok: true,
+      message: role + ' signature attached from validated candidate.',
+      signatureState: getCombinedSignatureState_(
+        findCycle_(cycleId).object
+      ),
+    };
+  }
+
+  if (action === 'resetPending') {
+    const matches = listMatchingSignatureArtifacts_(
+      cycleId,
+      role
+    );
+
+    if (matches.length > 0 && !opts.confirmMissing) {
+      throw new Error(
+        'Signature candidate(s) already exist. Choose one, or confirmMissing only after they are removed.'
+      );
+    }
+
+    if (matches.length === 0 && !opts.confirmMissing) {
+      throw new Error(
+        'Confirm no Drive signature file exists before resetting to Pending.'
+      );
+    }
+
+    withLock_(function () {
+      const freshLocation = findCycle_(cycleId);
+      const cycle = freshLocation.object;
+      assertSignatureReconciliationAllowed_(cycle, role);
+      cycle[fields.statusField] = V31.DELIVERY.PENDING;
+      cycle[fields.attemptField] = '';
+      cycle[fields.startedField] = '';
+      cycle['Updated At'] = new Date();
+      writeCycle_(freshLocation.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+
+    audit_(
+      cycleId,
+      'Signature claim reset to Pending',
+      email,
+      role,
+      V31.DELIVERY.PENDING,
+      action
+    );
+
+    return {
+      ok: true,
+      message:
+        role +
+        ' signature claim reset to Pending. The signer may try again.',
+    };
+  }
+
+  throw new Error(
+    'Unsupported signature reconciliation action. Use useFileId, chooseFile, resetPending, or cancel.'
+  );
+}
+
+function listSignatureCandidates(cycleId, role) {
+  const email = getCurrentUserEmail_();
+
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may list signature candidates.');
+  }
+
+  const cycle = findCycle_(cycleId).object;
+  assertSignatureReconciliationAllowed_(cycle, role);
+
+  return {
+    ok: true,
+    files: listMatchingSignatureArtifacts_(cycleId, role),
   };
 }
 

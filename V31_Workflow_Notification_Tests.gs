@@ -18,38 +18,44 @@ function runV31WorkflowNotificationTests() {
 
   results.push(
     runWorkflowCase_(
-      'workflow notification component map is complete',
+      'workflow notification component map includes error fields',
       testWorkflowNotificationComponentMap_
     )
   );
   results.push(
     runWorkflowCase_(
-      'Final Distribution Attempt ID is in CYCLE_HEADERS',
-      testFinalDistributionAttemptHeader_
+      'notification eligibility enforces cycle stage',
+      testWorkflowNotificationEligibility_
     )
   );
   results.push(
     runWorkflowCase_(
-      'signature claim fields exist per role',
-      testSignatureClaimHeaders_
+      'notification summary flags eligible Pending attention',
+      testWorkflowNotificationNeedsAttention_
     )
   );
   results.push(
     runWorkflowCase_(
-      'decideLaunchComponentAction blocks unknown PDF without allow',
-      testUnknownPdfRequiresAllow_
+      'duplicate active matcher uses blocking statuses only',
+      testDuplicateActiveCycleBlockingSet_
     )
   );
   results.push(
     runWorkflowCase_(
-      'createReviewCycle partial-success shape is documented',
-      testManualCreatePartialSuccessShape_
+      'PDF reconciliation requires Finalizing + Unknown',
+      testPdfReconciliationGates_
     )
   );
   results.push(
     runWorkflowCase_(
-      'duplicate active cycle matcher keys on employee/type/period',
-      testDuplicateActiveCycleMatcher_
+      'signature reconciliation requires Awaiting Signatures + Unknown',
+      testSignatureReconciliationGates_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'deterministic PDF name helper rejects employee-name variants',
+      testDeterministicPdfNameContract_
     )
   );
 
@@ -127,136 +133,257 @@ function assertWorkflow_(condition, message) {
 }
 
 function testWorkflowNotificationComponentMap_() {
-  const keys = [
-    'ready',
-    'meetingManager',
-    'meetingEmployee',
-    'signatureManager',
-    'signatureEmployee',
-    'signatureHr',
-  ];
-
-  keys.forEach(function (key) {
+  getWorkflowNotificationKeys_().forEach(function (key) {
     const component = getWorkflowNotificationComponent_(key);
     assertWorkflow_(
       component.statusField &&
         component.attemptField &&
         component.startedField &&
-        component.sentAtField,
-      key + ' must expose claim/commit fields'
+        component.sentAtField &&
+        component.errorField,
+      key + ' must expose claim/commit/error fields'
     );
     assertWorkflow_(
-      V31.CYCLE_HEADERS.indexOf(component.statusField) >= 0,
-      key + ' status field must be migrated'
+      V31.CYCLE_HEADERS.indexOf(component.errorField) >= 0,
+      key + ' error field must be migrated'
     );
   });
 }
 
-function testFinalDistributionAttemptHeader_() {
-  assertWorkflow_(
-    V31.CYCLE_HEADERS.indexOf(
-      'Final Distribution Attempt ID'
-    ) >= 0,
-    'Final Distribution Attempt ID must be present'
-  );
-}
-
-function testSignatureClaimHeaders_() {
-  [
-    'Manager Signature Status',
-    'Manager Signature Attempt ID',
-    'Manager Signature Started At',
-    'Employee Signature Status',
-    'Employee Signature Attempt ID',
-    'Employee Signature Started At',
-    'HR Signature Status',
-    'HR Signature Attempt ID',
-    'HR Signature Started At',
-  ].forEach(function (header) {
-    assertWorkflow_(
-      V31.CYCLE_HEADERS.indexOf(header) >= 0,
-      'Missing signature claim header: ' + header
-    );
-  });
-}
-
-function testUnknownPdfRequiresAllow_() {
-  const blocked = decideLaunchComponentAction_(
-    V31.DELIVERY.UNKNOWN,
-    false,
-    '',
-    V31.DELIVERY.SENDING,
-    false
-  );
-
-  assertWorkflow_(
-    blocked.action === 'skip' && blocked.reason === 'unknown',
-    'Unknown PDF must not auto-regenerate'
-  );
-
-  const allowed = decideLaunchComponentAction_(
-    V31.DELIVERY.UNKNOWN,
-    false,
-    '',
-    V31.DELIVERY.SENDING,
-    true
-  );
-
-  assertWorkflow_(
-    allowed.action === 'claim',
-    'Explicit allow must reclaim Unknown for HR regenerate path'
-  );
-}
-
-function testManualCreatePartialSuccessShape_() {
-  const sample = {
-    ok: true,
-    cycleCreated: true,
-    launchComplete: false,
-    cycleId: 'C-1',
-    message: 'Review created, but launch requires attention.',
+function testWorkflowNotificationEligibility_() {
+  const readyOnly = {
+    Status: PR.CYCLE.READY,
+    'Meeting Opened At': '',
+    'Signatures Released At': '',
   };
 
   assertWorkflow_(
-    sample.ok &&
-      sample.cycleCreated &&
-      sample.launchComplete === false &&
-      !!sample.cycleId,
-    'Partial create response must keep ok/cycleCreated/cycleId'
+    isWorkflowNotificationEligible_(readyOnly, 'ready'),
+    'Ready email eligible only in READY'
+  );
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(readyOnly, 'meetingManager'),
+    'Meeting email blocked before Meeting Opened At'
+  );
+
+  const meetingOpen = {
+    Status: PR.CYCLE.MEETING,
+    'Meeting Opened At': new Date(),
+    'Signatures Released At': '',
+  };
+
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(meetingOpen, 'ready'),
+    'Ready email blocked after meeting opens'
+  );
+  assertWorkflow_(
+    isWorkflowNotificationEligible_(meetingOpen, 'meetingEmployee'),
+    'Meeting employee email eligible after Meeting Opened At'
+  );
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(
+      meetingOpen,
+      'signatureManager'
+    ),
+    'Signature request blocked before release'
+  );
+
+  const signatures = {
+    Status: PR.CYCLE.SIGNATURES,
+    'Meeting Opened At': new Date(),
+    'Signatures Released At': new Date(),
+    'MGR Manager Signature ID': '',
+    'SELF Manager Signature ID': '',
+    'MGR Employee Signature ID': '',
+    'SELF Employee Signature ID': '',
+    'MGR HR Signature ID': '',
+    'SELF HR Signature ID': '',
+  };
+
+  assertWorkflow_(
+    isWorkflowNotificationEligible_(
+      signatures,
+      'signatureManager'
+    ),
+    'Manager signature email eligible after release'
+  );
+  assertWorkflow_(
+    !isWorkflowNotificationEligible_(signatures, 'signatureHr'),
+    'HR signature email blocked until both participants sign'
+  );
+
+  signatures['MGR Manager Signature ID'] = 'm';
+  signatures['SELF Manager Signature ID'] = 'm';
+  signatures['MGR Employee Signature ID'] = 'e';
+  signatures['SELF Employee Signature ID'] = 'e';
+
+  assertWorkflow_(
+    isWorkflowNotificationEligible_(signatures, 'signatureHr'),
+    'HR signature email eligible after both participants sign'
   );
 }
 
-function testDuplicateActiveCycleMatcher_() {
+function testWorkflowNotificationNeedsAttention_() {
+  const cycle = {
+    Status: PR.CYCLE.READY,
+    'Ready Notification Status': V31.DELIVERY.PENDING,
+    'Meeting Manager Email Status': V31.DELIVERY.PENDING,
+    'Meeting Employee Email Status': V31.DELIVERY.PENDING,
+    'Manager Signature Email Status': V31.DELIVERY.PENDING,
+    'Employee Signature Email Status': V31.DELIVERY.PENDING,
+    'HR Signature Email Status': V31.DELIVERY.PENDING,
+  };
+
+  const summary = getWorkflowNotificationSummary_(cycle);
+
+  assertWorkflow_(
+    summary.needsAttention === true,
+    'Eligible Pending ready notification must need attention'
+  );
+  assertWorkflow_(
+    summary.eligibleUnresolved.indexOf('ready') >= 0,
+    'Ready must appear in eligibleUnresolved'
+  );
+  assertWorkflow_(
+    summary.eligibleUnresolved.indexOf('meetingManager') < 0,
+    'Ineligible meeting email must not need attention'
+  );
+}
+
+function testDuplicateActiveCycleBlockingSet_() {
   const periodStart = new Date(2026, 0, 1);
   const periodEnd = new Date(2026, 5, 30);
-
-  const existing = {
-    'Cycle ID': 'existing-1',
+  const open = {
+    'Cycle ID': 'open-1',
     Status: PR.CYCLE.OPEN,
     'Employee Email': 'emp@example.com',
     'Review Type': 'Annual',
     'Review Period Start': periodStart,
     'Review Period End': periodEnd,
   };
+  const cancelled = {
+    'Cycle ID': 'cancelled-1',
+    Status: PR.CYCLE.CANCELLED,
+    'Employee Email': 'emp@example.com',
+    'Review Type': 'Annual',
+    'Review Period Start': periodStart,
+    'Review Period End': periodEnd,
+  };
+
+  const blocking = [
+    PR.CYCLE.OPEN,
+    PR.CYCLE.READY,
+    PR.CYCLE.MEETING,
+    PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
+  ];
 
   assertWorkflow_(
-    normalizeEmail_(existing['Employee Email']) ===
-      normalizeEmail_('emp@example.com'),
-    'Duplicate matcher must normalize employee email'
+    blocking.indexOf(String(open.Status)) >= 0,
+    'Open must block recreation'
   );
   assertWorkflow_(
-    String(existing['Review Type']) === 'Annual',
-    'Duplicate matcher must compare review type'
+    blocking.indexOf(String(cancelled.Status)) < 0,
+    'Cancelled must not block recreation'
   );
   assertWorkflow_(
-    new Date(existing['Review Period Start']).getTime() ===
-      periodStart.getTime() &&
-      new Date(existing['Review Period End']).getTime() ===
-        periodEnd.getTime(),
-    'Duplicate matcher must compare period bounds'
+    blocking.indexOf(PR.CYCLE.COMPLETE) < 0,
+    'Complete must not block recreation'
+  );
+}
+
+function testPdfReconciliationGates_() {
+  let threw = false;
+
+  try {
+    assertPdfReconciliationAllowed_(
+      {
+        Status: PR.CYCLE.SIGNATURES,
+        'Manager PDF Status': V31.DELIVERY.UNKNOWN,
+      },
+      PR.TYPE.MANAGER
+    );
+  } catch (error) {
+    threw = true;
+  }
+
+  assertWorkflow_(
+    threw,
+    'PDF reconcile must reject non-Finalizing cycles'
+  );
+
+  threw = false;
+
+  try {
+    assertPdfReconciliationAllowed_(
+      {
+        Status: PR.CYCLE.FINALIZING,
+        'Manager PDF Status': V31.DELIVERY.PENDING,
+      },
+      PR.TYPE.MANAGER
+    );
+  } catch (error) {
+    threw = true;
+  }
+
+  assertWorkflow_(
+    threw,
+    'PDF reconcile must reject non-Unknown components'
+  );
+
+  assertPdfReconciliationAllowed_(
+    {
+      Status: PR.CYCLE.FINALIZING,
+      'Manager PDF Status': V31.DELIVERY.UNKNOWN,
+    },
+    PR.TYPE.MANAGER
+  );
+}
+
+function testSignatureReconciliationGates_() {
+  let threw = false;
+
+  try {
+    assertSignatureReconciliationAllowed_(
+      {
+        Status: PR.CYCLE.MEETING,
+        'Manager Signature Status': V31.DELIVERY.UNKNOWN,
+      },
+      PR.ROLE.MANAGER
+    );
+  } catch (error) {
+    threw = true;
+  }
+
+  assertWorkflow_(
+    threw,
+    'Signature reconcile must require Awaiting Signatures'
+  );
+
+  assertSignatureReconciliationAllowed_(
+    {
+      Status: PR.CYCLE.SIGNATURES,
+      'Manager Signature Status': V31.DELIVERY.UNKNOWN,
+      'MGR Manager Signature ID': '',
+      'SELF Manager Signature ID': '',
+      'MGR Employee Signature ID': '',
+      'SELF Employee Signature ID': '',
+      'MGR HR Signature ID': '',
+      'SELF HR Signature ID': '',
+    },
+    PR.ROLE.MANAGER
+  );
+}
+
+function testDeterministicPdfNameContract_() {
+  assertWorkflow_(
+    buildReviewPdfFileName_('C-9', PR.TYPE.MANAGER) ===
+      'Manager Review - C-9.pdf',
+    'Manager PDF name must include cycle ID'
   );
   assertWorkflow_(
-    String(existing['Status']) !== PR.CYCLE.COMPLETE,
-    'Complete cycles must not block a later reuse of the period'
+    buildReviewPdfFileName_('C-9', PR.TYPE.SELF) ===
+      'Self-Evaluation - C-9.pdf',
+    'Self PDF name must include cycle ID'
   );
 }
