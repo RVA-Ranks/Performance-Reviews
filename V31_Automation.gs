@@ -161,10 +161,17 @@ const V31 = Object.freeze({
 
 function upgradeToV31() {
   ensureV31DataModel_();
+  const triggerMigration = migrateLegacyReviewAutomationTrigger_();
 
   SpreadsheetApp.getUi().alert(
     'V3.1 upgrade complete.\n\n' +
-      'Automation is in Preview mode and has not sent anything.\n\n' +
+      'The upgrade did not send email or create review cycles.\n' +
+      'Current automation mode: ' +
+      triggerMigration.mode +
+      '\n\n' +
+      'Trigger migration: ' +
+      triggerMigration.message +
+      '\n\n' +
       'Next:\n' +
       '1. Open the web app as HR.\n' +
       '2. Go to Administration → Review Automation.\n' +
@@ -1153,14 +1160,83 @@ function removeReviewAutomationTriggers_() {
 function hasReviewAutomationTrigger_() {
   return ScriptApp.getProjectTriggers().some(
     function (trigger) {
-      const handler = trigger.getHandlerFunction();
-
       return (
-        handler === 'runReviewAutomationTrigger_' ||
-        handler === 'runReviewAutomation'
+        trigger.getHandlerFunction() ===
+        'runReviewAutomationTrigger_'
       );
     }
   );
+}
+
+/**
+ * Replace legacy runReviewAutomation triggers with the private handler.
+ * Live keeps exactly one daily trigger; Preview/Paused keep none.
+ */
+function migrateLegacyReviewAutomationTrigger_() {
+  const settings = getSettings_();
+  const mode = String(
+    settings.AUTOMATION_MODE || 'Preview'
+  );
+  let removedLegacy = 0;
+  let removedDuplicate = 0;
+  let foundCurrent = false;
+
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    const handler = trigger.getHandlerFunction();
+
+    if (handler === 'runReviewAutomation') {
+      ScriptApp.deleteTrigger(trigger);
+      removedLegacy++;
+      return;
+    }
+
+    if (handler !== 'runReviewAutomationTrigger_') {
+      return;
+    }
+
+    if (mode !== 'Live' || foundCurrent) {
+      ScriptApp.deleteTrigger(trigger);
+      removedDuplicate++;
+      return;
+    }
+
+    foundCurrent = true;
+  });
+
+  let installed = false;
+
+  if (mode === 'Live' && !foundCurrent) {
+    const hour = Number(
+      settings.AUTOMATION_TRIGGER_HOUR || 8
+    );
+
+    ScriptApp.newTrigger('runReviewAutomationTrigger_')
+      .timeBased()
+      .atHour(hour)
+      .nearMinute(0)
+      .everyDays(1)
+      .inTimezone(
+        Session.getScriptTimeZone() ||
+          'America/New_York'
+      )
+      .create();
+    installed = true;
+  }
+
+  return {
+    ok: true,
+    mode: mode,
+    removedLegacy: removedLegacy,
+    removedDuplicate: removedDuplicate,
+    installed: installed,
+    message:
+      'removed ' +
+      removedLegacy +
+      ' legacy and ' +
+      removedDuplicate +
+      ' duplicate trigger(s); current trigger ' +
+      (mode === 'Live' ? 'installed/retained' : 'disabled'),
+  };
 }
 
 /* ============================ AUTOMATION RUN ============================= */
@@ -3511,7 +3587,7 @@ function deliverWorkflowNotification_(
   try {
     sendFn(claim.cycle);
 
-    withLock_(function () {
+    const committed = withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
 
@@ -3519,7 +3595,7 @@ function deliverWorkflowNotification_(
         String(cycle[component.attemptField] || '') !==
         String(claim.attemptId)
       ) {
-        return;
+        return false;
       }
 
       cycle[component.statusField] = V31.DELIVERY.SENT;
@@ -3530,7 +3606,14 @@ function deliverWorkflowNotification_(
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
+      return true;
     });
+
+    if (!committed) {
+      return buildWorkflowCommitMismatchResult_(
+        findCycle_(cycleId).object
+      );
+    }
 
     return { action: 'sent', cycle: findCycle_(cycleId).object };
   } catch (error) {
@@ -3571,6 +3654,14 @@ function deliverWorkflowNotification_(
       cycle: findCycle_(cycleId).object,
     };
   }
+}
+
+function buildWorkflowCommitMismatchResult_(cycle) {
+  return {
+    action: 'unknown',
+    reason: 'attempt-replaced-before-commit',
+    cycle: cycle,
+  };
 }
 
 function getWorkflowNotificationComponent_(key) {
@@ -3650,87 +3741,164 @@ function getWorkflowNotificationKeys_() {
 }
 
 /**
- * Business-stage eligibility for workflow outbox components.
- * Uses the current cycle status — historical timestamps alone are not enough.
+ * Return an ordered workflow rank for cycle statuses.
+ * Unknown or empty statuses return -1 and are treated conservatively.
  */
-function isWorkflowNotificationEligible_(cycle, key) {
-  if (!cycle || !key) {
-    return false;
-  }
+function getWorkflowStageRank_(status) {
+  const ranks = {};
 
-  const status = String(cycle['Status'] || '');
-  const signatures = getCombinedSignatureState_(cycle);
+  ranks[PR.CYCLE.OPEN] = 0;
+  ranks[PR.CYCLE.READY] = 1;
+  ranks[PR.CYCLE.MEETING] = 2;
+  ranks[PR.CYCLE.SIGNATURES] = 3;
+  ranks[PR.CYCLE.FINALIZING] = 4;
+  ranks[PR.CYCLE.COMPLETE] = 5;
+  ranks[PR.CYCLE.CANCELLED] = 6;
 
-  if (key === 'ready') {
-    return status === PR.CYCLE.READY;
-  }
+  const normalized = String(status || '');
 
-  if (key === 'meetingManager' || key === 'meetingEmployee') {
-    return status === PR.CYCLE.MEETING;
-  }
-
-  if (key === 'signatureManager') {
-    return (
-      status === PR.CYCLE.SIGNATURES && !signatures.managerSigned
-    );
-  }
-
-  if (key === 'signatureEmployee') {
-    return (
-      status === PR.CYCLE.SIGNATURES && !signatures.employeeSigned
-    );
-  }
-
-  if (key === 'signatureHr') {
-    return (
-      status === PR.CYCLE.SIGNATURES &&
-      signatures.managerSigned &&
-      signatures.employeeSigned &&
-      !signatures.hrSigned
-    );
-  }
-
-  return false;
+  return Object.prototype.hasOwnProperty.call(ranks, normalized)
+    ? ranks[normalized]
+    : -1;
 }
 
 /**
- * Mark Pending/Failed notifications that are no longer stage-eligible as
- * Superseded so they are never sent late.
+ * Classify a workflow notification as future, eligible, or past.
  */
-function markSupersededWorkflowNotifications_(cycleId, cycleObject) {
+function getWorkflowNotificationDisposition_(cycle, key) {
+  if (!cycle || !key) {
+    return 'future';
+  }
+
+  const targetStatuses = {
+    ready: PR.CYCLE.READY,
+    meetingManager: PR.CYCLE.MEETING,
+    meetingEmployee: PR.CYCLE.MEETING,
+    signatureManager: PR.CYCLE.SIGNATURES,
+    signatureEmployee: PR.CYCLE.SIGNATURES,
+    signatureHr: PR.CYCLE.SIGNATURES,
+  };
+
+  if (!Object.prototype.hasOwnProperty.call(targetStatuses, key)) {
+    throw new Error('Unknown workflow notification: ' + key);
+  }
+
+  const currentRank = getWorkflowStageRank_(cycle['Status']);
+  const targetRank = getWorkflowStageRank_(targetStatuses[key]);
+
+  if (currentRank < 0 || targetRank < 0 || currentRank < targetRank) {
+    return 'future';
+  }
+
+  if (currentRank > targetRank) {
+    return 'past';
+  }
+
+  if (
+    key === 'ready' ||
+    key === 'meetingManager' ||
+    key === 'meetingEmployee'
+  ) {
+    return 'eligible';
+  }
+
+  const signatures = getCombinedSignatureState_(cycle);
+
+  if (key === 'signatureManager') {
+    return signatures.managerSigned ? 'past' : 'eligible';
+  }
+
+  if (key === 'signatureEmployee') {
+    return signatures.employeeSigned ? 'past' : 'eligible';
+  }
+
+  if (key === 'signatureHr') {
+    if (signatures.hrSigned) {
+      return 'past';
+    }
+
+    return signatures.managerSigned && signatures.employeeSigned
+      ? 'eligible'
+      : 'future';
+  }
+
+  return 'future';
+}
+
+function isWorkflowNotificationEligible_(cycle, key) {
+  return (
+    getWorkflowNotificationDisposition_(cycle, key) ===
+    'eligible'
+  );
+}
+
+/**
+ * Pure planner used by the locked supersession writer and lifecycle tests.
+ */
+function getSupersedableWorkflowNotifications_(cycle) {
+  const planned = [];
+
+  getWorkflowNotificationKeys_().forEach(function (key) {
+    if (
+      getWorkflowNotificationDisposition_(cycle, key) !== 'past'
+    ) {
+      return;
+    }
+
+    const component = getWorkflowNotificationComponent_(key);
+    const previousStatus = String(
+      cycle[component.statusField] || V31.DELIVERY.PENDING
+    );
+    const maySupersede =
+      previousStatus === V31.DELIVERY.PENDING ||
+      previousStatus === V31.DELIVERY.FAILED ||
+      previousStatus === V31.DELIVERY.UNKNOWN ||
+      (previousStatus === V31.DELIVERY.SENDING &&
+        isDeliveryClaimStale_(cycle[component.startedField]));
+
+    if (maySupersede) {
+      planned.push({
+        key: key,
+        previousStatus: previousStatus,
+      });
+    }
+  });
+
+  return planned;
+}
+
+/**
+ * Mark only genuinely past notifications as Superseded.
+ * Always writes from the fresh row loaded while the lock is held.
+ */
+function markSupersededWorkflowNotifications_(cycleId) {
   return withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = applyV31DefaultsToCycle_(
-      cycleObject || location.object,
-      (cycleObject || location.object)['Cycle Source'] || 'Manual'
+      location.object,
+      location.object['Cycle Source'] || 'Manual'
+    );
+    const superseded = getSupersedableWorkflowNotifications_(
+      cycle
     );
     let changed = false;
-    const superseded = [];
 
-    getWorkflowNotificationKeys_().forEach(function (key) {
+    superseded.forEach(function (item) {
+      const key = item.key;
+      const previousStatus = item.previousStatus;
       const component = getWorkflowNotificationComponent_(key);
-      const status = String(
-        cycle[component.statusField] || V31.DELIVERY.PENDING
-      );
-
-      if (
-        status !== V31.DELIVERY.PENDING &&
-        status !== V31.DELIVERY.FAILED
-      ) {
-        return;
-      }
-
-      if (isWorkflowNotificationEligible_(cycle, key)) {
-        return;
-      }
-
       cycle[component.statusField] = V31.DELIVERY.SUPERSEDED;
+      cycle[component.attemptField] = '';
+      cycle[component.startedField] = '';
+
       if (component.errorField) {
         cycle[component.errorField] =
-          'Superseded: cycle advanced past this notification stage.';
+          previousStatus === V31.DELIVERY.UNKNOWN
+            ? 'Superseded after the workflow advanced. Prior delivery remained unconfirmed; no late resend was attempted.'
+            : 'Superseded because the workflow advanced past this notification stage.';
       }
+
       changed = true;
-      superseded.push(key);
     });
 
     if (changed) {
@@ -3750,7 +3918,9 @@ function markSupersededWorkflowNotifications_(cycleId, cycleObject) {
 
     return {
       cycle: cycle,
-      superseded: superseded,
+      superseded: superseded.map(function (item) {
+        return item.key;
+      }),
     };
   });
 }
@@ -3759,7 +3929,7 @@ function markSupersededWorkflowNotifications_(cycleId, cycleObject) {
  * Drain eligible Pending/Failed workflow notifications for one cycle.
  * Private — not callable from google.script.run.
  */
-function dispatchPendingWorkflowNotifications_(cycleId, cycleObject) {
+function dispatchPendingWorkflowNotifications_(cycleId) {
   const totals = {
     eligible: 0,
     sent: 0,
@@ -3770,10 +3940,7 @@ function dispatchPendingWorkflowNotifications_(cycleId, cycleObject) {
   };
   const results = [];
 
-  const marked = markSupersededWorkflowNotifications_(
-    cycleId,
-    cycleObject
-  );
+  const marked = markSupersededWorkflowNotifications_(cycleId);
   totals.superseded = marked.superseded.length;
 
   const keys = getWorkflowNotificationKeys_();
@@ -3816,6 +3983,9 @@ function dispatchPendingWorkflowNotifications_(cycleId, cycleObject) {
 
     if (result.action === 'sent') {
       totals.sent++;
+    } else if (result.action === 'unknown') {
+      totals.deliveryUnknown++;
+      totals.skipped++;
     } else if (result.action === 'error') {
       totals.deliveryUnknown++;
       totals.failed++;
@@ -3847,6 +4017,9 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
     PR.CYCLE.READY,
     PR.CYCLE.MEETING,
     PR.CYCLE.SIGNATURES,
+    PR.CYCLE.FINALIZING,
+    PR.CYCLE.COMPLETE,
+    PR.CYCLE.CANCELLED,
   ];
   const totals = {
     scanned: 0,
@@ -3867,13 +4040,8 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
     totals.scanned++;
 
     try {
-      const normalized = applyV31DefaultsToCycle_(
-        cycle,
-        cycle['Cycle Source'] || 'Manual'
-      );
       const result = dispatchPendingWorkflowNotifications_(
-        cycle['Cycle ID'],
-        normalized
+        cycle['Cycle ID']
       );
       const rowTotals = result.totals || {};
 
@@ -3928,6 +4096,27 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
   };
 }
 
+function getOutboxResultCount_(result, key) {
+  if (
+    result &&
+    result[key] !== undefined &&
+    result[key] !== null
+  ) {
+    return Number(result[key] || 0);
+  }
+
+  if (
+    result &&
+    result.totals &&
+    result.totals[key] !== undefined &&
+    result.totals[key] !== null
+  ) {
+    return Number(result.totals[key] || 0);
+  }
+
+  return 0;
+}
+
 /**
  * HR-only public outbox drain. Requires domain, active HR, and explicit
  * confirmation. Automatic Preview drains are intentionally unsupported.
@@ -3970,21 +4159,16 @@ function drainWorkflowOutboxNow(options) {
     result.ok ? 'Success' : 'Partial',
     JSON.stringify({
       cycleId: opts.cycleId || '',
-      scanned: result.scanned,
-      eligible:
-        result.eligible ||
-        (result.totals && result.totals.eligible),
-      sent: result.sent || (result.totals && result.totals.sent),
-      skipped:
-        result.skipped || (result.totals && result.totals.skipped),
-      superseded:
-        result.superseded ||
-        (result.totals && result.totals.superseded),
-      deliveryUnknown:
-        result.deliveryUnknown ||
-        (result.totals && result.totals.deliveryUnknown),
-      failed:
-        result.failed || (result.totals && result.totals.failed),
+      scanned: getOutboxResultCount_(result, 'scanned'),
+      eligible: getOutboxResultCount_(result, 'eligible'),
+      sent: getOutboxResultCount_(result, 'sent'),
+      skipped: getOutboxResultCount_(result, 'skipped'),
+      superseded: getOutboxResultCount_(result, 'superseded'),
+      deliveryUnknown: getOutboxResultCount_(
+        result,
+        'deliveryUnknown'
+      ),
+      failed: getOutboxResultCount_(result, 'failed'),
     })
   );
 
@@ -3992,33 +4176,22 @@ function drainWorkflowOutboxNow(options) {
     ok: !!result.ok,
     message:
       'Outbox drain complete. Sent ' +
-      Number(
-        result.sent || (result.totals && result.totals.sent) || 0
-      ) +
+      getOutboxResultCount_(result, 'sent') +
       ', superseded ' +
-      Number(
-        result.superseded ||
-          (result.totals && result.totals.superseded) ||
-          0
-      ) +
+      getOutboxResultCount_(result, 'superseded') +
       ', failed ' +
-      Number(
-        result.failed || (result.totals && result.totals.failed) || 0
-      ) +
+      getOutboxResultCount_(result, 'failed') +
       '.',
-    scanned: result.scanned,
-    eligible:
-      result.eligible || (result.totals && result.totals.eligible),
-    sent: result.sent || (result.totals && result.totals.sent),
-    skipped:
-      result.skipped || (result.totals && result.totals.skipped),
-    superseded:
-      result.superseded ||
-      (result.totals && result.totals.superseded),
-    deliveryUnknown:
-      result.deliveryUnknown ||
-      (result.totals && result.totals.deliveryUnknown),
-    failed: result.failed || (result.totals && result.totals.failed),
+    scanned: getOutboxResultCount_(result, 'scanned'),
+    eligible: getOutboxResultCount_(result, 'eligible'),
+    sent: getOutboxResultCount_(result, 'sent'),
+    skipped: getOutboxResultCount_(result, 'skipped'),
+    superseded: getOutboxResultCount_(result, 'superseded'),
+    deliveryUnknown: getOutboxResultCount_(
+      result,
+      'deliveryUnknown'
+    ),
+    failed: getOutboxResultCount_(result, 'failed'),
     results: result.results,
     details: result.details,
     notifications: result.notifications,

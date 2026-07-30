@@ -36,6 +36,30 @@ function runV31WorkflowNotificationTests() {
   );
   results.push(
     runWorkflowCase_(
+      'full notification lifecycle preserves future stages',
+      testFullWorkflowNotificationLifecycle_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'supersession ignores stale batch snapshots',
+      testSupersessionUsesFreshRowOnly_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'attempt replacement is not reported Sent',
+      testWorkflowCommitMismatchResult_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'legacy trigger migration surface is installed',
+      testLegacyTriggerMigrationSurface_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
       'notification summary flags eligible Pending attention',
       testWorkflowNotificationNeedsAttention_
     )
@@ -287,8 +311,222 @@ function testStaleNotificationsAreSuperseded_() {
   };
 
   assertWorkflow_(
-    !isWorkflowNotificationEligible_(staleReady, 'ready'),
-    'Ready Pending after Meeting must be ineligible so it can be superseded'
+    getWorkflowNotificationDisposition_(staleReady, 'ready') ===
+      'past',
+    'Ready Pending after Meeting must be past'
+  );
+  assertWorkflow_(
+    getSupersedableWorkflowNotifications_(staleReady).some(
+      function (item) {
+        return item.key === 'ready';
+      }
+    ),
+    'Past Ready notification must be planned for supersession'
+  );
+}
+
+function workflowLifecycleCycle_(status) {
+  return {
+    Status: status,
+    'Ready Notification Status': V31.DELIVERY.PENDING,
+    'Meeting Manager Email Status': V31.DELIVERY.PENDING,
+    'Meeting Employee Email Status': V31.DELIVERY.PENDING,
+    'Manager Signature Email Status': V31.DELIVERY.PENDING,
+    'Employee Signature Email Status': V31.DELIVERY.PENDING,
+    'HR Signature Email Status': V31.DELIVERY.PENDING,
+    'MGR Manager Signature ID': '',
+    'SELF Manager Signature ID': '',
+    'MGR Employee Signature ID': '',
+    'SELF Employee Signature ID': '',
+    'MGR HR Signature ID': '',
+    'SELF HR Signature ID': '',
+  };
+}
+
+function testFullWorkflowNotificationLifecycle_() {
+  const keys = getWorkflowNotificationKeys_();
+  const open = workflowLifecycleCycle_(PR.CYCLE.OPEN);
+
+  keys.forEach(function (key) {
+    assertWorkflow_(
+      getWorkflowNotificationDisposition_(open, key) === 'future',
+      'All notifications must be future while Open: ' + key
+    );
+  });
+  assertWorkflow_(
+    getSupersedableWorkflowNotifications_(open).length === 0,
+    'Open must supersede nothing'
+  );
+
+  const ready = workflowLifecycleCycle_(PR.CYCLE.READY);
+  assertWorkflow_(
+    getWorkflowNotificationDisposition_(ready, 'ready') ===
+      'eligible',
+    'Ready notification must be eligible at Ready'
+  );
+  [
+    'meetingManager',
+    'meetingEmployee',
+    'signatureManager',
+    'signatureEmployee',
+    'signatureHr',
+  ].forEach(function (key) {
+    assertWorkflow_(
+      getWorkflowNotificationDisposition_(ready, key) === 'future',
+      'Later notification must remain future at Ready: ' + key
+    );
+  });
+  assertWorkflow_(
+    getSupersedableWorkflowNotifications_(ready).length === 0,
+    'Ready must not supersede future Meeting/Signature notifications'
+  );
+
+  const meeting = workflowLifecycleCycle_(PR.CYCLE.MEETING);
+  assertWorkflow_(
+    getWorkflowNotificationDisposition_(meeting, 'ready') ===
+      'past',
+    'Ready notification must be past in Meeting'
+  );
+  assertWorkflow_(
+    getWorkflowNotificationDisposition_(
+      meeting,
+      'meetingManager'
+    ) === 'eligible' &&
+      getWorkflowNotificationDisposition_(
+        meeting,
+        'meetingEmployee'
+      ) === 'eligible',
+    'Meeting notifications must be eligible in Meeting'
+  );
+  [
+    'signatureManager',
+    'signatureEmployee',
+    'signatureHr',
+  ].forEach(function (key) {
+    assertWorkflow_(
+      getWorkflowNotificationDisposition_(meeting, key) === 'future',
+      'Signature notification must remain future in Meeting: ' + key
+    );
+  });
+
+  const signatures = workflowLifecycleCycle_(
+    PR.CYCLE.SIGNATURES
+  );
+  assertWorkflow_(
+    getWorkflowNotificationDisposition_(
+      signatures,
+      'signatureManager'
+    ) === 'eligible' &&
+      getWorkflowNotificationDisposition_(
+        signatures,
+        'signatureEmployee'
+      ) === 'eligible',
+    'Participant requests must be eligible in Signatures'
+  );
+  assertWorkflow_(
+    getWorkflowNotificationDisposition_(
+      signatures,
+      'signatureHr'
+    ) === 'future',
+    'HR request remains future until both participants sign'
+  );
+
+  signatures['MGR Manager Signature ID'] = 'm';
+  signatures['SELF Manager Signature ID'] = 'm';
+  signatures['MGR Employee Signature ID'] = 'e';
+  signatures['SELF Employee Signature ID'] = 'e';
+  assertWorkflow_(
+    getWorkflowNotificationDisposition_(
+      signatures,
+      'signatureManager'
+    ) === 'past' &&
+      getWorkflowNotificationDisposition_(
+        signatures,
+        'signatureEmployee'
+      ) === 'past' &&
+      getWorkflowNotificationDisposition_(
+        signatures,
+        'signatureHr'
+      ) === 'eligible',
+    'Signed participant requests become past and HR becomes eligible'
+  );
+
+  const finalizing = workflowLifecycleCycle_(
+    PR.CYCLE.FINALIZING
+  );
+  keys.forEach(function (key) {
+    assertWorkflow_(
+      getWorkflowNotificationDisposition_(finalizing, key) ===
+        'past',
+      'All workflow notifications must be past in Finalizing: ' + key
+    );
+  });
+}
+
+function testSupersessionUsesFreshRowOnly_() {
+  assertWorkflow_(
+    markSupersededWorkflowNotifications_.length === 1,
+    'Supersession must accept only cycleId; stale snapshots are ignored'
+  );
+
+  const staleReadySnapshot = workflowLifecycleCycle_(
+    PR.CYCLE.READY
+  );
+  staleReadySnapshot['Meeting JSON'] = '{"stale":true}';
+  const freshMeetingRow = workflowLifecycleCycle_(
+    PR.CYCLE.MEETING
+  );
+  freshMeetingRow['Meeting JSON'] = '{"fresh":true}';
+
+  assertWorkflow_(
+    getSupersedableWorkflowNotifications_(
+      staleReadySnapshot
+    ).length === 0,
+    'Stale Ready snapshot would supersede nothing'
+  );
+  assertWorkflow_(
+    getSupersedableWorkflowNotifications_(freshMeetingRow).some(
+      function (item) {
+        return item.key === 'ready';
+      }
+    ),
+    'Fresh Meeting row drives the supersession plan'
+  );
+  assertWorkflow_(
+    freshMeetingRow['Meeting JSON'] === '{"fresh":true}',
+    'Planner must not modify fresh review data'
+  );
+}
+
+function testWorkflowCommitMismatchResult_() {
+  const authoritative = {
+    'Ready Notification Attempt ID': 'new-attempt',
+  };
+  const result = buildWorkflowCommitMismatchResult_(authoritative);
+
+  assertWorkflow_(
+    result.action === 'unknown' &&
+      result.reason === 'attempt-replaced-before-commit',
+    'Replaced attempt must not report Sent'
+  );
+  assertWorkflow_(
+    result.cycle === authoritative,
+    'Mismatch result must retain the authoritative fresh cycle'
+  );
+}
+
+function testLegacyTriggerMigrationSurface_() {
+  assertWorkflow_(
+    typeof migrateLegacyReviewAutomationTrigger_ === 'function',
+    'Legacy trigger migration helper must exist'
+  );
+  assertWorkflow_(
+    typeof runReviewAutomationTrigger_ === 'function',
+    'New private trigger handler must exist'
+  );
+  assertWorkflow_(
+    typeof runReviewAutomation === 'undefined',
+    'Removed legacy handler must not remain callable'
   );
 }
 
