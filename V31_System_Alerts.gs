@@ -121,6 +121,14 @@ function mergeSystemAlertDetails_(existing, incoming) {
   return merged;
 }
 
+/**
+ * Recurrence must not requeue an already-sent unresolved alert for email.
+ * Failed stays Failed so the existing drain plan can still retry notification.
+ */
+function nextUnresolvedSystemAlertStatusOnRecurrence_(status) {
+  return String(status || V31_SYSTEM_ALERTS.STATUS.PENDING);
+}
+
 function mergeSystemAlertOccurrence_(alert, incoming, occurredAt) {
   const merged = {};
   Object.keys(alert || {}).forEach(function (key) {
@@ -195,14 +203,9 @@ function upsertSystemAlert_(input) {
       alert['Last Error'] = String(
         value.lastError || alert['Last Error'] || ''
       );
-      if (
-        String(alert.Status || '') === V31_SYSTEM_ALERTS.STATUS.SENT ||
-        String(alert.Status || '') === V31_SYSTEM_ALERTS.STATUS.FAILED
-      ) {
-        alert.Status = V31_SYSTEM_ALERTS.STATUS.PENDING;
-        alert['Attempt ID'] = '';
-        alert['Started At'] = '';
-      }
+      alert.Status = nextUnresolvedSystemAlertStatusOnRecurrence_(
+        alert.Status
+      );
       writeObject_(V31_SYSTEM_ALERTS.SHEET, location.rowNumber, alert);
       SpreadsheetApp.flush();
       return alert;
@@ -587,8 +590,19 @@ function assertActiveHrDomain_() {
 function getSystemAlertsAdminData() {
   assertActiveHrDomain_();
   const alerts = listUnresolvedSystemAlerts_();
+  const notificationPending = alerts.filter(function (alert) {
+    const status = String(alert.Status || '');
+    return (
+      status === V31_SYSTEM_ALERTS.STATUS.PENDING ||
+      status === V31_SYSTEM_ALERTS.STATUS.FAILED ||
+      status === V31_SYSTEM_ALERTS.STATUS.UNKNOWN ||
+      status === V31_SYSTEM_ALERTS.STATUS.SENDING
+    );
+  }).length;
   return {
     unresolvedCount: alerts.length,
+    notificationPendingCount: notificationPending,
+    notificationSentCount: alerts.length - notificationPending,
     alerts: alerts.map(function (alert) {
       return {
         alertId: String(alert['Alert ID'] || ''),
@@ -601,6 +615,9 @@ function getSystemAlertsAdminData() {
         recipient: String(alert.Recipient || ''),
         subject: String(alert.Subject || ''),
         lastError: String(alert['Last Error'] || ''),
+        notificationSent:
+          String(alert.Status || '') ===
+          V31_SYSTEM_ALERTS.STATUS.SENT,
         details: parseSystemAlertDetails_(alert['Details JSON']),
       };
     }),
@@ -705,6 +722,20 @@ function applySystemAlertResolution_(alert, actor, reason, resolvedAt) {
   return resolved;
 }
 
+function canResolveSystemAlertStatus_(status, startedAt, staleMinutes) {
+  const value = String(status || '');
+  if (value === V31_SYSTEM_ALERTS.STATUS.RESOLVED) {
+    return { allowed: true, convertToUnknown: false };
+  }
+  if (value !== V31_SYSTEM_ALERTS.STATUS.SENDING) {
+    return { allowed: true, convertToUnknown: false };
+  }
+  if (isSystemAlertClaimStale_(startedAt, staleMinutes)) {
+    return { allowed: true, convertToUnknown: true };
+  }
+  return { allowed: false, convertToUnknown: false };
+}
+
 function resolveSystemAlertCore_(alertId, actor, reason) {
   return withLock_(function () {
     const location = findObject_(
@@ -715,6 +746,21 @@ function resolveSystemAlertCore_(alertId, actor, reason) {
     const alert = location.object;
     if (String(alert.Status || '') === V31_SYSTEM_ALERTS.STATUS.RESOLVED) {
       return alert;
+    }
+    const sendGate = canResolveSystemAlertStatus_(
+      alert.Status,
+      alert['Started At'],
+      getSystemAlertStaleMinutes_()
+    );
+    if (!sendGate.allowed) {
+      throw new Error(
+        'Cannot resolve a system alert while a fresh Sending claim is active.'
+      );
+    }
+    if (sendGate.convertToUnknown) {
+      alert.Status = V31_SYSTEM_ALERTS.STATUS.UNKNOWN;
+      alert['Last Error'] =
+        'Alert send claim went stale before manual resolution.';
     }
     const policy = validateSystemAlertResolutionPolicy_(
       alert.Severity,

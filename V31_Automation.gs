@@ -39,6 +39,7 @@ const V31 = Object.freeze({
     OUTBOX_STALE_MINUTES: '15',
     SYSTEM_ALERT_STALE_MINUTES: '15',
     FINAL_DISTRIBUTION_STALE_MINUTES: '15',
+    FINALIZATION_AUDIT_STALE_MINUTES: '15',
     PDF_GENERATION_STALE_MINUTES: '30',
     SYSTEM_ALERT_RECIPIENT: 'aitheras-hr@aitheras.com',
     SIGNATURE_RECOVERY_FOLDER_ID: '',
@@ -368,6 +369,7 @@ function ensureV31DataModel_() {
       'OUTBOX_STALE_MINUTES',
       'SYSTEM_ALERT_STALE_MINUTES',
       'FINAL_DISTRIBUTION_STALE_MINUTES',
+      'FINALIZATION_AUDIT_STALE_MINUTES',
       'PDF_GENERATION_STALE_MINUTES',
       'SYSTEM_ALERT_RECIPIENT',
     ].indexOf(key) >= 0;
@@ -2758,6 +2760,7 @@ function buildProductionReadinessReport_(
     'OUTBOX_STALE_MINUTES',
     'SYSTEM_ALERT_STALE_MINUTES',
     'FINAL_DISTRIBUTION_STALE_MINUTES',
+    'FINALIZATION_AUDIT_STALE_MINUTES',
     'PDF_GENERATION_STALE_MINUTES',
     'SYSTEM_ALERT_RECIPIENT',
     'SIGNATURE_RECOVERY_FOLDER_ID',
@@ -2843,6 +2846,10 @@ function buildProductionReadinessReport_(
     [
       'FINAL_DISTRIBUTION_STALE_MINUTES',
       settings.FINAL_DISTRIBUTION_STALE_MINUTES,
+    ],
+    [
+      'FINALIZATION_AUDIT_STALE_MINUTES',
+      settings.FINALIZATION_AUDIT_STALE_MINUTES,
     ],
     [
       'PDF_GENERATION_STALE_MINUTES',
@@ -6437,6 +6444,9 @@ function getWorkflowNotificationRetryPlan(cycleId, componentKey) {
       ? getWorkflowNotificationRecipients_(cycle, component.key)
       : [],
     status: status,
+    attemptId: String(cycle[component.attemptField] || ''),
+    canMarkConfirmed:
+      eligible && status === V31.DELIVERY.UNKNOWN,
   };
 }
 
@@ -6711,6 +6721,172 @@ function retryWorkflowNotification(
     notifications: getWorkflowNotificationSummary_(
       findCycle_(cycleId).object
     ),
+  };
+}
+
+/**
+ * HR-only: mark a Delivery Unknown workflow notification Sent with evidence.
+ * Never sends email.
+ */
+function markWorkflowNotificationConfirmed(
+  cycleId,
+  componentKey,
+  payload
+) {
+  const actor = assertActiveHrDomain_();
+  const input = payload || {};
+  const evidenceNote = String(input.evidenceNote || '').trim();
+  if (
+    input.confirmed !== true ||
+    String(input.confirmationToken || '') !==
+      V31_FINALIZATION.WORKFLOW_CONFIRM_TOKEN ||
+    !evidenceNote
+  ) {
+    throw new Error(
+      'Confirmation, exact token, and an evidence note are required.'
+    );
+  }
+  const component = getWorkflowNotificationComponent_(
+    String(componentKey || '')
+  );
+  const before = findCycle_(cycleId).object;
+  const beforeRecipients = getWorkflowNotificationRecipients_(
+    before,
+    component.key
+  );
+  if (
+    String(before[component.statusField] || '') !==
+      V31.DELIVERY.UNKNOWN ||
+    !isWorkflowNotificationEligible_(before, component.key) ||
+    String(input.originalAttemptId || '') !==
+      String(before[component.attemptField] || '') ||
+    JSON.stringify(input.recipients || []) !==
+      JSON.stringify(beforeRecipients)
+  ) {
+    throw new Error(
+      'Workflow notification status, attempt, eligibility, or recipients changed. Refresh and confirm again.'
+    );
+  }
+  const eventId = getWorkflowNotificationConfirmEventId_(
+    cycleId,
+    component.key
+  );
+  const result = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    if (
+      String(cycle[component.statusField] || '') !==
+        V31.DELIVERY.UNKNOWN ||
+      String(cycle[component.attemptField] || '') !==
+        String(input.originalAttemptId || '')
+    ) {
+      throw new Error(
+        'Only the confirmed Delivery Unknown attempt may be marked Sent.'
+      );
+    }
+    const recipients = getWorkflowNotificationRecipients_(
+      cycle,
+      component.key
+    );
+    if (
+      JSON.stringify(recipients) !==
+      JSON.stringify(beforeRecipients)
+    ) {
+      throw new Error(
+        'Workflow notification recipients changed before confirmation commit.'
+      );
+    }
+    const priorAttempt = String(cycle[component.attemptField] || '');
+    const confirmedAt = new Date();
+    const details = buildWorkflowNotificationConfirmationDetails_(
+      actor,
+      confirmedAt,
+      evidenceNote,
+      priorAttempt,
+      recipients,
+      component.key
+    );
+    auditIdempotentUnlocked_(
+      cycleId,
+      'Workflow notification manually confirmed',
+      actor,
+      V31.DELIVERY.UNKNOWN,
+      V31.DELIVERY.SENT,
+      JSON.stringify(details),
+      eventId
+    );
+    cycle[component.statusField] = V31.DELIVERY.SENT;
+    cycle[component.sentAtField] =
+      cycle[component.sentAtField] || confirmedAt;
+    if (component.errorField) {
+      cycle[component.errorField] = '';
+    }
+    cycle['Updated At'] = confirmedAt;
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+    return {
+      recipients: recipients,
+      attemptId: priorAttempt,
+      details: details,
+    };
+  });
+  safelyAutoResolveSystemAlertByKey_(
+    buildSystemAlertKey_(
+      cycleId,
+      'Workflow Notification',
+      component.key + ':delivery-unknown'
+    ),
+    function () {
+      const fresh = findCycle_(cycleId).object;
+      return (
+        String(fresh[component.statusField] || '') ===
+          V31.DELIVERY.SENT &&
+        !!fresh[component.sentAtField]
+      );
+    }
+  );
+  return {
+    ok: true,
+    eventId: eventId,
+    componentKey: component.key,
+    recipients: result.recipients,
+    attemptId: result.attemptId,
+    message:
+      component.label +
+      ' marked confirmed without sending email.',
+    notifications: getWorkflowNotificationSummary_(
+      findCycle_(cycleId).object
+    ),
+  };
+}
+
+function getWorkflowNotificationConfirmEventId_(cycleId, componentKey) {
+  return (
+    V31_FINALIZATION.WORKFLOW_CONFIRM_EVENT_PREFIX +
+    String(cycleId) +
+    ':' +
+    String(componentKey)
+  );
+}
+
+function buildWorkflowNotificationConfirmationDetails_(
+  confirmedBy,
+  confirmedAt,
+  evidenceNote,
+  originalAttemptId,
+  recipients,
+  componentKey
+) {
+  return {
+    schemaVersion: 1,
+    resolution: 'manual-confirmation',
+    componentKey: String(componentKey || ''),
+    confirmedBy: String(confirmedBy || ''),
+    confirmedAt: new Date(confirmedAt).toISOString(),
+    priorStatus: V31.DELIVERY.UNKNOWN,
+    evidenceNote: String(evidenceNote || ''),
+    originalAttemptId: String(originalAttemptId || ''),
+    recipients: (recipients || []).slice(),
   };
 }
 

@@ -5,10 +5,13 @@
 const V31_FINALIZATION = Object.freeze({
   PDF_STALE_DEFAULT_MINUTES: 30,
   DISTRIBUTION_STALE_DEFAULT_MINUTES: 15,
+  AUDIT_STALE_DEFAULT_MINUTES: 15,
   FINAL_DISTRIBUTION_RESEND_TOKEN: 'RESEND_FINAL_DISTRIBUTION_UNKNOWN',
   FINAL_DISTRIBUTION_CONFIRM_TOKEN: 'MARK_FINAL_DISTRIBUTION_CONFIRMED',
+  WORKFLOW_CONFIRM_TOKEN: 'MARK_WORKFLOW_NOTIFICATION_CONFIRMED',
   FINALIZATION_EVENT_PREFIX: 'FINALIZATION_COMPLETE:',
   DISTRIBUTION_CONFIRM_EVENT_PREFIX: 'FINAL_DISTRIBUTION_CONFIRMED:',
+  WORKFLOW_CONFIRM_EVENT_PREFIX: 'WORKFLOW_NOTIFICATION_CONFIRMED:',
 });
 
 function getPositiveSettingMinutes_(key, fallback) {
@@ -304,6 +307,13 @@ function getFinalDistributionStaleMinutes_() {
   );
 }
 
+function getFinalizationAuditStaleMinutes_() {
+  return getPositiveSettingMinutes_(
+    'FINALIZATION_AUDIT_STALE_MINUTES',
+    V31_FINALIZATION.AUDIT_STALE_DEFAULT_MINUTES
+  );
+}
+
 function getFinalPdfFields_(documentType) {
   if (documentType === PR.TYPE.MANAGER) {
     return {
@@ -362,6 +372,9 @@ function assertValidReviewPdfFile_(
   folderId
 ) {
   if (!file) throw new Error('Drive file was not found.');
+  if (typeof file.isTrashed === 'function' && file.isTrashed()) {
+    throw new Error('Reconciled PDF must not be trashed.');
+  }
   const mime = String(file.getMimeType() || '');
   if (mime !== MimeType.PDF && mime !== 'application/pdf') {
     throw new Error('Reconciled file must be application/pdf.');
@@ -375,6 +388,57 @@ function assertValidReviewPdfFile_(
   if (names.indexOf(String(file.getName() || '')) < 0) {
     throw new Error('Reconciled PDF name is not recognized for this cycle.');
   }
+}
+
+/** Pure helper: recovered PDF may commit only when expected snapshot still matches. */
+function decideRecoveredPdfCommit_(
+  expected,
+  currentStatus,
+  currentAttemptId,
+  currentFileId
+) {
+  const prior = expected || {};
+  if (
+    String(currentStatus || '') !== String(prior.expectedStatus || '') ||
+    String(currentAttemptId || '') !==
+      String(prior.expectedAttemptId || '') ||
+    String(currentFileId || '') !== String(prior.expectedFileId || '')
+  ) {
+    return 'state-changed';
+  }
+  return 'commit';
+}
+
+/**
+ * Pure helper: Complete is valid only when the deterministic audit row exists.
+ * A Complete cycle field without the row is treated as recoverable inconsistency.
+ */
+function classifyFinalizationAuditConsistency_(status, auditExists) {
+  if (auditExists) return 'complete';
+  if (String(status || '') === 'Complete') return 'missing-event';
+  return 'needs-write';
+}
+
+function validateAuthoritativeFinalPdfId_(
+  cycleId,
+  documentType,
+  fileId
+) {
+  const settings = getSettings_();
+  const folderId = String(settings.REVIEW_FOLDER_ID || '');
+  const id = String(fileId || '');
+  if (!id) {
+    throw new Error(
+      String(documentType) + ' PDF ID is required before final distribution.'
+    );
+  }
+  assertValidReviewPdfFile_(
+    DriveApp.getFileById(id),
+    cycleId,
+    documentType,
+    folderId
+  );
+  return id;
 }
 
 function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
@@ -522,12 +586,28 @@ function ensureFinalPdfComponent_(
       );
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
-      return { action: 'recover', stale: true };
+      return {
+        action: 'recover',
+        stale: true,
+        expectedStatus: V31.DELIVERY.UNKNOWN,
+        expectedAttemptId: String(cycle[fields.attemptField] || ''),
+        expectedFileId: String(cycle[fields.idField] || ''),
+      };
     }
     if (status === V31.DELIVERY.UNKNOWN) {
-      return { action: 'recover' };
+      return {
+        action: 'recover',
+        expectedStatus: V31.DELIVERY.UNKNOWN,
+        expectedAttemptId: String(cycle[fields.attemptField] || ''),
+        expectedFileId: String(cycle[fields.idField] || ''),
+      };
     }
-    return { action: 'recover-or-claim' };
+    return {
+      action: 'recover-or-claim',
+      expectedStatus: status,
+      expectedAttemptId: String(cycle[fields.attemptField] || ''),
+      expectedFileId: String(cycle[fields.idField] || ''),
+    };
   });
 
   if (claim.action === 'validate-existing') {
@@ -599,6 +679,16 @@ function ensureFinalPdfComponent_(
     withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
+      if (
+        decideRecoveredPdfCommit_(
+          claim,
+          cycle[fields.statusField],
+          cycle[fields.attemptField],
+          cycle[fields.idField]
+        ) === 'state-changed'
+      ) {
+        return;
+      }
       cycle[fields.statusField] = V31.DELIVERY.UNKNOWN;
       cycle[fields.errorField] =
         'Deterministic PDF recovery search failed: ' +
@@ -624,6 +714,16 @@ function ensureFinalPdfComponent_(
     withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
+      if (
+        decideRecoveredPdfCommit_(
+          claim,
+          cycle[fields.statusField],
+          cycle[fields.attemptField],
+          cycle[fields.idField]
+        ) === 'state-changed'
+      ) {
+        return;
+      }
       cycle[fields.statusField] = V31.DELIVERY.UNKNOWN;
       cycle[fields.errorField] =
         'Multiple deterministic PDF artifacts were found. HR must select one.';
@@ -647,9 +747,18 @@ function ensureFinalPdfComponent_(
     );
   }
   if (matches.length === 1) {
-    withLock_(function () {
+    const recoveryCommit = withLock_(function () {
       const location = findCycle_(cycleId);
       const cycle = location.object;
+      const decision = decideRecoveredPdfCommit_(
+        claim,
+        cycle[fields.statusField],
+        cycle[fields.attemptField],
+        cycle[fields.idField]
+      );
+      if (decision === 'state-changed') {
+        return { action: 'state-changed' };
+      }
       cycle[fields.idField] = matches[0].id;
       cycle[fields.statusField] = V31.DELIVERY.SENT;
       cycle[fields.completedField] = new Date();
@@ -664,7 +773,14 @@ function ensureFinalPdfComponent_(
       );
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
+      return { action: 'committed' };
     });
+    if (recoveryCommit.action === 'state-changed') {
+      throw new Error(
+        fields.label +
+          ' PDF state changed during recovery. Refresh and retry.'
+      );
+    }
     safelyAutoResolveSystemAlertByKey_(
       buildSystemAlertKey_(
         cycleId,
@@ -863,6 +979,65 @@ function classifyFinalDistributionCommit_(sendError, committed) {
 function ensureFinalDistribution_(cycleId, options) {
   const opts = options || {};
   const settings = getSettings_();
+  const preflight = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    return {
+      managerPdfId: String(cycle['Manager Review PDF ID'] || ''),
+      selfPdfId: String(cycle['Self Evaluation PDF ID'] || ''),
+      status: String(
+        cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
+      ),
+    };
+  });
+  if (preflight.status !== V31.DELIVERY.SENT) {
+    try {
+      validateAuthoritativeFinalPdfId_(
+        cycleId,
+        PR.TYPE.MANAGER,
+        preflight.managerPdfId
+      );
+      validateAuthoritativeFinalPdfId_(
+        cycleId,
+        PR.TYPE.SELF,
+        preflight.selfPdfId
+      );
+    } catch (pdfError) {
+      withLock_(function () {
+        const location = findCycle_(cycleId);
+        const cycle = location.object;
+        if (
+          String(cycle['Final Distribution Status'] || '') ===
+          V31.DELIVERY.SENT
+        ) {
+          return;
+        }
+        cycle['Final Distribution Status'] = V31.DELIVERY.FAILED;
+        cycle['Final Distribution Last Error'] = String(
+          pdfError.message || pdfError
+        );
+        cycle['Final Distribution Recovery Details JSON'] =
+          buildFinalDistributionRecoveryDetails_(
+            'pdf-validation-failed',
+            cycle['Final Distribution Attempt ID'],
+            [],
+            pdfError,
+            {
+              managerPdfId: preflight.managerPdfId,
+              selfPdfId: preflight.selfPdfId,
+            }
+          );
+        writeCycle_(location.rowNumber, cycle);
+        SpreadsheetApp.flush();
+      });
+      recordFinalDistributionUnknownAlert_(cycleId, {
+        error: String(pdfError.message || pdfError),
+        managerPdfId: preflight.managerPdfId,
+        selfPdfId: preflight.selfPdfId,
+      });
+      throw pdfError;
+    }
+  }
   const claim = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
@@ -943,10 +1118,16 @@ function ensureFinalDistribution_(cycleId, options) {
       };
     }
     if (
+      String(cycle['Manager Review PDF ID'] || '') !==
+        String(preflight.managerPdfId) ||
+      String(cycle['Self Evaluation PDF ID'] || '') !==
+        String(preflight.selfPdfId) ||
       !cycle['Manager Review PDF ID'] ||
       !cycle['Self Evaluation PDF ID']
     ) {
-      throw new Error('Both PDF IDs are required before final distribution.');
+      throw new Error(
+        'Authoritative PDF IDs changed after validation. Refresh and retry final distribution.'
+      );
     }
     const attemptId = Utilities.getUuid();
     cycle['Final Distribution Status'] = V31.DELIVERY.SENDING;
@@ -960,6 +1141,8 @@ function ensureFinalDistribution_(cycleId, options) {
       cycle: cycle,
       recipients: recipients,
       attemptId: attemptId,
+      managerPdfId: String(cycle['Manager Review PDF ID']),
+      selfPdfId: String(cycle['Self Evaluation PDF ID']),
     };
   });
   if (claim.action === 'skip') return;
@@ -974,6 +1157,61 @@ function ensureFinalDistribution_(cycleId, options) {
     throw new Error(
       'Final distribution is Delivery Unknown. Automatic resend is prohibited.'
     );
+  }
+
+  let preSendValidationError = null;
+  try {
+    validateAuthoritativeFinalPdfId_(
+      cycleId,
+      PR.TYPE.MANAGER,
+      claim.managerPdfId
+    );
+    validateAuthoritativeFinalPdfId_(
+      cycleId,
+      PR.TYPE.SELF,
+      claim.selfPdfId
+    );
+  } catch (pdfError) {
+    preSendValidationError = pdfError;
+  }
+  if (preSendValidationError) {
+    withLock_(function () {
+      const location = findCycle_(cycleId);
+      const cycle = location.object;
+      if (
+        String(cycle['Final Distribution Attempt ID'] || '') !==
+        String(claim.attemptId)
+      ) {
+        return;
+      }
+      cycle['Final Distribution Status'] = V31.DELIVERY.FAILED;
+      cycle['Final Distribution Last Error'] = String(
+        preSendValidationError.message || preSendValidationError
+      );
+      cycle['Final Distribution Recovery Details JSON'] =
+        buildFinalDistributionRecoveryDetails_(
+          'pre-send-pdf-validation-failed',
+          claim.attemptId,
+          claim.recipients,
+          preSendValidationError,
+          {
+            managerPdfId: claim.managerPdfId,
+            selfPdfId: claim.selfPdfId,
+          }
+        );
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    });
+    recordFinalDistributionUnknownAlert_(cycleId, {
+      recipients: claim.recipients,
+      attemptId: claim.attemptId,
+      error: String(
+        preSendValidationError.message || preSendValidationError
+      ),
+      managerPdfId: claim.managerPdfId,
+      selfPdfId: claim.selfPdfId,
+    });
+    throw preSendValidationError;
   }
 
   let sendError = null;
@@ -1009,6 +1247,11 @@ function ensureFinalDistribution_(cycleId, options) {
       recipientError ||
       JSON.stringify(currentRecipients) !==
         JSON.stringify(claim.recipients);
+    const pdfIdsChanged =
+      String(cycle['Manager Review PDF ID'] || '') !==
+        String(claim.managerPdfId) ||
+      String(cycle['Self Evaluation PDF ID'] || '') !==
+        String(claim.selfPdfId);
     if (sendError) {
       cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
       cycle['Final Distribution Last Error'] = String(
@@ -1021,17 +1264,30 @@ function ensureFinalDistribution_(cycleId, options) {
           claim.recipients,
           sendError
         );
-    } else if (recipientsChanged) {
+    } else if (recipientsChanged || pdfIdsChanged) {
       cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
-      cycle['Final Distribution Last Error'] =
-        'Final packet was sent to the claimed recipients, but the authoritative cycle recipients changed before commit.';
+      cycle['Final Distribution Last Error'] = pdfIdsChanged
+        ? 'Final packet may have been sent, but authoritative PDF IDs changed before commit.'
+        : 'Final packet was sent to the claimed recipients, but the authoritative cycle recipients changed before commit.';
       cycle['Final Distribution Recovery Details JSON'] =
         buildFinalDistributionRecoveryDetails_(
-          'recipient-change-after-send',
+          pdfIdsChanged
+            ? 'pdf-id-change-after-send'
+            : 'recipient-change-after-send',
           claim.attemptId,
           claim.recipients,
           recipientError || cycle['Final Distribution Last Error'],
-          { currentRecipients: currentRecipients }
+          {
+            currentRecipients: currentRecipients,
+            claimedManagerPdfId: claim.managerPdfId,
+            claimedSelfPdfId: claim.selfPdfId,
+            currentManagerPdfId: String(
+              cycle['Manager Review PDF ID'] || ''
+            ),
+            currentSelfPdfId: String(
+              cycle['Self Evaluation PDF ID'] || ''
+            ),
+          }
         );
     } else {
       cycle['Final Distribution Status'] = V31.DELIVERY.SENT;
@@ -1476,7 +1732,12 @@ function ensureFinalizationAudit_(cycleId) {
   const claim = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
-    if (findAuditByEventId_(eventId)) {
+    const existingAudit = findAuditByEventId_(eventId);
+    const consistency = classifyFinalizationAuditConsistency_(
+      cycle['Finalization Audit Status'],
+      !!existingAudit
+    );
+    if (consistency === 'complete') {
       cycle['Finalization Audit Status'] = 'Complete';
       cycle['Finalization Audit Completed At'] =
         cycle['Finalization Audit Completed At'] || new Date();
@@ -1491,12 +1752,17 @@ function ensureFinalizationAudit_(cycleId) {
     const status = String(
       cycle['Finalization Audit Status'] || 'Pending'
     );
-    if (status === 'Complete') return { action: 'complete' };
-    if (status === 'Writing') {
+    if (consistency === 'missing-event') {
+      cycle['Finalization Audit Status'] = 'Delivery Unknown';
+      cycle['Finalization Audit Last Error'] =
+        'Cycle reported a complete audit, but the deterministic audit event is missing.';
+      writeCycle_(location.rowNumber, cycle);
+      SpreadsheetApp.flush();
+    } else if (status === 'Writing') {
       if (
         !isClaimStaleMinutes_(
           cycle['Finalization Audit Started At'],
-          getFinalDistributionStaleMinutes_()
+          getFinalizationAuditStaleMinutes_()
         )
       ) {
         return { action: 'in-progress' };

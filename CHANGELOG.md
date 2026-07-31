@@ -1,5 +1,25 @@
 # V3.1 Changelog
 
+## Delivery C correction — recovery race and audit gaps
+
+- Finalization audit never treats cycle `Complete` as done unless the
+  deterministic `FINALIZATION_COMPLETE:<cycleId>` row exists; missing-event
+  inconsistency downgrades to Delivery Unknown and recreates the write.
+- Deterministic PDF recovery commits only when expected status, attempt ID, and
+  file ID still match, so newer attempts and HR reconciliations are preserved.
+- Final distribution revalidates both authoritative PDFs immediately before
+  claim and again before send, binds those IDs in the claim, and verifies them
+  before committing Sent.
+- Unresolved `Sent` system alerts keep `Sent` on recurrence (occurrence count
+  and details still update) so automatic drains do not re-email the same
+  incident. Fresh `Sending` cannot be manually resolved until stale.
+- Added `FINALIZATION_AUDIT_STALE_MINUTES=15` and workflow
+  `markWorkflowNotificationConfirmed()` with exact token, attempt, recipients,
+  evidence note, deterministic audit Event ID, and no email send.
+- HR UI distinguishes unresolved incidents from alert-notification delivery
+  state and exposes workflow Mark Confirmed. Pure regression coverage added;
+  Workspace evidence remains `Requires Daniel Sandbox`.
+
 ## Delivery C commit 2 — crash-safe Calendar and finalization
 
 - Added independent durable Calendar configuration claims and recovery state

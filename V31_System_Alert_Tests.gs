@@ -19,6 +19,8 @@ function runV31SystemAlertTests_() {
     ['recovery token must match exactly', testSystemAlertExactTokenGate_],
     ['recipient-specific workflow plan is isolated', testWorkflowRecipientIsolation_],
     ['1000-cycle in-memory planner selects only active unresolved', testSystemAlertPlannerBenchmark_],
+    ['Sent recurrence does not requeue email', testSentAlertRecurrencePreservesStatus_],
+    ['fresh Sending resolution is rejected', testFreshSendingAlertResolutionBlocked_],
   ];
   const results = cases.map(function (entry) {
     try {
@@ -271,4 +273,55 @@ function testSystemAlertPlannerBenchmark_() {
   assertSystemAlertTest_(plan.length === 10, 'Planner did not isolate active unresolved cycles.');
   assertSystemAlertTest_(plan[0] === 'cycle-0' && plan[9] === 'cycle-9', 'Planner selected incorrect cycles.');
   assertSystemAlertTest_(elapsed < 1000, 'Pure 1000-row planner exceeded one second: ' + elapsed + 'ms.');
+}
+
+function testSentAlertRecurrencePreservesStatus_() {
+  assertSystemAlertTest_(
+    nextUnresolvedSystemAlertStatusOnRecurrence_(
+      V31_SYSTEM_ALERTS.STATUS.SENT
+    ) === V31_SYSTEM_ALERTS.STATUS.SENT,
+    'Sent unresolved alerts must stay Sent on recurrence.'
+  );
+  assertSystemAlertTest_(
+    nextUnresolvedSystemAlertStatusOnRecurrence_(
+      V31_SYSTEM_ALERTS.STATUS.FAILED
+    ) === V31_SYSTEM_ALERTS.STATUS.FAILED,
+    'Failed alerts must remain Failed for explicit drain retry.'
+  );
+  assertSystemAlertTest_(
+    nextUnresolvedSystemAlertStatusOnRecurrence_(
+      V31_SYSTEM_ALERTS.STATUS.PENDING
+    ) === V31_SYSTEM_ALERTS.STATUS.PENDING,
+    'Pending alerts must remain Pending.'
+  );
+}
+
+function testFreshSendingAlertResolutionBlocked_() {
+  const fresh = canResolveSystemAlertStatus_(
+    V31_SYSTEM_ALERTS.STATUS.SENDING,
+    new Date(),
+    15
+  );
+  assertSystemAlertTest_(
+    !fresh.allowed && !fresh.convertToUnknown,
+    'Fresh Sending must reject manual resolution.'
+  );
+  const stale = canResolveSystemAlertStatus_(
+    V31_SYSTEM_ALERTS.STATUS.SENDING,
+    new Date(Date.now() - 16 * 60000),
+    15
+  );
+  assertSystemAlertTest_(
+    stale.allowed && stale.convertToUnknown,
+    'Stale Sending must convert to Delivery Unknown before resolve.'
+  );
+  const pending = canResolveSystemAlertStatus_(
+    V31_SYSTEM_ALERTS.STATUS.PENDING,
+    '',
+    15
+  );
+  assertSystemAlertTest_(
+    pending.allowed && !pending.convertToUnknown,
+    'Pending alerts must remain resolvable.'
+  );
 }

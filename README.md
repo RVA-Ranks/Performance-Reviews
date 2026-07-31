@@ -7,6 +7,16 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery C correction — recovery race and audit gaps
+
+Finalization audit `Complete` now requires the deterministic audit row, not
+only the cycle field. PDF recovery refuses to overwrite a newer attempt or HR
+reconciliation. Final distribution revalidates both PDFs immediately before
+send and binds those IDs in the claim. Unresolved Sent system alerts stay Sent
+on recurrence (no automatic re-email). Fresh Sending alerts cannot be resolved
+until stale. Workflow Delivery Unknown supports Mark Confirmed with evidence
+and no email. Added `FINALIZATION_AUDIT_STALE_MINUTES=15`.
+
 ## Delivery C commit 2 finalization durability
 
 Calendar creation and configuration now persist independent attempts. PDF

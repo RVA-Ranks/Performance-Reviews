@@ -2,6 +2,30 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery C correction gate — recovery races
+
+Run privately in Preview:
+
+```javascript
+runV31IdempotencyTests_();
+runV31FinalizationTests_();
+runV31WorkflowNotificationTests_();
+runV31SystemAlertTests_();
+runV31ProductionReadinessTests_();
+```
+
+Pure coverage now includes Complete-without-audit-row recovery classification,
+PDF expected-state race refusal, Sent alert recurrence without requeue,
+fresh Sending resolve rejection, dedicated finalization-audit stale minutes,
+and workflow Mark Confirmed evidence/event ID shape.
+
+**Requires Daniel Sandbox:** recreate Complete cycle fields with a deleted
+audit row and retry finalization; concurrent PDF recovery vs newer attempt or
+HR reconcile; trash/move/wrong-cycle PDF immediately before distribution;
+Sent alert recurrence drain with no second email; resolve during fresh
+Sending; workflow Mark Confirmed end-to-end with no MailApp send. Capture
+cycle IDs, attempt/event/file IDs, alert occurrence counts, and cleanup.
+
 ## Delivery C commit 2 gate — Calendar and finalization
 
 Run `runV31FinalizationTests_()`, `runV31IdempotencyTests_()`, and

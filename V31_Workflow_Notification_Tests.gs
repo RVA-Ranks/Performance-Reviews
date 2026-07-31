@@ -120,6 +120,12 @@ function runV31WorkflowNotificationTests_() {
   );
   results.push(
     runWorkflowCase_(
+      'workflow Mark Confirmed evidence and event ID are exact',
+      testWorkflowNotificationMarkConfirmedShape_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
       'outbox stale setting defaults to 15 minutes',
       testOutboxStaleSetting_
     )
@@ -917,5 +923,36 @@ function testWorkflowRetryRecipientIsolation_() {
     JSON.stringify(plan.components[0].recipients) ===
       JSON.stringify(['employee@aitheras.com']),
     'Retry plan selected unrelated recipients'
+  );
+}
+
+function testWorkflowNotificationMarkConfirmedShape_() {
+  const details = buildWorkflowNotificationConfirmationDetails_(
+    'hr@aitheras.com',
+    new Date('2026-07-31T12:00:00.000Z'),
+    'Verified Gmail sent folder.',
+    'attempt-ready-1',
+    ['manager@aitheras.com'],
+    'ready'
+  );
+  assertWorkflow_(
+    details.schemaVersion === 1 &&
+      details.resolution === 'manual-confirmation' &&
+      details.componentKey === 'ready' &&
+      details.confirmedBy === 'hr@aitheras.com' &&
+      details.priorStatus === V31.DELIVERY.UNKNOWN &&
+      details.evidenceNote === 'Verified Gmail sent folder.' &&
+      details.originalAttemptId === 'attempt-ready-1',
+    'Workflow Mark Confirmed evidence fields must remain exact'
+  );
+  assertWorkflow_(
+    getWorkflowNotificationConfirmEventId_('C-1', 'ready') ===
+      'WORKFLOW_NOTIFICATION_CONFIRMED:C-1:ready',
+    'Workflow confirmation audit event ID must be deterministic'
+  );
+  assertWorkflow_(
+    V31_FINALIZATION.WORKFLOW_CONFIRM_TOKEN ===
+      'MARK_WORKFLOW_NOTIFICATION_CONFIRMED',
+    'Workflow confirmation token must remain exact'
   );
 }

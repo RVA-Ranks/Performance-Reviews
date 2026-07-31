@@ -1206,6 +1206,8 @@ function testWorkflowAndSignatureHeadersPresent_() {
   });
   assertIdem_(
     V31.SETTINGS_DEFAULTS.FINAL_DISTRIBUTION_STALE_MINUTES === '15' &&
+      V31.SETTINGS_DEFAULTS.FINALIZATION_AUDIT_STALE_MINUTES ===
+        '15' &&
       V31.SETTINGS_DEFAULTS.PDF_GENERATION_STALE_MINUTES === '30',
     'Delivery C stale settings must retain independent defaults'
   );

@@ -120,6 +120,24 @@ function runV31FinalizationTests_() {
       testAuditEventIdMigrationPlan_
     )
   );
+  results.push(
+    runFinalCase_(
+      'Complete audit status without row is recoverable',
+      testFinalizationAuditMissingEventConsistency_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'PDF recovery refuses newer attempt overwrite',
+      testRecoveredPdfExpectedStateGuard_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'finalization audit has a dedicated stale window',
+      testFinalizationAuditStaleWindow_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -580,5 +598,79 @@ function testFinalDistributionAttemptIdHeader_() {
       'Final Distribution Attempt ID'
     ) >= 0,
     'Final Distribution Attempt ID must exist for commit verification'
+  );
+}
+
+function testFinalizationAuditMissingEventConsistency_() {
+  assertFinal_(
+    classifyFinalizationAuditConsistency_('Complete', true) ===
+      'complete',
+    'Existing audit row must classify as complete'
+  );
+  assertFinal_(
+    classifyFinalizationAuditConsistency_('Complete', false) ===
+      'missing-event',
+    'Complete without row must be recoverable missing-event'
+  );
+  assertFinal_(
+    classifyFinalizationAuditConsistency_('Pending', false) ===
+      'needs-write',
+    'Pending without row must need a write'
+  );
+  assertFinal_(
+    classifyFinalizationAuditConsistency_('Writing', false) !==
+      'complete',
+    'Writing without row must never short-circuit as complete'
+  );
+}
+
+function testRecoveredPdfExpectedStateGuard_() {
+  const expected = {
+    expectedStatus: V31.DELIVERY.UNKNOWN,
+    expectedAttemptId: 'attempt-old',
+    expectedFileId: '',
+  };
+  assertFinal_(
+    decideRecoveredPdfCommit_(
+      expected,
+      V31.DELIVERY.UNKNOWN,
+      'attempt-old',
+      ''
+    ) === 'commit',
+    'Matching snapshot must allow recovered PDF commit'
+  );
+  assertFinal_(
+    decideRecoveredPdfCommit_(
+      expected,
+      V31.DELIVERY.SENDING,
+      'attempt-new',
+      ''
+    ) === 'state-changed',
+    'Newer PDF attempt must block recovered overwrite'
+  );
+  assertFinal_(
+    decideRecoveredPdfCommit_(
+      expected,
+      V31.DELIVERY.SENT,
+      '',
+      'file-hr'
+    ) === 'state-changed',
+    'HR reconciliation must block recovered overwrite'
+  );
+}
+
+function testFinalizationAuditStaleWindow_() {
+  assertFinal_(
+    V31.SETTINGS_DEFAULTS.FINALIZATION_AUDIT_STALE_MINUTES === '15',
+    'Finalization audit stale default must be 15 minutes'
+  );
+  assertFinal_(
+    V31_FINALIZATION.AUDIT_STALE_DEFAULT_MINUTES === 15,
+    'Audit stale constant must remain independent of PDF generation'
+  );
+  const now = Date.now();
+  assertFinal_(
+    isClaimStaleMinutes_(new Date(now - 16 * 60000), 15, now),
+    'Finalization audit must be stale after 15 minutes'
   );
 }

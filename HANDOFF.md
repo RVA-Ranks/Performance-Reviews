@@ -5,6 +5,18 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery C correction — recovery race and audit gaps
+
+Finalization audit never trusts cycle `Complete` alone: the deterministic
+`FINALIZATION_COMPLETE:<cycleId>` row must exist, or the cycle is downgraded
+and the write is reclaimed. PDF recovery snapshots expected status/attempt/file
+ID before Drive search and aborts on state change. Final distribution
+revalidates both restricted PDFs immediately before send. Unresolved Sent
+system alerts stay Sent on recurrence. Fresh Sending cannot be manually
+resolved. Workflow notifications support Mark Confirmed
+(`MARK_WORKFLOW_NOTIFICATION_CONFIRMED`) with evidence and no email.
+`FINALIZATION_AUDIT_STALE_MINUTES` defaults to 15. Stop before Delivery D.
+
 ## Delivery C commit 2 — crash-safe finalization
 
 Calendar event creation remains independently durable from tag/reminder

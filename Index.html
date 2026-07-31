@@ -1634,18 +1634,27 @@ function renderSystemAlertsPanel(data) {
   const rows = alerts.length
     ? alerts.map(function(alert) {
         const sendable = alert.status === 'Pending' || alert.status === 'Failed' || alert.status === 'Delivery Unknown';
+        const notificationLabel = alert.notificationSent
+          ? 'Notification sent'
+          : (alert.status === 'Sending'
+            ? 'Notification sending'
+            : 'Notification not sent');
         return '<tr><td>' +
           (sendable ? '<input class="system-alert-send" type="checkbox" value="' + escapeAttr(alert.alertId) + '" data-recipient="' + escapeAttr(alert.recipient) + '" data-status="' + escapeAttr(alert.status) + '">' : '') +
           '</td><td><strong>' + escapeHtml(alert.severity) + '</strong></td><td>' +
           escapeHtml(alert.component) + '<br><span class="field-help">' + escapeHtml(alert.cycleId || 'System') + '</span></td><td>' +
-          escapeHtml(alert.status) + '</td><td>' + escapeHtml(String(alert.occurrenceCount || 1)) + '</td><td>' +
+          escapeHtml(alert.status) + '<br><span class="field-help">' + escapeHtml(notificationLabel) + '</span></td><td>' + escapeHtml(String(alert.occurrenceCount || 1)) + '</td><td>' +
           escapeHtml(alert.subject) + (alert.lastError ? '<br><span class="field-help">' + escapeHtml(alert.lastError) + '</span>' : '') +
           '</td><td><button class="button outline" onclick="openSystemAlertResolution(\'' + escapeAttr(alert.alertId) + '\',\'' + escapeAttr(alert.severity) + '\')">Resolve</button></td></tr>';
       }).join('')
     : '<tr><td colspan="7">No unresolved system alerts.</td></tr>';
   return '<div class="card"><div class="card-header"><div><h2>System Alerts (' +
     escapeHtml(String(data.unresolvedCount || 0)) +
-    ')</h2><p>Protected durable warnings requiring HR review.</p></div><button class="button outline" onclick="refreshSystemAlerts()">Refresh</button></div>' +
+    ')</h2><p>Protected durable warnings requiring HR review. ' +
+    escapeHtml(String(data.notificationSentCount || 0)) +
+    ' notification(s) already sent; ' +
+    escapeHtml(String(data.notificationPendingCount || 0)) +
+    ' still need alert delivery attention.</p></div><button class="button outline" onclick="refreshSystemAlerts()">Refresh</button></div>' +
     '<div class="table-wrap"><table class="preview-table"><thead><tr><th>Send</th><th>Severity</th><th>Component</th><th>Status</th><th>Count</th><th>Details</th><th>Action</th></tr></thead><tbody>' +
     rows + '</tbody></table></div><div class="button-row" style="margin-top:12px"><button class="button warning" onclick="confirmSelectedSystemAlertDrain()">Send Selected Alerts</button></div></div>';
 }
@@ -2096,6 +2105,7 @@ function renderCycleHeaderActions(cycle) {
     }
     if (cycle.v31.notifications && cycle.v31.notifications.needsAttention) {
       html += '<button class="button outline" onclick="openNotificationRetryModal()">Retry Workflow Email</button>';
+      html += '<button class="button outline" onclick="openWorkflowNotificationConfirmModal()">Mark Workflow Email Confirmed</button>';
       html += '<button class="button outline" onclick="dispatchPendingNotifications()">Drain Pending Emails</button>';
     }
   }
@@ -2494,6 +2504,81 @@ async function openNotificationRetryModal() {
         });
       } catch (error) {
         showToast('error', 'Could not retry notification', errorMessage(error));
+      }
+    }
+  });
+}
+
+async function openWorkflowNotificationConfirmModal() {
+  const notifications = (currentCycle.v31 && currentCycle.v31.notifications) || {};
+  const labels = {
+    ready: 'Ready-for-meeting',
+    meetingManager: 'Meeting opened (manager)',
+    meetingEmployee: 'Meeting opened (employee)',
+    signatureManager: 'Manager signature request',
+    signatureEmployee: 'Employee signature request',
+    signatureHr: 'HR signature request'
+  };
+  const eligible = (notifications.eligibleUnresolved || []).filter(function(key) {
+    return notifications[key] === 'Delivery Unknown' ||
+      (notifications.components &&
+        notifications.components[key] &&
+        notifications.components[key].status === 'Delivery Unknown');
+  });
+  const optionsHtml = eligible.length
+    ? eligible.map(function(key) {
+        return '<option value="' + escapeAttr(key) + '">' +
+          escapeHtml(labels[key] || key) + ' — Delivery Unknown</option>';
+      }).join('')
+    : '<option value="">No Delivery Unknown components</option>';
+
+  openModal({
+    title: 'Mark workflow email confirmed?',
+    body:
+      '<p>This sends no email. Use only with evidence that the original message was delivered.</p>' +
+      '<label>Component<br><select id="confirmNotificationComponent">' + optionsHtml + '</select></label>',
+    confirmLabel: 'Review Confirmation',
+    tone: 'warning',
+    onConfirm: async function() {
+      const component = document.getElementById('confirmNotificationComponent').value;
+      if (!component) {
+        showToast('warning', 'Notification', 'No Delivery Unknown component selected.');
+        return;
+      }
+      try {
+        const plan = await server('getWorkflowNotificationRetryPlan', currentCycle.cycleId, component);
+        if (!plan.canMarkConfirmed || plan.componentCount !== 1) {
+          throw new Error('The selected component is no longer confirmable.');
+        }
+        closeModal();
+        openModal({
+          title: 'Confirm delivery without sending?',
+          body: '<p><strong>Exact recipients:</strong></p><ul>' +
+            (plan.recipients || []).map(function(recipient) { return '<li>' + escapeHtml(recipient) + '</li>'; }).join('') +
+            '</ul><label>Evidence note *<br><textarea id="workflowConfirmEvidence" rows="4"></textarea></label>',
+          confirmLabel: 'Mark Confirmed — No Send',
+          tone: 'warning',
+          checks: ['I verified delivery evidence for the original attempt.'],
+          onConfirm: async function() {
+            const note = String((document.getElementById('workflowConfirmEvidence') || {}).value || '').trim();
+            closeModal();
+            try {
+              const result = await server('markWorkflowNotificationConfirmed', currentCycle.cycleId, component, {
+                confirmed: true,
+                confirmationToken: 'MARK_WORKFLOW_NOTIFICATION_CONFIRMED',
+                evidenceNote: note,
+                originalAttemptId: plan.attemptId,
+                recipients: plan.recipients
+              });
+              showToast('success', 'Notification', result.message || 'Marked confirmed without sending email.');
+              await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+            } catch (error) {
+              showToast('error', 'Could not mark confirmed', errorMessage(error));
+            }
+          }
+        });
+      } catch (error) {
+        showToast('error', 'Could not load confirmation plan', errorMessage(error));
       }
     }
   });
