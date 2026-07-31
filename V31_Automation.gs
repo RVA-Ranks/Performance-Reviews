@@ -36,6 +36,9 @@ const V31 = Object.freeze({
     AUTOMATION_LAST_ERROR: '',
     AUTOMATION_OWNER_EMAIL: 'aitheras-hr@aitheras.com',
     SYSTEM_ADMIN_EMAIL: 'aitheras-hr@aitheras.com',
+    OUTBOX_STALE_MINUTES: '15',
+    SYSTEM_ALERT_STALE_MINUTES: '15',
+    SYSTEM_ALERT_RECIPIENT: 'aitheras-hr@aitheras.com',
     SIGNATURE_RECOVERY_FOLDER_ID: '',
     AUTOMATION_TRIGGER_UNIQUE_ID: '',
     AUTOMATION_TRIGGER_INSTALLED_AT: '',
@@ -335,13 +338,26 @@ function ensureV31DataModel_() {
   const current = readSettings_(settingsSheet);
 
   Object.keys(V31.SETTINGS_DEFAULTS).forEach(function (key) {
+    const populateWhenBlank = [
+      'OUTBOX_STALE_MINUTES',
+      'SYSTEM_ALERT_STALE_MINUTES',
+      'SYSTEM_ALERT_RECIPIENT',
+    ].indexOf(key) >= 0;
     if (!(key in current)) {
       settingsSheet.appendRow([
         key,
         V31.SETTINGS_DEFAULTS[key],
       ]);
+    } else if (populateWhenBlank && !String(current[key] || '').trim()) {
+      setSetting_(
+        settingsSheet,
+        key,
+        V31.SETTINGS_DEFAULTS[key]
+      );
     }
   });
+
+  ensureSystemAlertsDataModel_();
 
   const assignmentHeaders = getHeaders_(assignments);
   const automationColumn =
@@ -1053,7 +1069,7 @@ function formatSingleSheet_(sheet) {
   sheet.autoResizeColumns(1, Math.min(columns, 12));
 }
 
-function protectV31Sheet_(sheet) {
+function protectV31Sheet_(sheet, description) {
   if (
     sheet.getProtections(
       SpreadsheetApp.ProtectionType.SHEET
@@ -1064,7 +1080,9 @@ function protectV31Sheet_(sheet) {
 
   const protection = sheet
     .protect()
-    .setDescription('Review automation log - HR managed');
+    .setDescription(
+      description || 'Review automation log - HR managed'
+    );
 
   try {
     const owner = Session.getEffectiveUser();
@@ -2709,6 +2727,9 @@ function buildProductionReadinessReport_(
     'ENVIRONMENT',
     'AUTOMATION_OWNER_EMAIL',
     'SYSTEM_ADMIN_EMAIL',
+    'OUTBOX_STALE_MINUTES',
+    'SYSTEM_ALERT_STALE_MINUTES',
+    'SYSTEM_ALERT_RECIPIENT',
     'SIGNATURE_RECOVERY_FOLDER_ID',
     'AUTOMATION_MODE',
     'AUTOMATION_TRIGGER_HOUR',
@@ -2769,6 +2790,36 @@ function buildProductionReadinessReport_(
         'SYSTEM_ADMIN_EMAIL must be explicitly configured.',
     });
   }
+
+  if (
+    !isValidSystemAlertRecipient_(
+      settings.SYSTEM_ALERT_RECIPIENT,
+      settings.ALLOWED_DOMAIN
+    )
+  ) {
+    blocking.push({
+      code: 'SYSTEM_ALERT_RECIPIENT_REQUIRED',
+      message:
+        'SYSTEM_ALERT_RECIPIENT must be an explicit AITHERAS-domain email address.',
+    });
+  }
+
+  [
+    ['OUTBOX_STALE_MINUTES', settings.OUTBOX_STALE_MINUTES],
+    [
+      'SYSTEM_ALERT_STALE_MINUTES',
+      settings.SYSTEM_ALERT_STALE_MINUTES,
+    ],
+  ].forEach(function (entry) {
+    const minutes = Number(entry[1]);
+    if (!isFinite(minutes) || minutes <= 0) {
+      blocking.push({
+        code: 'INVALID_STALE_MINUTES',
+        setting: entry[0],
+        message: entry[0] + ' must be a positive number.',
+      });
+    }
+  });
 
   if (!String(settings.SIGNATURE_RECOVERY_FOLDER_ID || '')) {
     blocking.push({
@@ -3041,6 +3092,21 @@ function runReviewAutomationCore_() {
 
   assertAutomationOwner_(settings);
   const outbox = dispatchPendingWorkflowNotificationsForAllCycles_();
+  let systemAlerts;
+  try {
+    systemAlerts = drainSystemAlertsAutomatically_();
+  } catch (alertDrainError) {
+    systemAlerts = {
+      failed: 1,
+      error: String(
+        alertDrainError.message || alertDrainError
+      ),
+    };
+    Logger.log(
+      'Automatic system alert drain failed: ' +
+        systemAlerts.error
+    );
+  }
 
   const candidates =
     findReviewAutomationCandidates_(
@@ -3148,23 +3214,35 @@ function runReviewAutomationCore_() {
   });
 
   const runFailed =
-    failed > 0 || (outbox && outbox.ok === false);
+    failed > 0 ||
+    (outbox && outbox.ok === false) ||
+    Number((systemAlerts && systemAlerts.failed) || 0) > 0 ||
+    Number(
+      (systemAlerts && systemAlerts.deliveryUnknown) || 0
+    ) > 0;
   recordAutomationRunHealth_(
     !runFailed,
     runFailed
       ? failed +
           ' launch failure(s); outbox failures: ' +
-          Number((outbox && outbox.failed) || 0)
+          Number((outbox && outbox.failed) || 0) +
+          '; system alert failures: ' +
+          Number((systemAlerts && systemAlerts.failed) || 0) +
+          '; system alert delivery unknown: ' +
+          Number(
+            (systemAlerts && systemAlerts.deliveryUnknown) || 0
+          )
       : ''
   );
 
   return {
-    ok: failed === 0,
+    ok: !runFailed,
     created: created,
     retried: retryAttempts,
     retriedSuccessfully: retriedSuccessfully,
     failed: failed,
     outbox: outbox,
+    systemAlerts: systemAlerts,
     results: results,
     message:
       created +
@@ -5318,6 +5396,12 @@ function deliverWorkflowNotification_(
   const opts = options || {};
   const allowUnknownResend = !!opts.allowUnknownResend;
   const skipEligibility = !!opts.skipEligibility;
+  const expectedRecipients = Array.isArray(opts.expectedRecipients)
+    ? opts.expectedRecipients.map(normalizeEmail_)
+    : null;
+  const configuredStaleMinutes = Number(
+    getSettings_().OUTBOX_STALE_MINUTES || 15
+  );
 
   const claim = withLock_(function () {
     const location = findCycle_(cycleId);
@@ -5337,13 +5421,37 @@ function deliverWorkflowNotification_(
       };
     }
 
-    const decision = decideLaunchComponentAction_(
-      String(cycle[component.statusField] || V31.DELIVERY.PENDING),
-      !!cycle[component.sentAtField],
-      cycle[component.startedField],
-      V31.DELIVERY.SENDING,
-      allowUnknownResend
+    if (
+      expectedRecipients &&
+      JSON.stringify(
+        getWorkflowNotificationRecipients_(cycle, component.key)
+      ) !== JSON.stringify(expectedRecipients)
+    ) {
+      throw new Error(
+        component.label +
+          ' recipients changed after confirmation. Refresh and confirm again.'
+      );
+    }
+
+    const componentStatus = String(
+      cycle[component.statusField] || V31.DELIVERY.PENDING
     );
+    const decision =
+      componentStatus === V31.DELIVERY.SENDING &&
+      !cycle[component.sentAtField]
+        ? isWorkflowOutboxClaimStale_(
+            cycle[component.startedField],
+            configuredStaleMinutes
+          )
+          ? { action: 'mark-unknown' }
+          : { action: 'skip', reason: 'in-progress' }
+        : decideLaunchComponentAction_(
+            componentStatus,
+            !!cycle[component.sentAtField],
+            cycle[component.startedField],
+            V31.DELIVERY.SENDING,
+            allowUnknownResend
+          );
 
     if (decision.action === 'skip') {
       return {
@@ -5397,6 +5505,21 @@ function deliverWorkflowNotification_(
   });
 
   if (claim.action !== 'claim') {
+    if (claim.reason === 'unknown') {
+      safelyRecordWorkflowDeliveryUnknownAlert_(
+        cycleId,
+        component.key,
+        {
+          reason: claim.reason,
+          attemptId: String(
+            claim.cycle[component.attemptField] || ''
+          ),
+          error: String(
+            claim.cycle[component.errorField] || ''
+          ),
+        }
+      );
+    }
     return claim;
   }
 
@@ -5426,11 +5549,34 @@ function deliverWorkflowNotification_(
     });
 
     if (!committed) {
+      safelyRecordWorkflowDeliveryUnknownAlert_(
+        cycleId,
+        component.key,
+        {
+          reason: 'attempt-replaced-before-commit',
+          attemptId: claim.attemptId,
+        }
+      );
       return buildWorkflowCommitMismatchResult_(
         findCycle_(cycleId).object
       );
     }
 
+    safelyAutoResolveSystemAlertByKey_(
+      buildSystemAlertKey_(
+        cycleId,
+        'Workflow Notification',
+        component.key + ':delivery-unknown'
+      ),
+      function () {
+        const fresh = findCycle_(cycleId).object;
+        return (
+          String(fresh[component.statusField] || '') ===
+            V31.DELIVERY.SENT &&
+          !!fresh[component.sentAtField]
+        );
+      }
+    );
     return { action: 'sent', cycle: findCycle_(cycleId).object };
   } catch (error) {
     withLock_(function () {
@@ -5462,6 +5608,15 @@ function deliverWorkflowNotification_(
       component.key,
       V31.DELIVERY.UNKNOWN,
       String(error.message || error)
+    );
+    safelyRecordWorkflowDeliveryUnknownAlert_(
+      cycleId,
+      component.key,
+      {
+        reason: 'send-error',
+        attemptId: claim.attemptId,
+        error: String(error.message || error),
+      }
     );
 
     return {
@@ -5554,6 +5709,23 @@ function getWorkflowNotificationKeys_() {
     'signatureEmployee',
     'signatureHr',
   ];
+}
+
+/** Workflow claims have their own configurable stale threshold. */
+function isWorkflowOutboxClaimStale_(startedAt, staleMinutes) {
+  const minutes =
+    staleMinutes === undefined || staleMinutes === null
+      ? Number(getSettings_().OUTBOX_STALE_MINUTES || 15)
+      : Number(staleMinutes);
+  const effectiveStaleMinutes =
+    isFinite(minutes) && minutes > 0 ? minutes : 15;
+  const started = startedAt ? new Date(startedAt) : null;
+  return (
+    !started ||
+    isNaN(started.getTime()) ||
+    Date.now() - started.getTime() >
+      effectiveStaleMinutes * 60000
+  );
 }
 
 /**
@@ -5670,7 +5842,7 @@ function getSupersedableWorkflowNotifications_(cycle) {
       previousStatus === V31.DELIVERY.FAILED ||
       previousStatus === V31.DELIVERY.UNKNOWN ||
       (previousStatus === V31.DELIVERY.SENDING &&
-        isDeliveryClaimStale_(cycle[component.startedField]));
+        isWorkflowOutboxClaimStale_(cycle[component.startedField]));
 
     if (maySupersede) {
       planned.push({
@@ -5742,7 +5914,11 @@ function markSupersededWorkflowNotifications_(cycleId) {
   });
 }
 
-function shouldDispatchWorkflowNotification_(cycle, component) {
+function shouldDispatchWorkflowNotification_(
+  cycle,
+  component,
+  staleMinutes
+) {
   const status = String(
     cycle[component.statusField] || V31.DELIVERY.PENDING
   );
@@ -5751,7 +5927,10 @@ function shouldDispatchWorkflowNotification_(cycle, component) {
     status === V31.DELIVERY.PENDING ||
     status === V31.DELIVERY.FAILED ||
     (status === V31.DELIVERY.SENDING &&
-      isDeliveryClaimStale_(cycle[component.startedField]))
+      isWorkflowOutboxClaimStale_(
+        cycle[component.startedField],
+        staleMinutes
+      ))
   );
 }
 
@@ -5839,7 +6018,7 @@ function dispatchPendingWorkflowNotifications_(cycleId) {
  * Use a batch snapshot only to decide whether a fresh locked inspection
  * is necessary. This snapshot is never written back.
  */
-function workflowCycleNeedsOutboxInspection_(cycle) {
+function workflowCycleNeedsOutboxInspection_(cycle, staleMinutes) {
   const supportedStatuses = [
     PR.CYCLE.READY,
     PR.CYCLE.MEETING,
@@ -5869,12 +6048,16 @@ function workflowCycleNeedsOutboxInspection_(cycle) {
     );
     const staleSending =
       status === V31.DELIVERY.SENDING &&
-      isDeliveryClaimStale_(cycle[component.startedField]);
+      isWorkflowOutboxClaimStale_(
+        cycle[component.startedField],
+        staleMinutes
+      );
 
     if (disposition === 'eligible') {
       return shouldDispatchWorkflowNotification_(
         cycle,
-        component
+        component,
+        staleMinutes
       );
     }
 
@@ -5887,20 +6070,34 @@ function workflowCycleNeedsOutboxInspection_(cycle) {
   });
 }
 
+/** Pure batch planner: clean and inactive cycle snapshots are skipped. */
+function planWorkflowOutboxCycles_(cycles, staleMinutes) {
+  return (cycles || [])
+    .filter(function (cycle) {
+      return workflowCycleNeedsOutboxInspection_(
+        cycle,
+        staleMinutes
+      );
+    })
+    .map(function (cycle) {
+      return String(cycle['Cycle ID'] || '');
+    });
+}
+
 /**
  * Drain eligible pending workflow notifications across active cycles.
  * Private — not callable from google.script.run.
  */
 function dispatchPendingWorkflowNotificationsForAllCycles_() {
   const cycles = getAllObjects_(PR.SHEETS.CYCLES);
-  const active = [
-    PR.CYCLE.READY,
-    PR.CYCLE.MEETING,
-    PR.CYCLE.SIGNATURES,
-    PR.CYCLE.FINALIZING,
-    PR.CYCLE.COMPLETE,
-    PR.CYCLE.CANCELLED,
-  ];
+  const plannedIds = planWorkflowOutboxCycles_(
+    cycles,
+    Number(getSettings_().OUTBOX_STALE_MINUTES || 15)
+  );
+  const plannedLookup = {};
+  plannedIds.forEach(function (cycleId) {
+    plannedLookup[cycleId] = true;
+  });
   const totals = {
     scanned: 0,
     inspected: 0,
@@ -5917,8 +6114,7 @@ function dispatchPendingWorkflowNotificationsForAllCycles_() {
     totals.scanned++;
 
     if (
-      active.indexOf(String(cycle['Status'] || '')) < 0 ||
-      !workflowCycleNeedsOutboxInspection_(cycle)
+      !plannedLookup[String(cycle['Cycle ID'] || '')]
     ) {
       return;
     }
@@ -6005,48 +6201,215 @@ function getOutboxResultCount_(result, key) {
   return 0;
 }
 
+function getWorkflowNotificationRecipients_(cycle, key) {
+  if (key === 'ready' || key === 'meetingManager') {
+    return uniqueEmails_([
+      cycle['Manager Email'],
+      cycle['HR Email'],
+    ]);
+  }
+  if (key === 'meetingEmployee' || key === 'signatureEmployee') {
+    return uniqueEmails_([cycle['Employee Email']]);
+  }
+  if (key === 'signatureManager') {
+    return uniqueEmails_([cycle['Manager Email']]);
+  }
+  if (key === 'signatureHr') {
+    return uniqueEmails_([cycle['HR Email']]);
+  }
+  return [];
+}
+
+/** Pure exact-send plan used by both confirmation UI and server validation. */
+function planWorkflowOutboxForCycle_(cycle, requestedKeys) {
+  const requested = Array.isArray(requestedKeys)
+    ? requestedKeys.map(String)
+    : [];
+  const keys = requested.length
+    ? requested
+    : getWorkflowNotificationKeys_();
+  const components = [];
+  keys.forEach(function (key) {
+    const component = getWorkflowNotificationComponent_(key);
+    const status = String(
+      cycle[component.statusField] || V31.DELIVERY.PENDING
+    );
+    if (
+      isWorkflowNotificationEligible_(cycle, key) &&
+      (status === V31.DELIVERY.PENDING ||
+        status === V31.DELIVERY.FAILED)
+    ) {
+      components.push({
+        key: key,
+        label: component.label,
+        recipients: getWorkflowNotificationRecipients_(cycle, key),
+      });
+    }
+  });
+  return {
+    cycleId: String(cycle['Cycle ID'] || ''),
+    componentCount: components.length,
+    components: components,
+  };
+}
+
+function getWorkflowOutboxManualPlan(cycleId, componentKeys) {
+  assertActiveHrDomain_();
+  return planWorkflowOutboxForCycle_(
+    findCycle_(String(cycleId || '')).object,
+    componentKeys
+  );
+}
+
+function getWorkflowNotificationRetryPlan(cycleId, componentKey) {
+  assertActiveHrDomain_();
+  const cycle = findCycle_(String(cycleId || '')).object;
+  const component = getWorkflowNotificationComponent_(
+    String(componentKey || '')
+  );
+  const status = String(
+    cycle[component.statusField] || V31.DELIVERY.PENDING
+  );
+  const eligible =
+    isWorkflowNotificationEligible_(cycle, component.key) &&
+    [
+      V31.DELIVERY.PENDING,
+      V31.DELIVERY.FAILED,
+      V31.DELIVERY.UNKNOWN,
+    ].indexOf(status) >= 0;
+  return {
+    cycleId: String(cycleId || ''),
+    componentKey: component.key,
+    componentCount: eligible ? 1 : 0,
+    recipients: eligible
+      ? getWorkflowNotificationRecipients_(cycle, component.key)
+      : [],
+    status: status,
+  };
+}
+
+function dispatchSelectedWorkflowNotifications_(
+  cycleId,
+  componentKeys,
+  expectedRecipientsByKey
+) {
+  const totals = {
+    eligible: 0,
+    sent: 0,
+    skipped: 0,
+    superseded: 0,
+    deliveryUnknown: 0,
+    failed: 0,
+  };
+  const results = [];
+  (componentKeys || []).forEach(function (key) {
+    const component = getWorkflowNotificationComponent_(key);
+    const result = deliverWorkflowNotification_(
+      cycleId,
+      component,
+      function (fresh) {
+        sendWorkflowNotificationBody_(key, fresh);
+      },
+      {
+        allowUnknownResend: false,
+        expectedRecipients:
+          (expectedRecipientsByKey || {})[key] || null,
+      }
+    );
+    totals.eligible++;
+    results.push({
+      key: key,
+      action: result.action,
+      reason: result.reason || '',
+    });
+    if (result.action === 'sent') totals.sent++;
+    else if (result.action === 'error') {
+      totals.failed++;
+      totals.deliveryUnknown++;
+    } else {
+      totals.skipped++;
+      if (
+        result.action === 'unknown' ||
+        result.reason === 'unknown'
+      ) {
+        totals.deliveryUnknown++;
+      }
+    }
+  });
+  return {
+    ok: totals.failed === 0,
+    cycleId: cycleId,
+    totals: totals,
+    results: results,
+    notifications: getWorkflowNotificationSummary_(
+      findCycle_(cycleId).object
+    ),
+  };
+}
+
 /**
  * HR-only public outbox drain. Requires domain, active HR, and explicit
  * confirmation. Automatic Preview drains are intentionally unsupported.
  */
 function drainWorkflowOutboxNow(options) {
-  const email = getCurrentUserEmail_();
-  const settings = getSettings_();
-
-  assertDomain_(email, settings.ALLOWED_DOMAIN);
-
-  if (!isHrUser_(email)) {
-    throw new Error(
-      'Only HR may drain the workflow notification outbox.'
-    );
-  }
-
+  const email = assertActiveHrDomain_();
   const opts = options || {};
-
-  if (!opts.confirmed) {
+  assertSystemRecoveryConfirmation_(opts);
+  const cycleId = String(opts.cycleId || '');
+  const componentKeys = Array.isArray(opts.componentKeys)
+    ? opts.componentKeys.map(String)
+    : [];
+  const uniqueComponentKeys = componentKeys.filter(
+    function (key, index) {
+      return componentKeys.indexOf(key) === index;
+    }
+  );
+  if (
+    !cycleId ||
+    !componentKeys.length ||
+    uniqueComponentKeys.length !== componentKeys.length
+  ) {
     throw new Error(
-      'Explicit confirmation is required before draining the workflow outbox.'
+      'A cycle and unique exact workflow components are required.'
     );
   }
-
-  let result;
-
-  if (opts.cycleId) {
-    result = dispatchPendingWorkflowNotifications_(
-      String(opts.cycleId)
+  const plan = planWorkflowOutboxForCycle_(
+    findCycle_(cycleId).object,
+    componentKeys
+  );
+  if (
+    Number(opts.componentCount) !== plan.componentCount ||
+    plan.componentCount !== componentKeys.length ||
+    JSON.stringify(opts.recipients || []) !==
+      JSON.stringify(
+        plan.components.map(function (component) {
+          return component.recipients;
+        })
+      )
+  ) {
+    throw new Error(
+      'Workflow recipients or component count changed. Refresh and confirm again.'
     );
-  } else {
-    result = dispatchPendingWorkflowNotificationsForAllCycles_();
   }
+  const result = dispatchSelectedWorkflowNotifications_(
+    cycleId,
+    componentKeys,
+    plan.components.reduce(function (lookup, component) {
+      lookup[component.key] = component.recipients;
+      return lookup;
+    }, {})
+  );
 
   audit_(
-    opts.cycleId || '',
+    cycleId,
     'Workflow outbox drained by HR',
     email,
     '',
     result.ok ? 'Success' : 'Partial',
     JSON.stringify({
-      cycleId: opts.cycleId || '',
+      cycleId: cycleId,
+      componentKeys: componentKeys,
+      recipients: opts.recipients,
       scanned: getOutboxResultCount_(result, 'scanned'),
       eligible: getOutboxResultCount_(result, 'eligible'),
       sent: getOutboxResultCount_(result, 'sent'),
@@ -6094,18 +6457,43 @@ function retryWorkflowNotification(
   componentKey,
   options
 ) {
-  const email = getCurrentUserEmail_();
-  const settings = getSettings_();
-
-  assertDomain_(email, settings.ALLOWED_DOMAIN);
-
-  if (!isHrUser_(email)) {
+  const email = assertActiveHrDomain_();
+  const effectiveOptions = options || {};
+  assertSystemRecoveryConfirmation_(effectiveOptions);
+  const confirmationCycle = findCycle_(cycleId).object;
+  const confirmationComponent =
+    getWorkflowNotificationComponent_(componentKey);
+  const confirmationStatus = String(
+    confirmationCycle[confirmationComponent.statusField] ||
+      V31.DELIVERY.PENDING
+  );
+  const confirmedRecipients =
+    Array.isArray(effectiveOptions.recipients)
+      ? effectiveOptions.recipients
+      : [];
+  const currentRecipients =
+    getWorkflowNotificationRecipients_(
+      confirmationCycle,
+      componentKey
+    );
+  if (
+    Number(effectiveOptions.componentCount) !== 1 ||
+    !isWorkflowNotificationEligible_(
+      confirmationCycle,
+      componentKey
+    ) ||
+    [
+      V31.DELIVERY.PENDING,
+      V31.DELIVERY.FAILED,
+      V31.DELIVERY.UNKNOWN,
+    ].indexOf(confirmationStatus) < 0 ||
+    JSON.stringify(confirmedRecipients) !==
+      JSON.stringify(currentRecipients)
+  ) {
     throw new Error(
-      'Only HR may retry workflow notification emails.'
+      'The selected recipient changed or is not currently retryable.'
     );
   }
-
-  const effectiveOptions = options || {};
   if (
     effectiveOptions.allowUnknownResend === undefined ||
     effectiveOptions.allowUnknownResend === null
@@ -6133,7 +6521,9 @@ function retryWorkflowNotification(
     function (fresh) {
       sendWorkflowNotificationBody_(componentKey, fresh);
     },
-    effectiveOptions
+    Object.assign({}, effectiveOptions, {
+      expectedRecipients: currentRecipients,
+    })
   );
 
   audit_(
@@ -6187,7 +6577,7 @@ function getWorkflowNotificationSummary_(cycle) {
     const eligible = isWorkflowNotificationEligible_(cycle, key);
     const staleSending =
       status === V31.DELIVERY.SENDING &&
-      isDeliveryClaimStale_(cycle[component.startedField]);
+      isWorkflowOutboxClaimStale_(cycle[component.startedField]);
     const unresolved =
       status === V31.DELIVERY.PENDING ||
       status === V31.DELIVERY.FAILED ||

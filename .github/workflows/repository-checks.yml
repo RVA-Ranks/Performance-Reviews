@@ -39,6 +39,8 @@ jobs:
           required_files=(
             "Code.gs"
             "V31_Automation.gs"
+            "V31_System_Alerts.gs"
+            "V31_System_Alert_Tests.gs"
             "V31_Idempotency_Tests.gs"
             "V31_Trigger_Tests.gs"
             "V31_Production_Readiness_Tests.gs"
@@ -213,6 +215,14 @@ jobs:
             V31_Workflow_Notification_Tests.gs; then
             echo \
               "::error file=V31_Workflow_Notification_Tests.gs::Missing runV31WorkflowNotificationTests_()."
+            exit 1
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+runV31SystemAlertTests_[[:space:]]*\(' \
+            V31_System_Alert_Tests.gs; then
+            echo \
+              "::error file=V31_System_Alert_Tests.gs::Missing runV31SystemAlertTests_()."
             exit 1
           fi
 

@@ -4130,6 +4130,24 @@ function reconcileSignature(cycleId, role, action, options) {
           selectedFileId: fileId,
         })
       );
+      ['artifact', 'audit'].forEach(function (warningType) {
+        safelyAutoResolveSystemAlertByKey_(
+          buildSystemAlertKey_(
+            cycleId,
+            'Signature',
+            role + ':' + warningType
+          ),
+          function () {
+            const fresh = findCycle_(cycleId).object;
+            const fields = getSignatureClaimFields_(role);
+            const warningField =
+              warningType === 'audit'
+                ? fields.auditWarningField
+                : fields.artifactWarningField;
+            return !String(fresh[warningField] || '').trim();
+          }
+        );
+      });
     } catch (auditError) {
       auditWarning =
         'Reconciliation committed, but its audit record could not be written: ' +
@@ -5992,6 +6010,12 @@ function persistSignatureWarning_(
     writeCycle_(location.rowNumber, cycle);
     SpreadsheetApp.flush();
   });
+  safelyRecordSignatureWarningAlert_(
+    cycleId,
+    role,
+    warningType,
+    warning
+  );
 }
 
 function handleSupersededSignatureArtifact_(

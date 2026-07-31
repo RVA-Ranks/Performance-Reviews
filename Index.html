@@ -1600,6 +1600,7 @@ function renderAdminView() {
   document.getElementById('adminView').innerHTML =
     '<div class="page-header"><div><h1>Administration</h1><p>Manage review automation, launch cycles, and monitor the workflow.</p></div></div>' +
     renderAutomationPanel(automation) +
+    '<div id="systemAlertsPanel">' + renderSystemAlertsPanel((state.v31 && state.v31.systemAlerts) || null) + '</div>' +
     '<div class="card"><div class="card-header"><div><h2>Create Review Cycle Manually</h2><p>This sends the full launch package: HR notice, manager instructions, employee instructions, and one shared calendar event.</p></div></div>' +
     '<form id="cycleForm" onsubmit="submitNewCycle(event)"><div class="form-grid">' +
     '<div class="full"><label for="assignmentSelect">Employee / Manager Assignment *</label><select id="assignmentSelect" required onchange="applyAssignment()"><option value="">Select an active assignment</option></select></div>' +
@@ -1622,6 +1623,112 @@ function renderAdminView() {
     '</div>';
 
   populateAssignments();
+  refreshSystemAlerts();
+}
+
+function renderSystemAlertsPanel(data) {
+  if (!data) {
+    return '<div class="card"><h2>System Alerts</h2><p class="field-help">Loading protected operational alerts…</p></div>';
+  }
+  const alerts = data.alerts || [];
+  const rows = alerts.length
+    ? alerts.map(function(alert) {
+        const sendable = alert.status === 'Pending' || alert.status === 'Failed' || alert.status === 'Delivery Unknown';
+        return '<tr><td>' +
+          (sendable ? '<input class="system-alert-send" type="checkbox" value="' + escapeAttr(alert.alertId) + '" data-recipient="' + escapeAttr(alert.recipient) + '" data-status="' + escapeAttr(alert.status) + '">' : '') +
+          '</td><td><strong>' + escapeHtml(alert.severity) + '</strong></td><td>' +
+          escapeHtml(alert.component) + '<br><span class="field-help">' + escapeHtml(alert.cycleId || 'System') + '</span></td><td>' +
+          escapeHtml(alert.status) + '</td><td>' + escapeHtml(String(alert.occurrenceCount || 1)) + '</td><td>' +
+          escapeHtml(alert.subject) + (alert.lastError ? '<br><span class="field-help">' + escapeHtml(alert.lastError) + '</span>' : '') +
+          '</td><td><button class="button outline" onclick="openSystemAlertResolution(\'' + escapeAttr(alert.alertId) + '\',\'' + escapeAttr(alert.severity) + '\')">Resolve</button></td></tr>';
+      }).join('')
+    : '<tr><td colspan="7">No unresolved system alerts.</td></tr>';
+  return '<div class="card"><div class="card-header"><div><h2>System Alerts (' +
+    escapeHtml(String(data.unresolvedCount || 0)) +
+    ')</h2><p>Protected durable warnings requiring HR review.</p></div><button class="button outline" onclick="refreshSystemAlerts()">Refresh</button></div>' +
+    '<div class="table-wrap"><table class="preview-table"><thead><tr><th>Send</th><th>Severity</th><th>Component</th><th>Status</th><th>Count</th><th>Details</th><th>Action</th></tr></thead><tbody>' +
+    rows + '</tbody></table></div><div class="button-row" style="margin-top:12px"><button class="button warning" onclick="confirmSelectedSystemAlertDrain()">Send Selected Alerts</button></div></div>';
+}
+
+async function refreshSystemAlerts() {
+  if (!state || !state.isHr) return;
+  try {
+    const data = await server('getSystemAlertsAdminData');
+    state.v31 = state.v31 || {};
+    state.v31.systemAlerts = data;
+    const panel = document.getElementById('systemAlertsPanel');
+    if (panel) panel.innerHTML = renderSystemAlertsPanel(data);
+  } catch (error) {
+    const panel = document.getElementById('systemAlertsPanel');
+    if (panel) panel.innerHTML = '<div class="card"><h2>System Alerts</h2><p class="field-help">' + escapeHtml(errorMessage(error)) + '</p></div>';
+  }
+}
+
+function confirmSelectedSystemAlertDrain() {
+  const selected = Array.prototype.slice.call(document.querySelectorAll('.system-alert-send:checked'));
+  if (!selected.length) {
+    showToast('warning', 'System alerts', 'Select at least one Pending or Failed alert.');
+    return;
+  }
+  const alertIds = selected.map(function(node) { return node.value; });
+  const recipients = selected.map(function(node) { return node.getAttribute('data-recipient') || ''; });
+  const includesDeliveryUnknown = selected.some(function(node) {
+    return node.getAttribute('data-status') === 'Delivery Unknown';
+  });
+  openModal({
+    title: 'Send selected system alerts?',
+    body: '<p><strong>Components:</strong> ' + selected.length + '</p><p><strong>Exact recipients:</strong></p><ul>' +
+      recipients.map(function(recipient) { return '<li>' + escapeHtml(recipient) + '</li>'; }).join('') +
+      '</ul><p>This explicit recovery send may run while automation is Preview or Paused.</p>' +
+      (includesDeliveryUnknown ? '<p><strong>Delivery Unknown:</strong> this selection explicitly resends an alert that may already have been delivered.</p>' : ''),
+    confirmLabel: 'Send ' + selected.length + ' Alert(s)',
+    tone: 'warning',
+    checks: ['I verified the exact component count and recipients shown above.'],
+    onConfirm: async function() {
+      closeModal();
+      try {
+        const result = await server('drainSystemAlertsNow', {
+          confirmed: true,
+          confirmationToken: 'SEND_CONFIRMED_RECOVERY_EMAILS',
+          alertIds: alertIds,
+          componentCount: alertIds.length,
+          recipients: recipients,
+          allowUnknownResend: includesDeliveryUnknown
+        });
+        showToast(result.deliveryUnknown ? 'warning' : 'success', 'System alerts', 'Sent ' + Number(result.sent || 0) + ' alert(s).');
+        await refreshSystemAlerts();
+      } catch (error) {
+        showToast('error', 'Could not send system alerts', errorMessage(error));
+      }
+    }
+  });
+}
+
+function openSystemAlertResolution(alertId, severity) {
+  const reasonRequired = severity === 'Blocking' || severity === 'Security';
+  openModal({
+    title: 'Resolve system alert?',
+    body: '<p>Resolution is audited and does not send email.</p><label>Resolution reason' +
+      (reasonRequired ? ' *' : '') +
+      '<br><textarea id="systemAlertResolutionReason" rows="4"></textarea></label>',
+    confirmLabel: 'Resolve Alert',
+    tone: 'warning',
+    onConfirm: async function() {
+      const reason = (document.getElementById('systemAlertResolutionReason') || {}).value || '';
+      if (reasonRequired && !reason.trim()) {
+        showToast('warning', 'Reason required', 'Blocking and Security alerts require a resolution reason.');
+        return;
+      }
+      closeModal();
+      try {
+        await server('resolveSystemAlert', alertId, { reason: reason });
+        showToast('success', 'System alert', 'Alert resolved.');
+        await refreshSystemAlerts();
+      } catch (error) {
+        showToast('error', 'Could not resolve alert', errorMessage(error));
+      }
+    }
+  });
 }
 
 function renderAutomationPanel(automation) {
@@ -2277,22 +2384,46 @@ async function openNotificationRetryModal() {
       '<p>Only stage-eligible Pending, Failed, or Delivery Unknown components are listed.</p>' +
       '<label>Component<br><select id="notificationComponent">' + optionsHtml + '</select></label>' +
       '<label style="display:block;margin-top:12px;"><input type="checkbox" id="allowUnknownNotificationResend" checked> Allow resend if Delivery Unknown</label>',
-    confirmLabel: 'Retry Notification',
+    confirmLabel: 'Review Recipient',
     tone: 'warning',
     onConfirm: async function() {
       const component = document.getElementById('notificationComponent').value;
       const allowUnknown = !!(document.getElementById('allowUnknownNotificationResend') && document.getElementById('allowUnknownNotificationResend').checked);
-      closeModal();
       if (!component) {
         showToast('warning', 'Notification', 'No eligible component selected.');
         return;
       }
       try {
-        const result = await server('retryWorkflowNotification', currentCycle.cycleId, component, {
-          allowUnknownResend: allowUnknown
+        const plan = await server('getWorkflowNotificationRetryPlan', currentCycle.cycleId, component);
+        if (plan.componentCount !== 1) {
+          throw new Error('The selected component is no longer retryable.');
+        }
+        closeModal();
+        openModal({
+          title: 'Confirm one workflow email',
+          body: '<p><strong>Component count:</strong> 1</p><p><strong>Exact recipients:</strong></p><ul>' +
+            (plan.recipients || []).map(function(recipient) { return '<li>' + escapeHtml(recipient) + '</li>'; }).join('') +
+            '</ul><p>No unrelated pending component will be sent.</p>',
+          confirmLabel: 'Send One Component',
+          tone: 'warning',
+          checks: ['I verified the exact recipient list and component count.'],
+          onConfirm: async function() {
+            closeModal();
+            try {
+              const result = await server('retryWorkflowNotification', currentCycle.cycleId, component, {
+                confirmed: true,
+                confirmationToken: 'SEND_CONFIRMED_RECOVERY_EMAILS',
+                componentCount: 1,
+                recipients: plan.recipients,
+                allowUnknownResend: allowUnknown
+              });
+              showToast('success', 'Notification', result.message || 'Updated');
+              await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+            } catch (error) {
+              showToast('error', 'Could not retry notification', errorMessage(error));
+            }
+          }
         });
-        showToast('success', 'Notification', result.message || 'Updated');
-        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
         showToast('error', 'Could not retry notification', errorMessage(error));
       }
@@ -2301,24 +2432,40 @@ async function openNotificationRetryModal() {
 }
 
 async function dispatchPendingNotifications() {
+  let plan;
+  try {
+    plan = await server('getWorkflowOutboxManualPlan', currentCycle.cycleId);
+  } catch (error) {
+    showToast('error', 'Could not inspect notifications', errorMessage(error));
+    return;
+  }
+  if (!plan.componentCount) {
+    showToast('info', 'Workflow outbox', 'No eligible Pending or Failed components are ready to send.');
+    return;
+  }
+  const componentKeys = plan.components.map(function(component) { return component.key; });
+  const recipients = plan.components.map(function(component) { return component.recipients; });
   openModal({
     title: 'Drain pending workflow emails?',
     body:
-      '<p><strong>This deliberately sends email</strong> for eligible Pending or Failed notifications on this cycle. Preview automation never does this automatically. Delivery Unknown components are not auto-resent.</p>' +
-      '<label style="display:block;margin-top:12px;"><input type="checkbox" id="confirmOutboxDrain"> I confirm I want to send these emails now</label>',
-    confirmLabel: 'Drain Pending Emails',
+      '<p><strong>This deliberately sends email.</strong> Preview/Paused never does this automatically. Delivery Unknown components are not included.</p>' +
+      '<p><strong>Component count:</strong> ' + escapeHtml(String(plan.componentCount)) + '</p>' +
+      '<ul>' + plan.components.map(function(component) {
+        return '<li><strong>' + escapeHtml(component.label) + '</strong>: ' + escapeHtml((component.recipients || []).join(', ')) + '</li>';
+      }).join('') + '</ul>',
+    confirmLabel: 'Send ' + plan.componentCount + ' Component(s)',
     tone: 'warning',
+    checks: ['I verified every exact recipient and the component count shown above.'],
     onConfirm: async function() {
-      const confirmed = !!(document.getElementById('confirmOutboxDrain') && document.getElementById('confirmOutboxDrain').checked);
-      if (!confirmed) {
-        showToast('warning', 'Confirmation required', 'Check the confirmation box before draining the outbox.');
-        return;
-      }
       closeModal();
       try {
         const result = await server('drainWorkflowOutboxNow', {
           confirmed: true,
-          cycleId: currentCycle.cycleId
+          confirmationToken: 'SEND_CONFIRMED_RECOVERY_EMAILS',
+          cycleId: currentCycle.cycleId,
+          componentKeys: componentKeys,
+          componentCount: plan.componentCount,
+          recipients: recipients
         });
         showToast(
           result.failed ? 'warning' : 'success',

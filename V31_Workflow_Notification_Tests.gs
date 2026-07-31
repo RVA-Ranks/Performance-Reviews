@@ -118,6 +118,24 @@ function runV31WorkflowNotificationTests_() {
       testHrSignaturePartialSuccessShape_
     )
   );
+  results.push(
+    runWorkflowCase_(
+      'outbox stale setting defaults to 15 minutes',
+      testOutboxStaleSetting_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'manual workflow send requires exact recovery token',
+      testWorkflowManualExactToken_
+    )
+  );
+  results.push(
+    runWorkflowCase_(
+      'recipient retry planner isolates one component',
+      testWorkflowRetryRecipientIsolation_
+    )
+  );
 
   if (V31_WORKFLOW_TEST.ENABLE_LIVE_PROBES) {
     results.push(
@@ -849,5 +867,55 @@ function testHrSignaturePartialSuccessShape_() {
       sample.finalizationComplete === false &&
       sample.cycleStatus === PR.CYCLE.FINALIZING,
     'Partial success must keep signatureReconciled true when finalization fails'
+  );
+}
+
+function testOutboxStaleSetting_() {
+  assertWorkflow_(
+    String(V31.SETTINGS_DEFAULTS.OUTBOX_STALE_MINUTES) === '15',
+    'OUTBOX_STALE_MINUTES must default to 15'
+  );
+}
+
+function testWorkflowManualExactToken_() {
+  assertWorkflow_(
+    !isSystemRecoveryConfirmationValid_({
+      confirmed: true,
+      confirmationToken: 'SEND_CONFIRMED_RECOVERY_EMAIL',
+    }),
+    'Approximate confirmation token must fail'
+  );
+  assertWorkflow_(
+    isSystemRecoveryConfirmationValid_({
+      confirmed: true,
+      confirmationToken: 'SEND_CONFIRMED_RECOVERY_EMAILS',
+    }),
+    'Exact confirmation token must pass'
+  );
+}
+
+function testWorkflowRetryRecipientIsolation_() {
+  const cycle = {
+    'Cycle ID': 'workflow-isolation',
+    Status: PR.CYCLE.MEETING,
+    'Manager Email': 'manager@aitheras.com',
+    'Employee Email': 'employee@aitheras.com',
+    'HR Email': 'hr@aitheras.com',
+    'Meeting Manager Email Status': V31.DELIVERY.PENDING,
+    'Meeting Employee Email Status': V31.DELIVERY.PENDING,
+  };
+  const plan = planWorkflowOutboxForCycle_(
+    cycle,
+    ['meetingEmployee']
+  );
+  assertWorkflow_(
+    plan.componentCount === 1 &&
+      plan.components[0].key === 'meetingEmployee',
+    'Retry plan selected an unrelated component'
+  );
+  assertWorkflow_(
+    JSON.stringify(plan.components[0].recipients) ===
+      JSON.stringify(['employee@aitheras.com']),
+    'Retry plan selected unrelated recipients'
   );
 }

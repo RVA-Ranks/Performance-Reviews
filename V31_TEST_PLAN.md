@@ -2,6 +2,21 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery C commit 1 gate — outbox and system alerts
+
+Run `runV31SystemAlertTests_()` and
+`runV31WorkflowNotificationTests_()` in Preview. The automatic pure suite
+checks exact headers, unresolved deduplication, resolved recurrence boundaries,
+system/manual resolution policy, send ambiguity, Live-only automatic drains,
+the exact manual token, recipient isolation, and a 1000-row in-memory planner.
+
+The following are never auto-created by a test and remain
+**Requires Daniel Sandbox**: a sheet-backed 100-cycle set with 25 active and 10
+unresolved cases, protected-header migration, real Mail ambiguity/retry, HR
+domain and active-role enforcement, concurrent alert upserts/claims, and the
+optional sheet-backed 1000-cycle timing run. Record row IDs, attempt IDs,
+recipients, timestamps, protection evidence, and cleanup before marking pass.
+
 ## Delivery B gate — signature recovery
 
 Run `runV31SignatureTests_()` and retain its structured report. The suite covers

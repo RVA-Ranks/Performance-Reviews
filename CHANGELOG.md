@@ -1,5 +1,13 @@
 # V3.1 Changelog
 
+## Delivery C commit 1 — durable workflow recovery and system alerts
+
+- Added configurable 15-minute workflow outbox and system-alert stale thresholds while preserving nonblank deployment settings.
+- Required active AITHERAS HR authorization plus the exact recovery-email token for manual outbox drains and recipient-specific retries; confirmations now bind exact recipients and component counts.
+- Added the protected append-only `SystemAlerts` lifecycle with deterministic unresolved deduplication, crash-safe claim/send/commit behavior, Delivery Unknown handling, and audited manual or authoritative system resolution.
+- Wired workflow Delivery Unknown and signature warnings to durable alerts, added a minimal HR alert panel, and added pure system-alert/workflow regression and 1000-row planning tests.
+- Workspace-backed mail, protection, permissions, and scale evidence remains `Requires Daniel Sandbox`.
+
 ## Delivery B correction — commit classification and reconciliation claims
 
 - Separated signature outcomes into `COMMITTED`, `SUPERSEDED`, and `COMMIT_UNKNOWN`; only a confirmed loser enters automatic disposition.

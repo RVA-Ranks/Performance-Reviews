@@ -25,6 +25,10 @@ function runV31ProductionReadinessTests_() {
         testReadinessBlankSignatureRecoveryBlocks_
       ),
       triggerTestCase_(
+        'Blank system alert recipient blocks readiness',
+        testReadinessBlankSystemAlertRecipientBlocks_
+      ),
+      triggerTestCase_(
         'Delivery B correction headers are migrated',
         testSignatureCorrectionHeadersPresent_
       ),
@@ -61,6 +65,7 @@ function readinessSettingsFixture_() {
   });
   values.APP_VERSION = APP_VERSION;
   values.ENVIRONMENT = 'Production';
+  values.ALLOWED_DOMAIN = 'aitheras.com';
   values.AUTOMATION_MODE = 'Preview';
   values.AUTOMATION_TRIGGER_HOUR = '8';
   values.SYSTEM_ADMIN_EMAIL = 'aitheras-hr@aitheras.com';
@@ -84,6 +89,9 @@ function testReadinessSettingsPresent_() {
     'ENVIRONMENT',
     'AUTOMATION_OWNER_EMAIL',
     'SYSTEM_ADMIN_EMAIL',
+    'OUTBOX_STALE_MINUTES',
+    'SYSTEM_ALERT_STALE_MINUTES',
+    'SYSTEM_ALERT_RECIPIENT',
     'SIGNATURE_RECOVERY_FOLDER_ID',
     'AUTOMATION_TRIGGER_UNIQUE_ID',
     'AUTOMATION_TRIGGER_INSTALLED_AT',
@@ -141,6 +149,22 @@ function testReadinessBlankSignatureRecoveryBlocks_() {
       );
     }),
     'Blank signature recovery folder must block readiness.'
+  );
+}
+
+function testReadinessBlankSystemAlertRecipientBlocks_() {
+  const settings = readinessSettingsFixture_();
+  settings.SYSTEM_ALERT_RECIPIENT = '';
+  const report = buildProductionReadinessReport_(
+    settings,
+    healthyPreviewTriggerFixture_(settings),
+    { liveProbes: false }
+  );
+  assertTriggerTest_(
+    report.blocking.some(function (row) {
+      return row.code === 'SYSTEM_ALERT_RECIPIENT_REQUIRED';
+    }),
+    'Blank system alert recipient must block readiness.'
   );
 }
 

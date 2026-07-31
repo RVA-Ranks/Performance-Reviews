@@ -7,6 +7,19 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery C commit 1 recovery controls
+
+Workflow email recovery uses durable per-component claims. Automatic outbox and
+system-alert drains run only in Live mode. An active AITHERAS HR user may send
+an exact manually confirmed selection in Preview or Paused; the server rechecks
+the token, recipients, and component count immediately before claiming.
+
+Operational incidents are stored in the protected append-only `SystemAlerts`
+sheet. Matching unresolved keys increment one lifecycle; recurrence after
+resolution creates a new alert ID. Stale `Sending` is `Delivery Unknown` and is
+never automatically resent. Run `runV31SystemAlertTests_()` and
+`runV31WorkflowNotificationTests_()` before Sandbox validation.
+
 ## What V3.1 does
 
 ### Automatic review launches

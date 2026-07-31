@@ -5,6 +5,21 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery C commit 1 — durable operational alerts
+
+`SystemAlerts` is now the protected append-only incident ledger. Deterministic
+keys deduplicate only the unresolved lifecycle; resolved recurrence receives a
+new UUID. Claims and commits use short locks, Mail runs outside locks, and stale
+or ambiguous sends become `Delivery Unknown` without automatic resend.
+
+Automatic workflow and alert drains remain Live-only. Active AITHERAS HR may
+perform a Preview/Paused recovery send only with the exact
+`SEND_CONFIRMED_RECOVERY_EMAILS` token and a server-revalidated recipient and
+component selection. Blocking/Security manual resolutions require an audited
+reason. Workflow Delivery Unknown and signature warnings are the intentionally
+minimal commit-1 integrations. Finalization, Calendar, PDFs, final distribution,
+and audit Event ID work are outside this segment.
+
 ## Delivery B signature recovery
 
 `upgradeToV31_()` provisions or reuses the direct-child
@@ -13,7 +28,7 @@ multiple valid exact-name matches. Role-level signature fields are authoritative
 document-specific fields remain compatibility mirrors. Signature attempts create
 provenance-marked staging files, commit one winner under the review-data lock,
 then disposition losers after releasing that lock. Cleanup failure never rolls
-back a `Signed` winner. Operational-alert delivery remains Delivery C work.
+back a `Signed` winner.
 
 The Delivery B correction distinguishes `COMMITTED`, `SUPERSEDED`, and
 `COMMIT_UNKNOWN`. Only confirmed superseded attempts may enter automatic loser
