@@ -7,6 +7,15 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery D — HR System Health and recovery UX
+
+HR Administration now opens with a System Health dashboard: overall status,
+component cards, Recovery Center (actionable items only), and a System Alert
+viewer with details. Fast loads use cached Sheet/trigger summaries for about
+30 seconds. Run Deep Health Check only on demand. Recovery actions call the
+existing launch, calendar, workflow, signature, PDF, distribution, and alert
+APIs. Employee and manager experiences are unchanged.
+
 ## Delivery C correction — recovery race and audit gaps
 
 Finalization audit `Complete` now requires the deterministic audit row, not

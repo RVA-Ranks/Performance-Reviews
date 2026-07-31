@@ -1018,6 +1018,158 @@
     .preview-table td:first-child,
     .preview-table th:first-child { white-space: normal; }
 
+    .health-shell { display: grid; gap: 18px; margin-bottom: 18px; }
+    .health-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(220px, .8fr);
+      gap: 18px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, #fff, var(--brand-faint));
+      box-shadow: var(--shadow);
+    }
+    .health-hero h2 { margin: 0 0 8px; color: var(--brand-dark); font-size: 24px; }
+    .health-hero p { margin: 0; color: var(--muted); }
+    .health-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .health-metric {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .health-metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .health-metric strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--brand-dark);
+      font-size: 22px;
+    }
+    .health-checklist {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .health-checklist li {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      color: var(--ink);
+      font-size: 13px;
+    }
+    .health-cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .health-card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 168px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 4px 16px rgba(47, 22, 60, .04);
+    }
+    .health-card h3 { margin: 0; color: var(--brand-dark); font-size: 16px; }
+    .health-card .health-card-count { margin: 0; color: var(--muted); font-size: 13px; }
+    .health-card .health-card-summary { margin: 0; flex: 1; color: var(--ink); font-size: 13px; line-height: 1.4; }
+    .health-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .health-level {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .health-level.healthy { color: var(--success); background: var(--success-soft); }
+    .health-level.warning { color: var(--warning); background: var(--warning-soft); }
+    .health-level.attention { color: #9a4d09; background: #fff0e0; }
+    .health-level.blocking { color: var(--danger); background: var(--danger-soft); }
+    .health-level.running { color: var(--info); background: var(--info-soft); }
+    .health-level.na { color: var(--muted); background: #f0ecef; }
+    .recovery-list { display: grid; gap: 10px; }
+    .recovery-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+    .recovery-item h4 { margin: 0 0 4px; color: var(--brand-dark); font-size: 15px; }
+    .recovery-item p { margin: 0; color: var(--muted); font-size: 13px; }
+    .recovery-item-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .alert-viewer { display: grid; gap: 10px; }
+    .alert-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1.2fr) minmax(0, 1fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+    .alert-row .alert-meta { color: var(--muted); font-size: 12px; }
+    .health-empty {
+      padding: 22px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--brand-faint);
+      color: var(--brand-dark);
+      text-align: center;
+      font-weight: 700;
+    }
+    .health-detail-grid {
+      display: grid;
+      grid-template-columns: 140px minmax(0, 1fr);
+      gap: 8px 12px;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .health-detail-grid dt { color: var(--muted); font-weight: 700; }
+    .health-detail-grid dd { margin: 0; color: var(--ink); }
+    .health-json {
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      max-height: 240px;
+      border-radius: 8px;
+      background: #1f1626;
+      color: #f7f2fb;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+    @media (max-width: 1100px) {
+      .health-hero,
+      .health-cards,
+      .health-metrics,
+      .alert-row,
+      .recovery-item {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .help-layout {
       display: grid;
       grid-template-columns: 220px minmax(0, 1fr);
@@ -1596,11 +1748,13 @@ function renderAdminView() {
 
   const automation =
     (state.v31 && state.v31.automation) || {};
+  const health = (state.v31 && state.v31.systemHealth) || null;
 
   document.getElementById('adminView').innerHTML =
-    '<div class="page-header"><div><h1>Administration</h1><p>Manage review automation, launch cycles, and monitor the workflow.</p></div></div>' +
+    '<div class="page-header"><div><h1>Administration</h1><p>Monitor system health, recover blocked work, and manage review automation.</p></div></div>' +
+    '<div id="systemHealthPanel">' + renderSystemHealthPanel(health) + '</div>' +
     renderAutomationPanel(automation) +
-    '<div id="systemAlertsPanel">' + renderSystemAlertsPanel((state.v31 && state.v31.systemAlerts) || null) + '</div>' +
+    '<div id="systemAlertsPanel">' + renderSystemAlertsPanel((state.v31 && state.v31.systemAlerts) || (health && health.alerts) || null) + '</div>' +
     '<div class="card"><div class="card-header"><div><h2>Create Review Cycle Manually</h2><p>This sends the full launch package: HR notice, manager instructions, employee instructions, and one shared calendar event.</p></div></div>' +
     '<form id="cycleForm" onsubmit="submitNewCycle(event)"><div class="form-grid">' +
     '<div class="full"><label for="assignmentSelect">Employee / Manager Assignment *</label><select id="assignmentSelect" required onchange="applyAssignment()"><option value="">Select an active assignment</option></select></div>' +
@@ -1623,7 +1777,324 @@ function renderAdminView() {
     '</div>';
 
   populateAssignments();
-  refreshSystemAlerts();
+  refreshSystemHealth(false);
+}
+
+function healthLevelClass(level) {
+  const value = String(level || 'healthy');
+  if (value === 'attention') return 'attention';
+  if (value === 'blocking') return 'blocking';
+  if (value === 'warning') return 'warning';
+  if (value === 'running') return 'running';
+  if (value === 'na') return 'na';
+  return 'healthy';
+}
+
+function formatHealthCheckedAt(value) {
+  if (!value) return 'Not checked yet';
+  try {
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
+  } catch (error) {
+    return String(value);
+  }
+}
+
+function renderSystemHealthPanel(data) {
+  if (!data) {
+    return '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Loading operational health…</p></div>';
+  }
+  const metrics = data.metrics || {};
+  const cards = data.cards || [];
+  const recoveryItems = data.recoveryItems || [];
+  const checklist = (data.cards || []).map(function(card) {
+    const mark = card.level === 'healthy' ? '✔' : card.level === 'blocking' ? '✖' : '⚠';
+    return '<li><span aria-hidden="true">' + mark + '</span><span><strong>' +
+      escapeHtml(card.title) + '</strong> — ' + escapeHtml(card.label) +
+      (card.count ? ' (' + escapeHtml(String(card.countLabel || card.count)) + ')' : '') +
+      '</span></li>';
+  }).join('');
+  const metricHtml =
+    '<div class="health-metric"><span>Healthy Components</span><strong>' + escapeHtml(String(metrics.healthyComponents || 0)) + '</strong></div>' +
+    '<div class="health-metric"><span>Warnings</span><strong>' + escapeHtml(String(metrics.warnings || 0)) + '</strong></div>' +
+    '<div class="health-metric"><span>Blocking Issues</span><strong>' + escapeHtml(String(metrics.blockingIssues || 0)) + '</strong></div>' +
+    '<div class="health-metric"><span>Unresolved Alerts</span><strong>' + escapeHtml(String(metrics.unresolvedAlerts || 0)) + '</strong></div>' +
+    '<div class="health-metric"><span>Cycles Requiring Recovery</span><strong>' + escapeHtml(String(metrics.cyclesRequiringRecovery || 0)) + '</strong></div>' +
+    '<div class="health-metric"><span>Last Health Check</span><strong style="font-size:14px">' + escapeHtml(formatHealthCheckedAt(metrics.lastHealthCheck || data.checkedAt)) + '</strong></div>';
+
+  const cardsHtml = cards.map(function(card) {
+    return '<article class="health-card" aria-label="' + escapeAttr(card.title + ' ' + card.label) + '">' +
+      '<div class="card-header" style="margin:0;padding:0;border:0"><h3>' + escapeHtml(card.title) + '</h3>' +
+      '<span class="health-level ' + healthLevelClass(card.level) + '">' + escapeHtml(card.label) + '</span></div>' +
+      '<p class="health-card-count">' + escapeHtml(card.countLabel || '') + '</p>' +
+      '<p class="health-card-summary">' + escapeHtml(card.summary || '') + '</p>' +
+      '<div class="health-card-actions"><button type="button" class="button outline" aria-label="Refresh ' + escapeAttr(card.title) + '" onclick="refreshSystemHealth(true)">Refresh</button></div>' +
+      '</article>';
+  }).join('');
+
+  const recoveryHtml = recoveryItems.length
+    ? '<div class="recovery-list">' + recoveryItems.map(function(item, index) {
+        return '<div class="recovery-item">' +
+          '<div><h4>' + escapeHtml(item.component) + '</h4>' +
+          '<p>Cycle ' + escapeHtml(item.cycleId || 'System') +
+          (item.employeeName ? ' · ' + escapeHtml(item.employeeName) : '') +
+          '</p>' +
+          '<p><span class="health-level ' + healthLevelClass(item.level) + '">' + escapeHtml(item.label || item.status) + '</span> ' +
+          escapeHtml(item.status || '') + '</p></div>' +
+          '<div class="recovery-item-actions">' +
+          '<button type="button" class="button outline" aria-label="View details for ' + escapeAttr(item.component) + '" onclick="openHealthItemDetails(' + index + ')">Details</button>' +
+          '<button type="button" class="button warning" aria-label="' + escapeAttr(item.actionLabel || 'Recover') + ' ' + escapeAttr(item.component) + '" onclick="runHealthRecoveryAction(' + index + ')">' +
+          escapeHtml(item.actionLabel || 'Recover') + '</button></div></div>';
+      }).join('') + '</div>'
+    : '<div class="health-empty" role="status">Everything looks healthy. No recovery actions are needed.</div>';
+
+  return '<div class="health-shell" aria-label="System Health">' +
+    '<section class="health-hero">' +
+    '<div><div class="health-level ' + healthLevelClass(data.overallLevel) + '" aria-label="Overall status ' + escapeAttr(data.overallLabel || '') + '">' +
+    escapeHtml(data.overallLabel || 'Healthy') + '</div>' +
+    '<h2 style="margin-top:12px">' + escapeHtml(data.headline || 'System Health') + '</h2>' +
+    '<p>' + (data.cached ? 'Showing cached summary (up to 30 seconds). ' : '') +
+    (data.deepCheck ? 'Deep check results are included. ' : 'Fast sheet and trigger summary. ') +
+    'Deep Drive and Calendar probes run only on request.</p>' +
+    '<div class="health-metrics">' + metricHtml + '</div></div>' +
+    '<div><h3 class="sr-only">Component checklist</h3><ul class="health-checklist">' + checklist + '</ul>' +
+    '<div class="button-row" style="margin-top:16px">' +
+    '<button type="button" class="button outline" onclick="refreshSystemHealth(true)">Refresh Health</button>' +
+    '<button type="button" class="button secondary" onclick="runDeepHealthCheck()">Run Deep Health Check</button>' +
+    '</div></div></section>' +
+    '<section aria-label="Health cards"><div class="health-cards">' + cardsHtml + '</div></section>' +
+    '<section class="card" aria-label="Recovery Center"><div class="card-header"><div><h2>Recovery Center</h2><p>Only actionable work appears here.</p></div></div>' +
+    recoveryHtml + '</section></div>';
+}
+
+async function refreshSystemHealth(forceRefresh) {
+  if (!state || !state.isHr) return;
+  const panel = document.getElementById('systemHealthPanel');
+  try {
+    const data = await server('getSystemHealthSummary', {
+      forceRefresh: forceRefresh === true
+    });
+    state.v31 = state.v31 || {};
+    state.v31.systemHealth = data;
+    state.v31.systemAlerts = data.alerts || state.v31.systemAlerts;
+    if (panel) panel.innerHTML = renderSystemHealthPanel(data);
+    const alertsPanel = document.getElementById('systemAlertsPanel');
+    if (alertsPanel) alertsPanel.innerHTML = renderSystemAlertsPanel(data.alerts || state.v31.systemAlerts);
+  } catch (error) {
+    if (panel) {
+      panel.innerHTML = '<div class="card"><h2>System Health</h2><p class="field-help">' +
+        escapeHtml(friendlyErrorMessage(error)) + '</p></div>';
+    }
+  }
+}
+
+async function runDeepHealthCheck() {
+  openModal({
+    title: 'Run Deep Health Check?',
+    body: '<p>This inspects settings, trigger health, and readiness gates. Live Drive, Calendar, and folder probes stay off unless Sandbox live probes are separately confirmed.</p><p>Deep checks are never run automatically.</p>',
+    confirmLabel: 'Run Deep Check',
+    tone: 'primary',
+    onConfirm: async function() {
+      closeModal();
+      const panel = document.getElementById('systemHealthPanel');
+      if (panel) {
+        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Running deep health check…</p></div>';
+      }
+      try {
+        const data = await server('runSystemHealthDeepCheck', {
+          liveProbes: false
+        });
+        state.v31 = state.v31 || {};
+        state.v31.systemHealth = data;
+        state.v31.systemAlerts = data.alerts || state.v31.systemAlerts;
+        if (panel) panel.innerHTML = renderSystemHealthPanel(data);
+        const alertsPanel = document.getElementById('systemAlertsPanel');
+        if (alertsPanel) alertsPanel.innerHTML = renderSystemAlertsPanel(data.alerts || state.v31.systemAlerts);
+        showToast(
+          data.overallLevel === 'blocking' ? 'warning' : 'success',
+          'Deep health check',
+          formatOperationalClientMessage(data, data.headline || 'Deep check complete.')
+        );
+      } catch (error) {
+        showToast('error', 'Deep health check', friendlyErrorMessage(error));
+        await refreshSystemHealth(true);
+      }
+    }
+  });
+}
+
+function openHealthItemDetails(index) {
+  const item = ((state.v31 && state.v31.systemHealth && state.v31.systemHealth.recoveryItems) || [])[index];
+  if (!item) {
+    showToast('warning', 'System Health', 'That item is no longer available. Refresh health and try again.');
+    return;
+  }
+  const pretty = item.details
+    ? JSON.stringify(item.details, null, 2)
+    : '';
+  openModal({
+    title: item.component + ' details',
+    body:
+      '<dl class="health-detail-grid">' +
+      '<dt>Component</dt><dd>' + escapeHtml(item.component) + '</dd>' +
+      '<dt>Current State</dt><dd>' + escapeHtml(item.status || item.label || '') + '</dd>' +
+      '<dt>Cycle</dt><dd>' + escapeHtml(item.cycleId || 'System') + '</dd>' +
+      '<dt>Attempt ID</dt><dd>' + escapeHtml(item.attemptId || 'None') + '</dd>' +
+      '<dt>Started</dt><dd>' + escapeHtml(item.startedAt || 'n/a') + '</dd>' +
+      '<dt>Last Error</dt><dd>' + escapeHtml(item.lastError || 'None') + '</dd>' +
+      '<dt>Recommendation</dt><dd>' + escapeHtml(item.recommendation || '') + '</dd>' +
+      '</dl>' +
+      (pretty
+        ? '<p><strong>Structured details</strong></p><pre class="health-json" tabindex="0">' + escapeHtml(pretty) + '</pre>'
+        : ''),
+    confirmLabel: 'Close',
+    tone: 'primary',
+    onConfirm: function() { closeModal(); }
+  });
+}
+
+async function runHealthRecoveryAction(index) {
+  const item = ((state.v31 && state.v31.systemHealth && state.v31.systemHealth.recoveryItems) || [])[index];
+  if (!item) {
+    showToast('warning', 'Recovery Center', 'That recovery item is no longer available. Refresh health and try again.');
+    return;
+  }
+  const action = String(item.action || '');
+  if (action === 'resolveAlert') {
+    openSystemAlertResolution(item.alertId, item.severity || 'Warning');
+    return;
+  }
+  if (action === 'retryLaunch') {
+    openModal({
+      title: 'Retry Launch?',
+      body: '<p>This will retry unfinished launch steps for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>.</p><p>Steps already marked Sent are skipped. Delivery Unknown components are not automatically resent.</p>',
+      confirmLabel: 'Retry Launch',
+      tone: 'warning',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server('retryReviewLaunch', item.cycleId);
+          showToast(result.partial ? 'warning' : 'success', 'Launch retry', formatOperationalClientMessage(result));
+          await refreshSystemHealth(true);
+        } catch (error) {
+          showToast('error', 'Launch retry', friendlyErrorMessage(error));
+        }
+      }
+    });
+    return;
+  }
+  if (action === 'reconcileLaunch') {
+    await loadCycle(item.cycleId, 'overview');
+    openLaunchReconcileModal();
+    return;
+  }
+  if (action === 'retryCalendarConfig') {
+    openModal({
+      title: 'Retry Calendar Config?',
+      body: '<p>This configures tags and reminders on the existing calendar event only for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>.</p><p>Launch emails are not resent and a second event is not created.</p>',
+      confirmLabel: 'Retry Calendar Config',
+      tone: 'primary',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server('retryReviewCalendarConfiguration', item.cycleId);
+          showToast(result.ok ? 'success' : 'warning', 'Calendar config', formatOperationalClientMessage(result));
+          await refreshSystemHealth(true);
+        } catch (error) {
+          showToast('error', 'Calendar config', friendlyErrorMessage(error));
+        }
+      }
+    });
+    return;
+  }
+  if (action === 'rebuildCalendar') {
+    openModal({
+      title: 'Rebuild Calendar Event?',
+      body: '<p>Use this only when the original event is confirmed missing for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>.</p><p>Marker recovery is attempted first. Launch emails are not resent.</p>',
+      confirmLabel: 'Rebuild Calendar Event',
+      tone: 'warning',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server('rebuildReviewCalendarEvent', item.cycleId);
+          showToast(result.warning ? 'warning' : 'success', 'Calendar rebuild', formatOperationalClientMessage(result));
+          await refreshSystemHealth(true);
+        } catch (error) {
+          showToast('error', 'Calendar rebuild', friendlyErrorMessage(error));
+        }
+      }
+    });
+    return;
+  }
+  if (action === 'retryWorkflow' || action === 'markWorkflowConfirmed') {
+    await loadCycle(item.cycleId, 'overview');
+    if (action === 'markWorkflowConfirmed') {
+      openWorkflowNotificationConfirmModal();
+    } else {
+      openNotificationRetryModal();
+    }
+    return;
+  }
+  if (action === 'reconcileSignature') {
+    await loadCycle(item.cycleId, 'signatures');
+    openSignatureReconcileModal();
+    return;
+  }
+  if (action === 'reconcilePdf') {
+    await loadCycle(item.cycleId, 'overview');
+    openPdfReconcileModal();
+    return;
+  }
+  if (action === 'retryFinalization' || action === 'retryDistribution' || action === 'retryPdf') {
+    openModal({
+      title: action === 'retryDistribution' ? 'Retry Distribution?' : 'Retry Finalization?',
+      body: '<p>This resumes only safe unfinished finalization steps for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>.</p><p>Existing PDFs are recovered by deterministic name. Delivery Unknown final packets are never automatically resent.</p>',
+      confirmLabel: action === 'retryDistribution' ? 'Retry Distribution' : 'Retry Finalization',
+      tone: 'primary',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server('retryReviewFinalization', item.cycleId);
+          showToast(result.ok ? 'success' : 'warning', 'Finalization', formatOperationalClientMessage(result));
+          await refreshSystemHealth(true);
+        } catch (error) {
+          showToast('error', 'Finalization', friendlyErrorMessage(error));
+        }
+      }
+    });
+    return;
+  }
+  if (action === 'markDistributionConfirmed') {
+    await loadCycle(item.cycleId, 'overview');
+    openFinalDistributionConfirmModal();
+    return;
+  }
+  if (item.cycleId) {
+    await loadCycle(item.cycleId, 'overview');
+    return;
+  }
+  showToast('info', 'Recovery Center', 'Open the related cycle to continue recovery.');
+}
+
+function formatOperationalClientMessage(result, fallback) {
+  if (result && result.message) return String(result.message);
+  if (result && result.partial) {
+    return 'Completed with warnings. Review System Health for remaining work.';
+  }
+  if (result && result.ok === false) {
+    return fallback || 'The action did not finish cleanly. Review System Health for details.';
+  }
+  if (result && result.ok === true) return fallback || 'Completed.';
+  return fallback || 'Completed with warnings. Review System Health for remaining work.';
+}
+
+function friendlyErrorMessage(error) {
+  const message = error && error.message ? String(error.message) : String(error || '');
+  if (!message || /^unknown error$/i.test(message.trim())) {
+    return 'The action could not be completed. Refresh System Health and try again.';
+  }
+  return message;
 }
 
 function renderSystemAlertsPanel(data) {
@@ -1631,46 +2102,81 @@ function renderSystemAlertsPanel(data) {
     return '<div class="card"><h2>System Alerts</h2><p class="field-help">Loading protected operational alerts…</p></div>';
   }
   const alerts = data.alerts || [];
-  const rows = alerts.length
-    ? alerts.map(function(alert) {
+  const severityRank = { Security: 0, Blocking: 1, Warning: 2 };
+  const sorted = alerts.slice().sort(function(a, b) {
+    const left = severityRank[a.severity] != null ? severityRank[a.severity] : 9;
+    const right = severityRank[b.severity] != null ? severityRank[b.severity] : 9;
+    if (left !== right) return left - right;
+    return String(b.lastOccurredAt || '').localeCompare(String(a.lastOccurredAt || ''));
+  });
+  const rows = sorted.length
+    ? sorted.map(function(alert) {
         const sendable = alert.status === 'Pending' || alert.status === 'Failed' || alert.status === 'Delivery Unknown';
         const notificationLabel = alert.notificationSent
           ? 'Notification sent'
           : (alert.status === 'Sending'
             ? 'Notification sending'
             : 'Notification not sent');
-        return '<tr><td>' +
-          (sendable ? '<input class="system-alert-send" type="checkbox" value="' + escapeAttr(alert.alertId) + '" data-recipient="' + escapeAttr(alert.recipient) + '" data-status="' + escapeAttr(alert.status) + '">' : '') +
-          '</td><td><strong>' + escapeHtml(alert.severity) + '</strong></td><td>' +
-          escapeHtml(alert.component) + '<br><span class="field-help">' + escapeHtml(alert.cycleId || 'System') + '</span></td><td>' +
-          escapeHtml(alert.status) + '<br><span class="field-help">' + escapeHtml(notificationLabel) + '</span></td><td>' + escapeHtml(String(alert.occurrenceCount || 1)) + '</td><td>' +
-          escapeHtml(alert.subject) + (alert.lastError ? '<br><span class="field-help">' + escapeHtml(alert.lastError) + '</span>' : '') +
-          '</td><td><button class="button outline" onclick="openSystemAlertResolution(\'' + escapeAttr(alert.alertId) + '\',\'' + escapeAttr(alert.severity) + '\')">Resolve</button></td></tr>';
+        return '<article class="alert-row" aria-label="' + escapeAttr(alert.severity + ' ' + alert.component) + '">' +
+          '<div>' + (sendable
+            ? '<input class="system-alert-send" type="checkbox" value="' + escapeAttr(alert.alertId) + '" data-recipient="' + escapeAttr(alert.recipient) + '" data-status="' + escapeAttr(alert.status) + '" aria-label="Select alert ' + escapeAttr(alert.component) + '">'
+            : '<span class="sr-only">Not sendable</span>') +
+          '</div>' +
+          '<div><strong>' + escapeHtml(alert.severity) + '</strong><div class="alert-meta">' + escapeHtml(alert.component) + '</div></div>' +
+          '<div>Cycle ' + escapeHtml(alert.cycleId || 'System') +
+          '<div class="alert-meta">' + escapeHtml(alert.status) + ' · ' + escapeHtml(notificationLabel) +
+          ' · ' + escapeHtml(String(alert.occurrenceCount || 1)) + ' occurrence(s)</div>' +
+          '<div class="alert-meta">Last seen ' + escapeHtml(formatHealthCheckedAt(alert.lastOccurredAt)) + '</div></div>' +
+          '<div>' + escapeHtml(alert.subject || '') +
+          (alert.lastError ? '<div class="alert-meta">' + escapeHtml(alert.lastError) + '</div>' : '') + '</div>' +
+          '<div class="button-row">' +
+          '<button type="button" class="button outline" aria-label="View alert details" onclick="openSystemAlertDetails(\'' + escapeAttr(alert.alertId) + '\')">View Details</button>' +
+          '<button type="button" class="button outline" aria-label="Resolve alert" onclick="openSystemAlertResolution(\'' + escapeAttr(alert.alertId) + '\',\'' + escapeAttr(alert.severity) + '\')">Resolve</button>' +
+          '</div></article>';
       }).join('')
-    : '<tr><td colspan="7">No unresolved system alerts.</td></tr>';
+    : '<div class="health-empty" role="status">Everything looks healthy. No unresolved system alerts.</div>';
   return '<div class="card"><div class="card-header"><div><h2>System Alerts (' +
     escapeHtml(String(data.unresolvedCount || 0)) +
     ')</h2><p>Protected durable warnings requiring HR review. ' +
     escapeHtml(String(data.notificationSentCount || 0)) +
     ' notification(s) already sent; ' +
     escapeHtml(String(data.notificationPendingCount || 0)) +
-    ' still need alert delivery attention.</p></div><button class="button outline" onclick="refreshSystemAlerts()">Refresh</button></div>' +
-    '<div class="table-wrap"><table class="preview-table"><thead><tr><th>Send</th><th>Severity</th><th>Component</th><th>Status</th><th>Count</th><th>Details</th><th>Action</th></tr></thead><tbody>' +
-    rows + '</tbody></table></div><div class="button-row" style="margin-top:12px"><button class="button warning" onclick="confirmSelectedSystemAlertDrain()">Send Selected Alerts</button></div></div>';
+    ' still need alert delivery attention.</p></div><button type="button" class="button outline" onclick="refreshSystemHealth(true)">Refresh</button></div>' +
+    '<div class="alert-viewer">' + rows + '</div>' +
+    '<div class="button-row" style="margin-top:12px"><button type="button" class="button warning" onclick="confirmSelectedSystemAlertDrain()">Send Selected Alerts</button></div></div>';
+}
+
+function openSystemAlertDetails(alertId) {
+  const alerts = ((state.v31 && state.v31.systemAlerts && state.v31.systemAlerts.alerts) ||
+    (state.v31 && state.v31.systemHealth && state.v31.systemHealth.alerts && state.v31.systemHealth.alerts.alerts) ||
+    []);
+  const alert = alerts.filter(function(row) { return String(row.alertId) === String(alertId); })[0];
+  if (!alert) {
+    showToast('warning', 'System alerts', 'That alert is no longer available. Refresh and try again.');
+    return;
+  }
+  const pretty = alert.details ? JSON.stringify(alert.details, null, 2) : '';
+  openModal({
+    title: 'Alert details',
+    body:
+      '<dl class="health-detail-grid">' +
+      '<dt>Severity</dt><dd>' + escapeHtml(alert.severity || '') + '</dd>' +
+      '<dt>Component</dt><dd>' + escapeHtml(alert.component || '') + '</dd>' +
+      '<dt>Cycle</dt><dd>' + escapeHtml(alert.cycleId || 'System') + '</dd>' +
+      '<dt>Status</dt><dd>' + escapeHtml(alert.status || '') + '</dd>' +
+      '<dt>Occurrences</dt><dd>' + escapeHtml(String(alert.occurrenceCount || 1)) + '</dd>' +
+      '<dt>Last Seen</dt><dd>' + escapeHtml(formatHealthCheckedAt(alert.lastOccurredAt)) + '</dd>' +
+      '<dt>Last Error</dt><dd>' + escapeHtml(alert.lastError || 'None') + '</dd>' +
+      '</dl>' +
+      (pretty ? '<pre class="health-json" tabindex="0">' + escapeHtml(pretty) + '</pre>' : ''),
+    confirmLabel: 'Close',
+    tone: 'primary',
+    onConfirm: function() { closeModal(); }
+  });
 }
 
 async function refreshSystemAlerts() {
-  if (!state || !state.isHr) return;
-  try {
-    const data = await server('getSystemAlertsAdminData');
-    state.v31 = state.v31 || {};
-    state.v31.systemAlerts = data;
-    const panel = document.getElementById('systemAlertsPanel');
-    if (panel) panel.innerHTML = renderSystemAlertsPanel(data);
-  } catch (error) {
-    const panel = document.getElementById('systemAlertsPanel');
-    if (panel) panel.innerHTML = '<div class="card"><h2>System Alerts</h2><p class="field-help">' + escapeHtml(errorMessage(error)) + '</p></div>';
-  }
+  await refreshSystemHealth(true);
 }
 
 function confirmSelectedSystemAlertDrain() {
@@ -3804,7 +4310,7 @@ function isNumericRating(value){const n=Number(value);return value!==''&&value!=
 function greetingPeriod(){const hour=new Date().getHours();return hour<12?'morning':hour<17?'afternoon':'evening';}
 function formatLocalDateTime(value){if(!value)return'';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
 function deepClone(value){return JSON.parse(JSON.stringify(value||{}));}
-function errorMessage(error){return error&&error.message?error.message:String(error||'Unknown error');}
+function errorMessage(error){return friendlyErrorMessage(error);}
 function scrollToField(id){const element=document.getElementById(id);if(element){element.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(function(){element.focus();},250);}}
 function setButtonBusy(button,busy,text){if(!button)return;button.disabled=busy;button.textContent=text;}
 function valueOf(id){const element=document.getElementById(id);return element?String(element.value||'').trim():'';}

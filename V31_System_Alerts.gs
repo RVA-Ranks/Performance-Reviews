@@ -615,6 +615,9 @@ function getSystemAlertsAdminData() {
         recipient: String(alert.Recipient || ''),
         subject: String(alert.Subject || ''),
         lastError: String(alert['Last Error'] || ''),
+        lastOccurredAt: alert['Last Occurred At']
+          ? String(alert['Last Occurred At'])
+          : '',
         notificationSent:
           String(alert.Status || '') ===
           V31_SYSTEM_ALERTS.STATUS.SENT,
@@ -807,7 +810,14 @@ function resolveSystemAlert(alertId, payload) {
       reason: String(input.reason || ''),
     })
   );
-  return { ok: true, alertId: resolved['Alert ID'] };
+  if (typeof invalidateSystemHealthCacheAfterRecovery_ === 'function') {
+    invalidateSystemHealthCacheAfterRecovery_();
+  }
+  return {
+    ok: true,
+    alertId: resolved['Alert ID'],
+    message: 'System alert resolved.',
+  };
 }
 
 /** Resolve only after an authoritative matching recovery succeeds. */

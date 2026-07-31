@@ -43,6 +43,8 @@ jobs:
             "V31_Finalization_Tests.gs"
             "V31_System_Alerts.gs"
             "V31_System_Alert_Tests.gs"
+            "V31_System_Health.gs"
+            "V31_System_Health_Tests.gs"
             "V31_Idempotency_Tests.gs"
             "V31_Trigger_Tests.gs"
             "V31_Production_Readiness_Tests.gs"

@@ -1,5 +1,18 @@
 # V3.1 Changelog
 
+## Delivery D — HR System Health and recovery UX
+
+- Added an HR Administration System Health dashboard with executive summary,
+  component cards, Recovery Center, and System Alert viewer.
+- Normal health load uses settings, trigger metadata, and Sheet counts with a
+  30-second cache; Deep Health Check is manual-only and keeps live Workspace
+  probes behind Sandbox confirmation.
+- Recovery buttons call existing Delivery B/C endpoints with explicit
+  confirmations and partial-success messaging. No employee/manager UI changes.
+- Added `V31_System_Health.gs`, `V31_System_Health_Tests.gs`, and admin CSS in
+  `Index.html`. Workspace Drive/Calendar/folder timing evidence remains
+  `Requires Daniel Sandbox`.
+
 ## Delivery C correction — recovery race and audit gaps
 
 - Finalization audit never treats cycle `Complete` as done unless the

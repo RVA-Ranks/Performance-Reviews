@@ -2,6 +2,28 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery D gate — System Health UX
+
+Run privately in Preview:
+
+```javascript
+runV31SystemHealthTests_();
+runV31SystemAlertTests_();
+runV31ProductionReadinessTests_();
+```
+
+Pure coverage includes healthy/empty Recovery Center, mixed blocking recovery
+items, level merge, durable-component classification, operational messaging
+without “Unknown Error”, and deep-check opt-in shape.
+
+Manual Admin checks: healthy empty state copy, Recovery Center actions open
+existing confirmations, Deep Health Check never auto-runs, alert viewer
+sorting/details/resolve, keyboard focus on buttons and detail JSON, tablet
+layout remains usable.
+
+**Requires Daniel Sandbox:** deep Drive/Calendar/folder/template probes and
+dashboard timing under concurrent Sheet load.
+
 ## Delivery C correction gate — recovery races
 
 Run privately in Preview:

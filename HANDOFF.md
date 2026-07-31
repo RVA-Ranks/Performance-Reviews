@@ -5,6 +5,16 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery D — HR System Health and recovery UX
+
+System Health is the HR Operations surface for Deliveries A–C durability.
+`getSystemHealthSummary()` builds component cards and a Recovery Center from
+cycle fields, trigger health, and unresolved `SystemAlerts`. Results cache for
+30 seconds. `runSystemHealthDeepCheck()` is manual-only and does not enable
+live Workspace probes unless Sandbox confirmation is provided. UI recovery
+buttons invoke existing recovery functions; they do not duplicate backend
+logic. Stop before Delivery E.
+
 ## Delivery C correction — recovery race and audit gaps
 
 Finalization audit never trusts cycle `Complete` alone: the deterministic
