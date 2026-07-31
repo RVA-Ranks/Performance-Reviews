@@ -7,6 +7,21 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery C commit 2 finalization durability
+
+Calendar creation and configuration now persist independent attempts. PDF
+generation uses a 30-minute claim window and deterministic canonical/legacy
+artifact recovery; ambiguous candidates require HR selection. Final packet
+distribution uses a separate 15-minute window and exactly the Employee,
+Manager, and cycle-HR recipients. Delivery Unknown is never automatically
+resent; HR can explicitly resend to the displayed list or mark delivery
+confirmed with evidence without sending email.
+
+`ReviewAuditLog` now places `Event ID` after `Timestamp`; migration preserves
+historical rows with blank IDs. Completion additionally requires the
+deterministic `FINALIZATION_COMPLETE:<cycleId>` audit event. Workspace-backed
+Calendar, Drive, Mail, and Sheet evidence remains **Requires Daniel Sandbox**.
+
 ## Delivery C commit 1 recovery controls
 
 Workflow email recovery uses durable per-component claims. Automatic outbox and

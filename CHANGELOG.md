@@ -1,5 +1,26 @@
 # V3.1 Changelog
 
+## Delivery C commit 2 — crash-safe Calendar and finalization
+
+- Added independent durable Calendar configuration claims and recovery state
+  while preserving event timing, guests, reminders, marker recovery, and
+  successful launch-recipient skip behavior.
+- Added separate `PDF_GENERATION_STALE_MINUTES=30` and
+  `FINAL_DISTRIBUTION_STALE_MINUTES=15` settings plus component errors,
+  completion timestamps, and recovery JSON.
+- Added canonical/legacy deterministic PDF recovery, ambiguity blocking and
+  alerts, exact Employee/Manager/cycle-HR packet validation, no automatic
+  resend after Delivery Unknown, explicit HR resend, and no-send evidence-based
+  confirmation.
+- Inserted `ReviewAuditLog` Event ID in the approved column order without
+  inventing historical IDs; ordinary events use UUIDs and finalization/manual
+  confirmation use deterministic IDs.
+- Added durable finalization-audit claims and made `Complete` depend on both
+  PDFs, Sent distribution, and `FINALIZATION_COMPLETE:<cycleId>`.
+- Added minimal HR controls, pure regression coverage, Sandbox fault points,
+  and commit-2 documentation. Workspace-backed evidence remains
+  `Requires Daniel Sandbox`.
+
 ## Delivery C commit 1 — durable workflow recovery and system alerts
 
 - Added configurable 15-minute workflow outbox and system-alert stale thresholds while preserving nonblank deployment settings.

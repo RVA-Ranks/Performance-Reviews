@@ -78,6 +78,48 @@ function runV31FinalizationTests_() {
       testSignatureWinnerClearsActiveClaim_
     )
   );
+  results.push(
+    runFinalCase_(
+      'Delivery C finalization headers are exact',
+      testDeliveryCFinalizationHeaders_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'PDF and distribution stale windows remain separate',
+      testDeliveryCStaleWindows_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'final packet recipient policy uses cycle participants only',
+      testFinalPacketRecipientPolicy_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'send or commit ambiguity is Delivery Unknown',
+      testFinalDistributionAmbiguityClassification_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'audit Event ID header order is exact',
+      testAuditEventIdHeaderOrder_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'manual distribution confirmation recovery JSON is exact',
+      testManualDistributionConfirmationDetails_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'audit Event ID migration is idempotent and preserves history',
+      testAuditEventIdMigrationPlan_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -204,36 +246,34 @@ function testSignaturesSetFinalizingNotComplete_() {
 
 function testCompletionGateRequiresComponents_() {
   const incomplete = {
+    'Cycle ID': 'C-GATE',
     Status: PR.CYCLE.FINALIZING,
     'Manager Review PDF ID': 'mgr-pdf',
+    'Manager PDF Status': V31.DELIVERY.SENT,
     'Self Evaluation PDF ID': '',
     'Final Distribution Status': V31.DELIVERY.PENDING,
+    'Finalization Audit Status': 'Pending',
   };
 
   assertFinal_(
-    !(
-      incomplete['Manager Review PDF ID'] &&
-      incomplete['Self Evaluation PDF ID'] &&
-      String(incomplete['Final Distribution Status']) ===
-        V31.DELIVERY.SENT
-    ),
+    !finalizationCompletionGate_(incomplete),
     'Incomplete components must fail the completion gate'
   );
 
   const complete = {
+    'Cycle ID': 'C-GATE',
     'Manager Review PDF ID': 'mgr-pdf',
+    'Manager PDF Status': V31.DELIVERY.SENT,
     'Self Evaluation PDF ID': 'self-pdf',
+    'Self PDF Status': V31.DELIVERY.SENT,
     'Final Distribution Status': V31.DELIVERY.SENT,
+    'Finalization Audit Status': 'Complete',
+    'Finalization Audit Event ID': 'FINALIZATION_COMPLETE:C-GATE',
   };
 
   assertFinal_(
-    !!(
-      complete['Manager Review PDF ID'] &&
-      complete['Self Evaluation PDF ID'] &&
-      String(complete['Final Distribution Status']) ===
-        V31.DELIVERY.SENT
-    ),
-    'Both PDF IDs and Sent distribution required'
+    finalizationCompletionGate_(complete),
+    'PDF components, Sent distribution, and durable audit are required'
   );
 }
 
@@ -348,12 +388,189 @@ function testPdfFileNameUsesCycleId_() {
   );
 
   assertFinal_(
-    name === 'Self-Evaluation - CYCLE-9.pdf',
+    name === 'AITHERAS_CYCLE-9_Self_Evaluation_FINAL.pdf',
     'PDF recovery name must key on cycle ID'
   );
   assertFinal_(
     name.indexOf('Employee') < 0,
     'PDF recovery name must not rely on employee display name'
+  );
+}
+
+function testDeliveryCFinalizationHeaders_() {
+  [
+    'Manager PDF Completed At',
+    'Manager PDF Last Error',
+    'Manager PDF Recovery Details JSON',
+    'Self PDF Completed At',
+    'Self PDF Last Error',
+    'Self PDF Recovery Details JSON',
+    'Final Distribution Last Error',
+    'Final Distribution Recovery Details JSON',
+    'Finalization Audit Status',
+    'Finalization Audit Attempt ID',
+    'Finalization Audit Started At',
+    'Finalization Audit Completed At',
+    'Finalization Audit Last Error',
+    'Finalization Audit Event ID',
+  ].forEach(function (header) {
+    assertFinal_(
+      V31.CYCLE_HEADERS.indexOf(header) >= 0,
+      'Missing exact Delivery C header: ' + header
+    );
+  });
+}
+
+function testDeliveryCStaleWindows_() {
+  const now = Date.now();
+  assertFinal_(
+    isClaimStaleMinutes_(new Date(now - 16 * 60000), 15, now),
+    'Final distribution must be stale after 15 minutes'
+  );
+  assertFinal_(
+    !isClaimStaleMinutes_(new Date(now - 16 * 60000), 30, now),
+    'PDF generation must remain fresh at 16 minutes'
+  );
+  assertFinal_(
+    isClaimStaleMinutes_(new Date(now - 31 * 60000), 30, now),
+    'PDF generation must be stale after 30 minutes'
+  );
+}
+
+function testFinalPacketRecipientPolicy_() {
+  const recipients = getFinalDistributionRecipients_(
+    {
+      'Employee Email': 'employee@aitheras.com',
+      'Manager Email': 'manager@aitheras.com',
+      'HR Email': 'cycle-hr@aitheras.com',
+    },
+    { ALLOWED_DOMAIN: 'aitheras.com' }
+  );
+  assertFinal_(
+    JSON.stringify(recipients) ===
+      JSON.stringify([
+        'employee@aitheras.com',
+        'manager@aitheras.com',
+        'cycle-hr@aitheras.com',
+      ]),
+    'Recipients must be exactly Employee, Manager, cycle HR'
+  );
+  let blocked = false;
+  try {
+    getFinalDistributionRecipients_(
+      {
+        'Employee Email': 'employee@aitheras.com',
+        'Manager Email': 'manager@aitheras.com',
+        'HR Email': '',
+      },
+      { ALLOWED_DOMAIN: 'aitheras.com' }
+    );
+  } catch (error) {
+    blocked = true;
+  }
+  assertFinal_(blocked, 'Blank cycle HR must block distribution');
+}
+
+function testFinalDistributionAmbiguityClassification_() {
+  assertFinal_(
+    classifyFinalDistributionCommit_(new Error('simulated'), true) ===
+      V31.DELIVERY.UNKNOWN,
+    'Send failure must be Delivery Unknown'
+  );
+  assertFinal_(
+    classifyFinalDistributionCommit_(null, false) ===
+      V31.DELIVERY.UNKNOWN,
+    'Commit mismatch must be Delivery Unknown'
+  );
+}
+
+function testAuditEventIdHeaderOrder_() {
+  assertFinal_(
+    JSON.stringify(PR.AUDIT_HEADERS) ===
+      JSON.stringify([
+        'Timestamp',
+        'Event ID',
+        'Cycle ID',
+        'Action',
+        'Actor Email',
+        'Previous Status',
+        'New Status',
+        'Details',
+      ]),
+    'ReviewAuditLog header order must match the approved schema'
+  );
+}
+
+function testManualDistributionConfirmationDetails_() {
+  const details = buildManualFinalDistributionConfirmationDetails_(
+    'hr@aitheras.com',
+    new Date('2026-07-31T12:00:00.000Z'),
+    'Verified Mail log.',
+    'attempt-1',
+    ['employee@aitheras.com', 'manager@aitheras.com', 'hr@aitheras.com']
+  );
+  assertFinal_(
+    details.schemaVersion === 1 &&
+      details.resolution === 'manual-confirmation' &&
+      details.confirmedBy === 'hr@aitheras.com' &&
+      details.priorStatus === V31.DELIVERY.UNKNOWN &&
+      details.evidenceNote === 'Verified Mail log.' &&
+      details.originalAttemptId === 'attempt-1',
+    'Manual confirmation recovery JSON fields must remain exact'
+  );
+  assertFinal_(
+    V31_FINALIZATION.DISTRIBUTION_CONFIRM_EVENT_PREFIX + 'C-1' ===
+      'FINAL_DISTRIBUTION_CONFIRMED:C-1',
+    'Manual confirmation audit event ID must be deterministic'
+  );
+}
+
+function testAuditEventIdMigrationPlan_() {
+  const legacy = planReviewAuditHeaderMigration_([
+    'Timestamp',
+    'Cycle ID',
+    'Action',
+    'Actor Email',
+    'Previous Status',
+    'New Status',
+    'Details',
+  ]);
+  assertFinal_(
+    legacy.action === 'insert' &&
+      legacy.insertAfterColumn === 1 &&
+      legacy.historicalEventIds === 'blank',
+    'Legacy migration must insert a blank Event ID after Timestamp'
+  );
+  const migrated = planReviewAuditHeaderMigration_(PR.AUDIT_HEADERS);
+  assertFinal_(
+    migrated.action === 'none',
+    'Rerunning the approved header migration must be idempotent'
+  );
+  const appended = planReviewAuditHeaderMigration_([
+    'Timestamp',
+    'Cycle ID',
+    'Action',
+    'Actor Email',
+    'Previous Status',
+    'New Status',
+    'Details',
+    'Event ID',
+  ]);
+  assertFinal_(
+    appended.action === 'move' &&
+      appended.sourceColumn === 8 &&
+      appended.historicalEventIds === 'preserve',
+    'An appended Event ID must move without losing existing values'
+  );
+}
+
+/**
+ * Requires Daniel Sandbox: exercises Sheet migration, historical blank Event
+ * IDs, Drive orphan recovery/ambiguity, Mail fault injection, and audit retry.
+ */
+function runV31DeliveryCCommit2SandboxTests_() {
+  throw new Error(
+    'Requires Daniel Sandbox. Enable and execute the documented Workspace-backed cases manually.'
   );
 }
 

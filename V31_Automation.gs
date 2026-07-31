@@ -38,6 +38,8 @@ const V31 = Object.freeze({
     SYSTEM_ADMIN_EMAIL: 'aitheras-hr@aitheras.com',
     OUTBOX_STALE_MINUTES: '15',
     SYSTEM_ALERT_STALE_MINUTES: '15',
+    FINAL_DISTRIBUTION_STALE_MINUTES: '15',
+    PDF_GENERATION_STALE_MINUTES: '30',
     SYSTEM_ALERT_RECIPIENT: 'aitheras-hr@aitheras.com',
     SIGNATURE_RECOVERY_FOLDER_ID: '',
     AUTOMATION_TRIGGER_UNIQUE_ID: '',
@@ -63,6 +65,12 @@ const V31 = Object.freeze({
     'Calendar Created At',
     'Calendar Attempt ID',
     'Calendar Started At',
+    'Calendar Configuration Status',
+    'Calendar Configuration Attempt ID',
+    'Calendar Configuration Started At',
+    'Calendar Configuration Completed At',
+    'Calendar Configuration Last Error',
+    'Calendar Configuration Recovery Details JSON',
     'Manager Email Status',
     'Manager Email Sent At',
     'Manager Email Attempt ID',
@@ -81,13 +89,27 @@ const V31 = Object.freeze({
     'Manager PDF Status',
     'Manager PDF Attempt ID',
     'Manager PDF Started At',
+    'Manager PDF Completed At',
+    'Manager PDF Last Error',
+    'Manager PDF Recovery Details JSON',
     'Self PDF Status',
     'Self PDF Attempt ID',
     'Self PDF Started At',
+    'Self PDF Completed At',
+    'Self PDF Last Error',
+    'Self PDF Recovery Details JSON',
     'Final Distribution Status',
     'Final Distribution Attempt ID',
     'Final Distribution Started At',
     'Final Distribution Sent At',
+    'Final Distribution Last Error',
+    'Final Distribution Recovery Details JSON',
+    'Finalization Audit Status',
+    'Finalization Audit Attempt ID',
+    'Finalization Audit Started At',
+    'Finalization Audit Completed At',
+    'Finalization Audit Last Error',
+    'Finalization Audit Event ID',
     'Finalization Last Error',
     'Finalization Attempt Count',
     'Manager Signature Status',
@@ -326,6 +348,9 @@ function ensureV31DataModel_() {
   const settingsSheet = ss.getSheetByName(PR.SHEETS.SETTINGS);
   const assignments = ss.getSheetByName(PR.SHEETS.ASSIGNMENTS);
   const cycles = ss.getSheetByName(PR.SHEETS.CYCLES);
+  const audit =
+    ss.getSheetByName(PR.SHEETS.AUDIT) ||
+    ss.insertSheet(PR.SHEETS.AUDIT);
   const log =
     ss.getSheetByName(V31.AUTOMATION_SHEET) ||
     ss.insertSheet(V31.AUTOMATION_SHEET);
@@ -333,6 +358,7 @@ function ensureV31DataModel_() {
   ensureHeaders_(settingsSheet, ['Key', 'Value']);
   ensureHeaders_(assignments, V31.ASSIGNMENT_HEADERS);
   ensureHeaders_(cycles, V31.CYCLE_HEADERS);
+  ensureReviewAuditEventIdHeader_(audit);
   ensureHeaders_(log, V31.LOG_HEADERS);
 
   const current = readSettings_(settingsSheet);
@@ -341,6 +367,8 @@ function ensureV31DataModel_() {
     const populateWhenBlank = [
       'OUTBOX_STALE_MINUTES',
       'SYSTEM_ALERT_STALE_MINUTES',
+      'FINAL_DISTRIBUTION_STALE_MINUTES',
+      'PDF_GENERATION_STALE_MINUTES',
       'SYSTEM_ALERT_RECIPIENT',
     ].indexOf(key) >= 0;
     if (!(key in current)) {
@@ -2729,6 +2757,8 @@ function buildProductionReadinessReport_(
     'SYSTEM_ADMIN_EMAIL',
     'OUTBOX_STALE_MINUTES',
     'SYSTEM_ALERT_STALE_MINUTES',
+    'FINAL_DISTRIBUTION_STALE_MINUTES',
+    'PDF_GENERATION_STALE_MINUTES',
     'SYSTEM_ALERT_RECIPIENT',
     'SIGNATURE_RECOVERY_FOLDER_ID',
     'AUTOMATION_MODE',
@@ -2809,6 +2839,14 @@ function buildProductionReadinessReport_(
     [
       'SYSTEM_ALERT_STALE_MINUTES',
       settings.SYSTEM_ALERT_STALE_MINUTES,
+    ],
+    [
+      'FINAL_DISTRIBUTION_STALE_MINUTES',
+      settings.FINAL_DISTRIBUTION_STALE_MINUTES,
+    ],
+    [
+      'PDF_GENERATION_STALE_MINUTES',
+      settings.PDF_GENERATION_STALE_MINUTES,
     ],
   ].forEach(function (entry) {
     const minutes = Number(entry[1]);
@@ -3602,6 +3640,12 @@ function createAutomatedReviewCycle_(candidate) {
     'Calendar Created At': '',
     'Calendar Attempt ID': '',
     'Calendar Started At': '',
+    'Calendar Configuration Status': '',
+    'Calendar Configuration Attempt ID': '',
+    'Calendar Configuration Started At': '',
+    'Calendar Configuration Completed At': '',
+    'Calendar Configuration Last Error': '',
+    'Calendar Configuration Recovery Details JSON': '',
     'Manager Email Status': '',
     'Manager Email Sent At': '',
     'Manager Email Attempt ID': '',
@@ -3620,12 +3664,26 @@ function createAutomatedReviewCycle_(candidate) {
     'Manager PDF Status': '',
     'Manager PDF Attempt ID': '',
     'Manager PDF Started At': '',
+    'Manager PDF Completed At': '',
+    'Manager PDF Last Error': '',
+    'Manager PDF Recovery Details JSON': '',
     'Self PDF Status': '',
     'Self PDF Attempt ID': '',
     'Self PDF Started At': '',
+    'Self PDF Completed At': '',
+    'Self PDF Last Error': '',
+    'Self PDF Recovery Details JSON': '',
     'Final Distribution Status': '',
     'Final Distribution Started At': '',
     'Final Distribution Sent At': '',
+    'Final Distribution Last Error': '',
+    'Final Distribution Recovery Details JSON': '',
+    'Finalization Audit Status': '',
+    'Finalization Audit Attempt ID': '',
+    'Finalization Audit Started At': '',
+    'Finalization Audit Completed At': '',
+    'Finalization Audit Last Error': '',
+    'Finalization Audit Event ID': '',
     'Finalization Last Error': '',
     'Finalization Attempt Count': 0,
     'Compensation Decision':
@@ -3724,6 +3782,23 @@ function applyV31DefaultsToCycle_(
     cycle['Calendar Attempt ID'] || '';
   cycle['Calendar Started At'] =
     cycle['Calendar Started At'] || '';
+  cycle['Calendar Configuration Status'] =
+    cycle['Calendar Configuration Status'] ||
+    (cycle['Calendar Status'] === V31.CALENDAR.CONFIGURED
+      ? V31.CALENDAR.CONFIGURED
+      : cycle['Calendar Event ID']
+      ? V31.CALENDAR.CREATED
+      : V31.CALENDAR.PENDING);
+  cycle['Calendar Configuration Attempt ID'] =
+    cycle['Calendar Configuration Attempt ID'] || '';
+  cycle['Calendar Configuration Started At'] =
+    cycle['Calendar Configuration Started At'] || '';
+  cycle['Calendar Configuration Completed At'] =
+    cycle['Calendar Configuration Completed At'] || '';
+  cycle['Calendar Configuration Last Error'] =
+    cycle['Calendar Configuration Last Error'] || '';
+  cycle['Calendar Configuration Recovery Details JSON'] =
+    cycle['Calendar Configuration Recovery Details JSON'] || '';
 
   // Per-recipient email status/attempt fields. A cycle that already has a
   // Sent At timestamp from before status fields existed defaults to Sent.
@@ -3782,6 +3857,13 @@ function applyV31DefaultsToCycle_(
     cycle['Manager PDF Attempt ID'] || '';
   cycle['Manager PDF Started At'] =
     cycle['Manager PDF Started At'] || '';
+  cycle['Manager PDF Completed At'] =
+    cycle['Manager PDF Completed At'] ||
+    (cycle['Manager Review PDF ID'] ? cycle['Updated At'] || '' : '');
+  cycle['Manager PDF Last Error'] =
+    cycle['Manager PDF Last Error'] || '';
+  cycle['Manager PDF Recovery Details JSON'] =
+    cycle['Manager PDF Recovery Details JSON'] || '';
   cycle['Self PDF Status'] =
     cycle['Self PDF Status'] ||
     (cycle['Self Evaluation PDF ID']
@@ -3791,6 +3873,13 @@ function applyV31DefaultsToCycle_(
     cycle['Self PDF Attempt ID'] || '';
   cycle['Self PDF Started At'] =
     cycle['Self PDF Started At'] || '';
+  cycle['Self PDF Completed At'] =
+    cycle['Self PDF Completed At'] ||
+    (cycle['Self Evaluation PDF ID'] ? cycle['Updated At'] || '' : '');
+  cycle['Self PDF Last Error'] =
+    cycle['Self PDF Last Error'] || '';
+  cycle['Self PDF Recovery Details JSON'] =
+    cycle['Self PDF Recovery Details JSON'] || '';
   cycle['Final Distribution Status'] =
     cycle['Final Distribution Status'] ||
     (cycle['Final Distribution Sent At']
@@ -3802,6 +3891,22 @@ function applyV31DefaultsToCycle_(
     cycle['Final Distribution Started At'] || '';
   cycle['Final Distribution Sent At'] =
     cycle['Final Distribution Sent At'] || '';
+  cycle['Final Distribution Last Error'] =
+    cycle['Final Distribution Last Error'] || '';
+  cycle['Final Distribution Recovery Details JSON'] =
+    cycle['Final Distribution Recovery Details JSON'] || '';
+  cycle['Finalization Audit Status'] =
+    cycle['Finalization Audit Status'] || 'Pending';
+  cycle['Finalization Audit Attempt ID'] =
+    cycle['Finalization Audit Attempt ID'] || '';
+  cycle['Finalization Audit Started At'] =
+    cycle['Finalization Audit Started At'] || '';
+  cycle['Finalization Audit Completed At'] =
+    cycle['Finalization Audit Completed At'] || '';
+  cycle['Finalization Audit Last Error'] =
+    cycle['Finalization Audit Last Error'] || '';
+  cycle['Finalization Audit Event ID'] =
+    cycle['Finalization Audit Event ID'] || '';
   cycle['Finalization Last Error'] =
     cycle['Finalization Last Error'] || '';
   cycle['Finalization Attempt Count'] =
@@ -4140,13 +4245,27 @@ function getReviewLaunchComponentSummary_(cycle) {
         : V31.DELIVERY.PENDING)
   );
   const calendarConfigWarning = hasCalendarConfigWarning_(cycle);
+  const calendarConfigurationStatus = String(
+    cycle['Calendar Configuration Status'] ||
+      (calendarStatus === V31.CALENDAR.CONFIGURED
+        ? V31.CALENDAR.CONFIGURED
+        : cycle['Calendar Event ID']
+        ? V31.CALENDAR.CREATED
+        : V31.CALENDAR.PENDING)
+  );
 
   return {
     calendar: !!cycle['Calendar Event ID'],
     calendarStatus: calendarStatus,
     calendarUnknown: calendarStatus === V31.CALENDAR.UNKNOWN,
     calendarConfigured:
-      calendarStatus === V31.CALENDAR.CONFIGURED,
+      calendarConfigurationStatus === V31.CALENDAR.CONFIGURED,
+    calendarConfigurationStatus: calendarConfigurationStatus,
+    calendarConfigurationUnknown:
+      calendarConfigurationStatus === V31.CALENDAR.UNKNOWN,
+    calendarConfigurationLastError: String(
+      cycle['Calendar Configuration Last Error'] || ''
+    ),
     calendarConfigWarning: calendarConfigWarning,
     managerEmail: managerStatus === V31.DELIVERY.SENT,
     managerEmailStatus: managerStatus,
@@ -4657,7 +4776,7 @@ function commitCalendarCreatedStep_(
  * later retry reaches Configured. The warning is not cleared by
  * successful email steps.
  */
-function configureCalendarLaunchStepBestEffort_(cycleId, event) {
+function configureCalendarLaunchStepBestEffortLegacy_(cycleId, event) {
   if (!event) return;
 
   try {
@@ -4748,6 +4867,22 @@ function runCalendarLaunchStep_(cycleId, allowUnknownResend) {
       event,
       error
     );
+
+    if (
+      !error &&
+      (!event ||
+        String(committed['Calendar Event ID'] || '') !==
+          String(event.getId()))
+    ) {
+      return {
+        action: 'error',
+        reason: 'calendar-commit-unknown',
+        error: new Error(
+          'Calendar event exists but its ID could not be durably committed.'
+        ),
+        cycle: committed,
+      };
+    }
 
     if (error) {
       return {
@@ -4985,6 +5120,7 @@ function launchReviewCycleCommunications_(
  */
 function retryReviewLaunch(cycleId, options) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error(
@@ -5133,6 +5269,7 @@ function resolveReviewCalendarEvent_(cycle, persistLookupError) {
  */
 function retryReviewCalendarConfiguration(cycleId) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error(
@@ -5189,7 +5326,8 @@ function retryReviewCalendarConfiguration(cycleId) {
 
   configureCalendarLaunchStepBestEffort_(
     cycleId,
-    resolved.event
+    resolved.event,
+    true
   );
 
   cycle = findCycle_(cycleId).object;
@@ -5225,6 +5363,7 @@ function retryReviewCalendarConfiguration(cycleId) {
  */
 function rebuildReviewCalendarEvent(cycleId) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error(
@@ -5312,7 +5451,8 @@ function rebuildReviewCalendarEvent(cycleId) {
 
     configureCalendarLaunchStepBestEffort_(
       cycleId,
-      resolved.event
+      resolved.event,
+      true
     );
 
     const after = findCycle_(cycleId).object;
@@ -5343,7 +5483,7 @@ function rebuildReviewCalendarEvent(cycleId) {
     error = err;
   }
 
-  commitCalendarCreatedStep_(
+  const committed = commitCalendarCreatedStep_(
     cycleId,
     claim.attemptId,
     event,
@@ -5355,20 +5495,32 @@ function rebuildReviewCalendarEvent(cycleId) {
       'Calendar rebuild failed: ' + String(error.message || error)
     );
   }
+  if (
+    !event ||
+    String(committed['Calendar Event ID'] || '') !== String(event.getId())
+  ) {
+    throw new Error(
+      'Calendar rebuild is Delivery Unknown because the event ID commit could not be verified.'
+    );
+  }
 
-  configureCalendarLaunchStepBestEffort_(cycleId, event);
+  configureCalendarLaunchStepBestEffort_(cycleId, event, true);
 
   const after = findCycle_(cycleId).object;
   const configured =
     String(after['Calendar Status']) === V31.CALENDAR.CONFIGURED;
 
-  audit_(
+  auditIdempotent_(
     cycleId,
     'Calendar event rebuilt',
     email,
     '',
     String(after['Calendar Event ID'] || ''),
-    JSON.stringify({ configured: configured })
+    JSON.stringify({ configured: configured }),
+    'CALENDAR_REBUILT:' +
+      String(cycleId) +
+      ':' +
+      String(claim.attemptId)
   );
 
   return {
@@ -7122,6 +7274,7 @@ function resendReviewLaunchRecipient_(cycle, recipient) {
  */
 function resendReviewLaunchEmails(cycleId, recipients) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error(
@@ -7195,6 +7348,7 @@ function resendReviewLaunchEmails(cycleId, recipients) {
  */
 function reconcileLaunchDelivery(cycleId, component, action) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error(

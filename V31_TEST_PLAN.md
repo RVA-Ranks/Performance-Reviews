@@ -2,6 +2,25 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery C commit 2 gate — Calendar and finalization
+
+Run `runV31FinalizationTests_()`, `runV31IdempotencyTests_()`, and
+`runV31ProductionReadinessTests_()` in Preview. The pure checks cover approved
+headers and audit order, separate 15/30-minute stale windows, canonical PDF
+names plus legacy compatibility, exact final-packet recipients, ambiguity
+classification, launch recipient skipping, and the completion gate requiring
+the durable finalization audit.
+
+**Requires Daniel Sandbox:** idempotent ReviewAuditLog column insertion with
+historical rows remaining blank; concurrent Calendar create/configure and
+marker recovery; Drive orphan recovery and multiple-candidate reconciliation;
+Mail send/commit fault injection; blank/invalid cycle-HR blocking; manual
+confirm no-send evidence; explicit Unknown resend recipient binding; audit
+append/commit interruption and retry; SystemAlert verifier/auto-resolution;
+and final end-to-end completion. Capture cycle IDs, attempt/event/file IDs,
+recipient lists, timestamps, alert rows, logs, and cleanup evidence. Do not
+claim Workspace verification from local static checks.
+
 ## Delivery C commit 1 gate — outbox and system alerts
 
 Run `runV31SystemAlertTests_()` and

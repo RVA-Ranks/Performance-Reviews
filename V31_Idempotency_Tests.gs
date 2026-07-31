@@ -168,6 +168,12 @@ function runV31IdempotencyTests_() {
   );
   results.push(
     runIdemCase_(
+      'calendar configuration has an independent stale-claim planner',
+      testCalendarConfigurationPlanner_
+    )
+  );
+  results.push(
+    runIdemCase_(
       'PDF and signature filenames are deterministic for orphan recovery',
       testDeterministicArtifactFileNames_
     )
@@ -1122,7 +1128,7 @@ function testCalendarConfigWarningSurvivesEmailSuccess_() {
 function testDeterministicArtifactFileNames_() {
   assertIdem_(
     buildReviewPdfFileName_('C-100', 'Manager Review') ===
-      'Manager Review - C-100.pdf',
+      'AITHERAS_C-100_Manager_Review_FINAL.pdf',
     'PDF filename must include cycle ID for orphan recovery'
   );
   assertIdem_(
@@ -1132,8 +1138,50 @@ function testDeterministicArtifactFileNames_() {
   );
 }
 
+function testCalendarConfigurationPlanner_() {
+  assertIdem_(
+    decideCalendarConfigurationAction_(
+      V31.CALENDAR.CONFIGURING,
+      new Date(),
+      false,
+      false
+    ) === 'in-progress',
+    'A fresh configuration claim must not be duplicated'
+  );
+  assertIdem_(
+    decideCalendarConfigurationAction_(
+      V31.CALENDAR.CONFIGURING,
+      new Date(0),
+      false,
+      true
+    ) === 'mark-unknown',
+    'A stale configuration claim must become Delivery Unknown'
+  );
+  assertIdem_(
+    decideCalendarConfigurationAction_(
+      V31.CALENDAR.UNKNOWN,
+      '',
+      false,
+      true
+    ) === 'unknown' &&
+      decideCalendarConfigurationAction_(
+        V31.CALENDAR.UNKNOWN,
+        '',
+        true,
+        true
+      ) === 'configure',
+    'Only an explicit HR recovery may reclaim configuration Unknown'
+  );
+}
+
 function testWorkflowAndSignatureHeadersPresent_() {
   [
+    'Calendar Configuration Status',
+    'Calendar Configuration Attempt ID',
+    'Calendar Configuration Started At',
+    'Calendar Configuration Completed At',
+    'Calendar Configuration Last Error',
+    'Calendar Configuration Recovery Details JSON',
     'Final Distribution Attempt ID',
     'Ready Notification Status',
     'Ready Notification Last Error',
@@ -1156,4 +1204,9 @@ function testWorkflowAndSignatureHeadersPresent_() {
       'Missing migrated header: ' + header
     );
   });
+  assertIdem_(
+    V31.SETTINGS_DEFAULTS.FINAL_DISTRIBUTION_STALE_MINUTES === '15' &&
+      V31.SETTINGS_DEFAULTS.PDF_GENERATION_STALE_MINUTES === '30',
+    'Delivery C stale settings must retain independent defaults'
+  );
 }

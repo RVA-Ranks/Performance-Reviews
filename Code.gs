@@ -127,6 +127,7 @@ const PR = Object.freeze({
 
   AUDIT_HEADERS: [
     'Timestamp',
+    'Event ID',
     'Cycle ID',
     'Action',
     'Actor Email',
@@ -278,7 +279,7 @@ function setupReviewSystem_() {
     'Active',
   ]);
   ensureHeaders_(cycles, PR.CYCLE_HEADERS);
-  ensureHeaders_(audit, PR.AUDIT_HEADERS);
+  ensureReviewAuditEventIdHeader_(audit);
 
   // V3.1 adds automation, calendar, compensation-task, and guidance fields.
   ensureV31DataModel_();
@@ -2765,7 +2766,7 @@ function updateCycleReadiness_(cycle) {
  * Uses short locks around claim/result persistence; never holds the
  * global lock during Drive/Mail calls.
  */
-function finalizeReviewCycle_(cycleId, options) {
+function finalizeReviewCycleLegacy_(cycleId, options) {
   const opts = options || {};
   const allowUnknownResend = !!opts.allowUnknownResend;
 
@@ -2890,6 +2891,7 @@ function finalizeReviewCycle_(cycleId, options) {
 
 function retryReviewFinalization(cycleId, options) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error(
@@ -2915,7 +2917,7 @@ function retryReviewFinalization(cycleId, options) {
   return result;
 }
 
-function ensureFinalPdfComponent_(
+function ensureFinalPdfComponentLegacy_(
   cycleId,
   label,
   idField,
@@ -3074,7 +3076,7 @@ function ensureFinalPdfComponent_(
 /**
  * Deterministic PDF artifact name used for orphan recovery.
  */
-function buildReviewPdfFileName_(cycleId, documentType) {
+function buildReviewPdfFileNameLegacy_(cycleId, documentType) {
   return (
     String(documentType) +
     ' - ' +
@@ -3087,7 +3089,7 @@ function buildReviewPdfFileName_(cycleId, documentType) {
  * Search the review folder for an existing PDF created for this
  * cycle/document before regenerating another copy.
  */
-function findExistingReviewPdfId_(cycleId, documentType) {
+function findExistingReviewPdfIdLegacy_(cycleId, documentType) {
   const matches = listMatchingReviewPdfArtifacts_(
     cycleId,
     documentType
@@ -3110,7 +3112,7 @@ function findExistingReviewPdfId_(cycleId, documentType) {
   return '';
 }
 
-function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
+function listMatchingReviewPdfArtifactsLegacy_(cycleId, documentType) {
   const settings = getSettings_();
   const folderId = String(settings.REVIEW_FOLDER_ID || '');
   const folder = DriveApp.getFolderById(folderId);
@@ -3146,7 +3148,7 @@ function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
   return matches;
 }
 
-function assertValidReviewPdfFile_(
+function assertValidReviewPdfFileLegacy_(
   file,
   cycleId,
   documentType,
@@ -3268,6 +3270,7 @@ function reconcileFinalPdf(
   options
 ) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error('Only HR may reconcile final PDFs.');
@@ -3311,6 +3314,17 @@ function reconcileFinalPdf(
       assertPdfReconciliationAllowed_(cycle, documentType);
       cycle[fields.idField] = file.getId();
       cycle[fields.statusField] = V31.DELIVERY.SENT;
+      cycle[fields.completedField] = new Date();
+      cycle[fields.attemptField] = '';
+      cycle[fields.startedField] = '';
+      cycle[fields.errorField] = '';
+      cycle[fields.recoveryField] = JSON.stringify({
+        schemaVersion: 1,
+        resolution: 'hr-selected-artifact',
+        selectedFileId: file.getId(),
+        reconciledBy: email,
+        reconciledAt: new Date().toISOString(),
+      });
       cycle['Finalization Last Error'] = '';
       cycle['Updated At'] = new Date();
       writeCycle_(freshLocation.rowNumber, cycle);
@@ -3324,6 +3338,20 @@ function reconcileFinalPdf(
       documentType,
       file.getId(),
       action
+    );
+    safelyAutoResolveSystemAlertByKey_(
+      buildSystemAlertKey_(
+        cycleId,
+        'PDF',
+        String(documentType) + ':ambiguous'
+      ),
+      function () {
+        const fresh = findCycle_(cycleId).object;
+        return (
+          String(fresh[fields.idField] || '') === String(file.getId()) &&
+          String(fresh[fields.statusField] || '') === V31.DELIVERY.SENT
+        );
+      }
     );
 
     return {
@@ -3361,6 +3389,14 @@ function reconcileFinalPdf(
       cycle[fields.statusField] = V31.DELIVERY.PENDING;
       cycle[fields.attemptField] = '';
       cycle[fields.startedField] = '';
+      cycle[fields.completedField] = '';
+      cycle[fields.errorField] = '';
+      cycle[fields.recoveryField] = JSON.stringify({
+        schemaVersion: 1,
+        resolution: 'hr-confirmed-regeneration',
+        confirmedBy: email,
+        confirmedAt: new Date().toISOString(),
+      });
       cycle['Finalization Last Error'] = '';
       cycle['Updated At'] = new Date();
       writeCycle_(freshLocation.rowNumber, cycle);
@@ -3398,7 +3434,7 @@ function reconcileFinalPdf(
   );
 }
 
-function getFinalPdfFields_(documentType) {
+function getFinalPdfFieldsLegacy_(documentType) {
   if (documentType === PR.TYPE.MANAGER) {
     return {
       label: 'Manager Review',
@@ -3424,6 +3460,7 @@ function getFinalPdfFields_(documentType) {
 
 function listFinalPdfCandidates(cycleId, documentType) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error('Only HR may list final PDF candidates.');
@@ -4008,6 +4045,7 @@ function organizeReconciledSignatureCandidate_(
  */
 function reconcileSignature(cycleId, role, action, options) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error('Only HR may reconcile signatures.');
@@ -4360,6 +4398,7 @@ function reconcileSignature(cycleId, role, action, options) {
 
 function listSignatureCandidates(cycleId, role) {
   const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
   if (!isHrUser_(email)) {
     throw new Error('Only HR may list signature candidates.');
@@ -4374,7 +4413,7 @@ function listSignatureCandidates(cycleId, role) {
   };
 }
 
-function ensureFinalDistribution_(cycleId, allowUnknownResend) {
+function ensureFinalDistributionLegacy_(cycleId, allowUnknownResend) {
   const claim = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
@@ -4513,6 +4552,9 @@ function getFinalizationSummary_(cycle) {
   const distribution = String(
     cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
   );
+  const finalizationAudit = String(
+    cycle['Finalization Audit Status'] || 'Pending'
+  );
 
   return {
     managerPdf: managerPdf,
@@ -4521,6 +4563,18 @@ function getFinalizationSummary_(cycle) {
     managerPdfUnknown: managerPdf === V31.DELIVERY.UNKNOWN,
     selfPdfUnknown: selfPdf === V31.DELIVERY.UNKNOWN,
     distributionUnknown: distribution === V31.DELIVERY.UNKNOWN,
+    distributionRecipients: [
+      normalizeEmail_(cycle['Employee Email']),
+      normalizeEmail_(cycle['Manager Email']),
+      normalizeEmail_(cycle['HR Email']),
+    ],
+    distributionLastError: String(
+      cycle['Final Distribution Last Error'] || ''
+    ),
+    finalizationAudit: finalizationAudit,
+    finalizationAuditEventId: String(
+      cycle['Finalization Audit Event ID'] || ''
+    ),
     managerPdfId: String(cycle['Manager Review PDF ID'] || ''),
     selfPdfId: String(cycle['Self Evaluation PDF ID'] || ''),
     lastError: String(cycle['Finalization Last Error'] || ''),
@@ -4538,6 +4592,7 @@ function describeFinalizationStatus_(cycle) {
     'Manager PDF: ' + summary.managerPdf,
     'Self PDF: ' + summary.selfPdf,
     'Distribution: ' + summary.distribution,
+    'Finalization audit: ' + summary.finalizationAudit,
   ].join('; ');
 }
 
@@ -5249,18 +5304,20 @@ function sendCombinedSignatureEmailBody_(cycle, role) {
   );
 }
 
-function sendCompletedPacket_(cycle) {
+function sendCompletedPacket_(cycle, recipients) {
   const htmlBody =
     '<p>The performance review cycle for <strong>' +
     htmlEscape_(cycle['Employee Name']) +
     '</strong> is complete.</p><p>The signed manager review and employee self-evaluation are attached.</p>';
 
   MailApp.sendEmail({
-    to: uniqueEmails_([
-      cycle['Manager Email'],
-      cycle['Employee Email'],
-      cycle['HR Email'],
-    ]).join(','),
+    to: uniqueEmails_(
+      recipients || [
+        cycle['Employee Email'],
+        cycle['Manager Email'],
+        cycle['HR Email'],
+      ]
+    ).join(','),
     subject:
       'Completed performance review: ' +
       cycle['Employee Name'],
@@ -5493,13 +5550,16 @@ function audit_(
   actorEmail,
   previousStatus,
   newStatus,
-  details
+  details,
+  eventId
 ) {
+  assertReviewAuditSchema_();
   appendObject_(
     PR.SHEETS.AUDIT,
     PR.AUDIT_HEADERS,
     {
       Timestamp: new Date(),
+      'Event ID': String(eventId || Utilities.getUuid()),
       'Cycle ID': cycleId,
       Action: action,
       'Actor Email': actorEmail,

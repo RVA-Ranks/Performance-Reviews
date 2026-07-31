@@ -5,6 +5,25 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery C commit 2 — crash-safe finalization
+
+Calendar event creation remains independently durable from tag/reminder
+configuration. Configuration now has its own status, attempt, timestamps,
+error, and recovery JSON; stale or ambiguous work becomes `Delivery Unknown`
+and is routed through the existing HR controls and durable `SystemAlerts`.
+
+Manager/Self PDFs use canonical cycle-based names while recognizing the legacy
+cycle-based names for recovery. A single deterministic artifact is recovered;
+multiple matches require HR reconciliation. Final distribution is one MailApp
+packet call to exactly Employee, Manager, and cycle HR. It has a separate
+15-minute claim window, while PDF generation uses 30 minutes. Unknown delivery
+cannot be retried by ordinary finalization.
+
+`ReviewAuditLog` includes `Event ID` in the approved second column without
+backfilling historical IDs. A cycle may become `Complete` only after both PDFs,
+Sent final distribution, and the deterministic finalization audit event are
+durably complete. Real Workspace evidence remains **Requires Daniel Sandbox**.
+
 ## Delivery C commit 1 — durable operational alerts
 
 `SystemAlerts` is now the protected append-only incident ledger. Deterministic

@@ -2071,6 +2071,10 @@ function renderCycleHeaderActions(cycle) {
       if (cycle.v31.finalization && (cycle.v31.finalization.managerPdfUnknown || cycle.v31.finalization.selfPdfUnknown)) {
         html += '<button class="button outline" onclick="openPdfReconcileModal()">Reconcile PDF</button>';
       }
+      if (cycle.v31.finalization && cycle.v31.finalization.distributionUnknown) {
+        html += '<button class="button outline" onclick="openFinalDistributionConfirmModal()">Mark Distribution Confirmed</button>';
+        html += '<button class="button outline" onclick="openFinalDistributionResendModal()">Explicitly Resend Final Packet</button>';
+      }
     }
     if (cycle.v31.signatureClaims && cycle.v31.signatureClaims.reconciliationRequired) {
       html += '<button class="button outline" onclick="openSignatureReconcileModal()">Reconcile Signature</button>';
@@ -2171,14 +2175,13 @@ async function rebuildCalendarEvent() {
 async function retryFinalization() {
   openModal({
     title: 'Retry finalization?',
-    body: '<p>This resumes PDF generation and final packet distribution. Existing PDF IDs are reused. If final email delivery is unknown, confirm recipients did not already receive it before enabling a resend.</p><label style="display:block;margin-top:12px;"><input type="checkbox" id="allowUnknownFinalResend"> Allow resend if distribution is Delivery Unknown</label>',
+    body: '<p>This resumes only safe unfinished steps. Existing PDFs are recovered by deterministic name. Delivery Unknown final packets are never automatically resent.</p>',
     confirmLabel: 'Retry Finalization',
     tone: 'primary',
     onConfirm: async function() {
-      const allowUnknown = !!(document.getElementById('allowUnknownFinalResend') && document.getElementById('allowUnknownFinalResend').checked);
       closeModal();
       try {
-        const result = await server('retryReviewFinalization', currentCycle.cycleId, { allowUnknownResend: allowUnknown });
+        const result = await server('retryReviewFinalization', currentCycle.cycleId);
         showToast(result.ok ? 'success' : 'error', 'Finalization', result.message);
         await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
       } catch (error) {
@@ -2186,6 +2189,71 @@ async function retryFinalization() {
       }
     }
   });
+}
+
+async function openFinalDistributionConfirmModal() {
+  try {
+    const plan = await server('getFinalDistributionRecoveryPlan', currentCycle.cycleId);
+    openModal({
+      title: 'Mark final packet confirmed?',
+      body: '<p>This sends no email. Use only with evidence that the original final packet was delivered.</p><p><strong>Exact recipients:</strong></p><ul>' +
+        plan.recipients.map(function(email) { return '<li>' + escapeHtml(email) + '</li>'; }).join('') +
+        '</ul><label>Evidence note *<br><textarea id="finalDistributionEvidence" rows="4"></textarea></label>',
+      confirmLabel: 'Mark Confirmed — No Send',
+      tone: 'warning',
+      checks: ['I verified delivery evidence for the original attempt.'],
+      onConfirm: async function() {
+        const note = String((document.getElementById('finalDistributionEvidence') || {}).value || '').trim();
+        closeModal();
+        try {
+          await server('markFinalDistributionConfirmed', currentCycle.cycleId, {
+            confirmed: true,
+            confirmationToken: 'MARK_FINAL_DISTRIBUTION_CONFIRMED',
+            evidenceNote: note,
+            originalAttemptId: plan.attemptId,
+            recipients: plan.recipients
+          });
+          showToast('success', 'Final distribution', 'Marked confirmed without sending email.');
+          await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+        } catch (error) {
+          showToast('error', 'Could not mark confirmed', errorMessage(error));
+        }
+      }
+    });
+  } catch (error) {
+    showToast('error', 'Could not load recovery plan', errorMessage(error));
+  }
+}
+
+async function openFinalDistributionResendModal() {
+  try {
+    const plan = await server('getFinalDistributionRecoveryPlan', currentCycle.cycleId);
+    openModal({
+      title: 'Explicitly resend final packet?',
+      body: '<p><strong>Delivery Unknown:</strong> the original packet may already have arrived. This explicit action can duplicate delivery.</p><p><strong>Exact recipients:</strong></p><ul>' +
+        plan.recipients.map(function(email) { return '<li>' + escapeHtml(email) + '</li>'; }).join('') + '</ul>',
+      confirmLabel: 'Resend to These Recipients',
+      tone: 'warning',
+      checks: ['I confirmed the exact Employee, Manager, and cycle-HR recipients and authorize a possible duplicate.'],
+      onConfirm: async function() {
+        closeModal();
+        try {
+          await server('resendFinalDistributionUnknown', currentCycle.cycleId, {
+            confirmed: true,
+            confirmationToken: 'RESEND_FINAL_DISTRIBUTION_UNKNOWN',
+            recipients: plan.recipients,
+            originalAttemptId: plan.attemptId
+          });
+          showToast('success', 'Final distribution', 'Final packet resend completed.');
+          await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+        } catch (error) {
+          showToast('error', 'Could not resend final packet', errorMessage(error));
+        }
+      }
+    });
+  } catch (error) {
+    showToast('error', 'Could not load recovery plan', errorMessage(error));
+  }
 }
 
 async function openPdfReconcileModal() {

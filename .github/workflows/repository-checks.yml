@@ -39,6 +39,8 @@ jobs:
           required_files=(
             "Code.gs"
             "V31_Automation.gs"
+            "V31_Finalization_Durability.gs"
+            "V31_Finalization_Tests.gs"
             "V31_System_Alerts.gs"
             "V31_System_Alert_Tests.gs"
             "V31_Idempotency_Tests.gs"
