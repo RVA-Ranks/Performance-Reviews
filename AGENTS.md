@@ -1,6 +1,8 @@
 # AGENTS.md — AITHERAS Performance Review Portal
 
-Read `HANDOFF.md` before modifying source.
+Read `docs/AITHERAS_ENGINEERING_PLAYBOOK.md` before every delivery, then read
+`HANDOFF.md` before modifying source. Daniel's explicit business decisions take
+precedence over the playbook.
 
 ## Required behavior
 

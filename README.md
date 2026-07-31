@@ -2,6 +2,11 @@
 
 V3.1 adds hire-date automation, Google Calendar invitations, manager compensation tasks, and a full in-app how-to system to the working V3 review portal.
 
+Engineering work is governed by
+[`docs/AITHERAS_ENGINEERING_PLAYBOOK.md`](docs/AITHERAS_ENGINEERING_PLAYBOOK.md).
+Read it before every delivery and treat Daniel's explicit business decisions as
+the only higher-priority source of truth.
+
 ## What V3.1 does
 
 ### Automatic review launches

@@ -1,5 +1,10 @@
 # AITHERAS Performance Review Portal
 
+The governing engineering standard is
+[`docs/AITHERAS_ENGINEERING_PLAYBOOK.md`](docs/AITHERAS_ENGINEERING_PLAYBOOK.md).
+Read it before every delivery. Daniel's explicit business decisions remain the
+highest-priority source of truth.
+
 ## Delivery B signature recovery
 
 `upgradeToV31_()` provisions or reuses the direct-child
