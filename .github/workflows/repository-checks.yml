@@ -48,12 +48,14 @@ jobs:
             "V31_Idempotency_Tests.gs"
             "V31_Trigger_Tests.gs"
             "V31_Production_Readiness_Tests.gs"
+            "V31_Security_Tests.gs"
             "V31_Signature_Tests.gs"
             "Index.html"
             "appsscript.json"
             "README.md"
             "HANDOFF.md"
             "V31_TEST_PLAN.md"
+            "SANDBOX_EVIDENCE.md"
           )
 
           missing=0
@@ -243,6 +245,14 @@ jobs:
             V31_Production_Readiness_Tests.gs; then
             echo \
               "::error file=V31_Production_Readiness_Tests.gs::Missing runV31ProductionReadinessTests_()."
+            exit 1
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+runV31SecurityTests_[[:space:]]*\(' \
+            V31_Security_Tests.gs; then
+            echo \
+              "::error file=V31_Security_Tests.gs::Missing runV31SecurityTests_()."
             exit 1
           fi
 
