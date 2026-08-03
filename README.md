@@ -7,14 +7,23 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery D correction — terminal-cycle and signature recovery health
+
+System Health now inspects Complete-cycle final artifacts and Delivery B
+signature warnings, treats Cancelled cycles separately, renders configuration
+check findings in the UI, and offers Sandbox-only live probes as a distinct
+control. Matching System Alerts attach to Recovery Center items instead of
+duplicating recovery work. Structured details load on demand.
+
 ## Delivery D — HR System Health and recovery UX
 
 HR Administration now opens with a System Health dashboard: overall status,
 component cards, Recovery Center (actionable items only), and a System Alert
 viewer with details. Fast loads use cached Sheet/trigger summaries for about
-30 seconds. Run Deep Health Check only on demand. Recovery actions call the
-existing launch, calendar, workflow, signature, PDF, distribution, and alert
-APIs. Employee and manager experiences are unchanged.
+30 seconds. Run Configuration Check on demand; Sandbox Live Probes only when
+`ENVIRONMENT=Sandbox`. Recovery actions call the existing launch, calendar,
+workflow, signature, PDF, distribution, and alert APIs. Employee and manager
+experiences are unchanged.
 
 ## Delivery C correction — recovery race and audit gaps
 

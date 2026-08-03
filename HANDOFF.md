@@ -5,6 +5,18 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery D correction — terminal-cycle and signature recovery health
+
+Complete cycles remain visible to System Health for PDF, distribution,
+finalization-audit, and signature warning inspection; Cancelled cycles never
+create ordinary launch/workflow recovery tasks. `classifySignatureHealth_()`
+classifies Delivery B warning and reconciliation states without clearing a
+Signed winner. Configuration Check is separate from Sandbox Live Probes
+(`ENVIRONMENT=Sandbox` only). Matching System Alerts attach to the
+authoritative recovery item; the alert viewer remains the incident ledger.
+Structured recovery details load through `getSystemHealthItemDetails()`.
+Stop before Delivery E.
+
 ## Delivery D — HR System Health and recovery UX
 
 System Health is the HR Operations surface for Deliveries A–C durability.

@@ -1,5 +1,23 @@
 # V3.1 Changelog
 
+## Delivery D correction — terminal-cycle and signature recovery health
+
+- Complete cycles are no longer skipped before PDF, distribution, finalization
+  audit, and signature health inspection; Cancelled cycles are handled
+  separately and never generate ordinary launch/workflow retries.
+- Added `classifySignatureHealth_()` for Delivery Unknown, Failed, fresh/stale
+  Signing, reconciliation Failed/Unknown, artifact/audit warnings, and recovery
+  metadata without a Signed winner.
+- Configuration Check and Sandbox Live Probes are separate UI controls; live
+  probes appear only when `ENVIRONMENT=Sandbox` and require confirmation.
+- Deep Check Results render blocking and warning readiness details in the UI.
+- Matching System Alerts attach to the authoritative Recovery Center item
+  instead of duplicating as a second recovery row; unmatched alerts remain
+  incident records. Structured details load on demand via
+  `getSystemHealthItemDetails()`.
+- Pure regression coverage expanded; browser accessibility and load timing
+  remain `Requires Daniel Sandbox`.
+
 ## Delivery D — HR System Health and recovery UX
 
 - Added an HR Administration System Health dashboard with executive summary,

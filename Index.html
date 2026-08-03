@@ -1801,6 +1801,47 @@ function formatHealthCheckedAt(value) {
   }
 }
 
+function renderDeepCheckResultsSection(data) {
+  const readiness = data && data.readiness;
+  if (!readiness) return '';
+  const blocking = readiness.blocking || [];
+  const warnings = readiness.warnings || [];
+  function renderIssue(issue, tone) {
+    const code = escapeHtml(issue.code || 'UNKNOWN');
+    const message = escapeHtml(issue.message || '');
+    const recommendation = escapeHtml(
+      issue.recommendation ||
+      (tone === 'error'
+        ? 'Resolve this blocking configuration issue before production use.'
+        : 'Review this warning before relying on the configuration.')
+    );
+    return '<div class="readiness-item ' + tone + '" role="listitem">' +
+      '<div><strong>' + code + '</strong></div>' +
+      '<div>' + message + '</div>' +
+      '<div class="field-help">Recommendation: ' + recommendation + '</div></div>';
+  }
+  const blockingHtml = blocking.length
+    ? blocking.map(function(issue) { return renderIssue(issue, 'error'); }).join('')
+    : '<div class="readiness-item success" role="listitem">No blocking configuration issues.</div>';
+  const warningHtml = warnings.length
+    ? warnings.map(function(issue) { return renderIssue(issue, 'warning'); }).join('')
+    : '<div class="readiness-item success" role="listitem">No configuration warnings.</div>';
+  const probeNote = readiness.liveProbes
+    ? 'Sandbox live probes ran.'
+    : (readiness.liveProbesNote || 'Live Drive/Calendar/folder probes were not run.');
+  const incompleteNote = readiness.incomplete
+    ? '<p class="field-help" role="status">This check was incomplete. Review blocking items and retry.</p>'
+    : '';
+  return '<section class="card" aria-label="Deep Check Results">' +
+    '<div class="card-header"><div><h2>Deep Check Results</h2>' +
+    '<p>' + escapeHtml(probeNote) + '</p></div>' +
+    '<span class="health-level ' + healthLevelClass(data.overallLevel) + '">' +
+    escapeHtml(data.overallLabel || '') + '</span></div>' +
+    incompleteNote +
+    '<h3>Blocking checks</h3><div class="readiness-list" role="list">' + blockingHtml + '</div>' +
+    '<h3>Warnings</h3><div class="readiness-list" role="list">' + warningHtml + '</div></section>';
+}
+
 function renderSystemHealthPanel(data) {
   if (!data) {
     return '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Loading operational health…</p></div>';
@@ -1808,6 +1849,7 @@ function renderSystemHealthPanel(data) {
   const metrics = data.metrics || {};
   const cards = data.cards || [];
   const recoveryItems = data.recoveryItems || [];
+  const isSandbox = String(state.environment || (state.v31 && state.v31.automation && state.v31.automation.environment) || '') === 'Sandbox';
   const checklist = (data.cards || []).map(function(card) {
     const mark = card.level === 'healthy' ? '✔' : card.level === 'blocking' ? '✖' : '⚠';
     return '<li><span aria-hidden="true">' + mark + '</span><span><strong>' +
@@ -1829,19 +1871,27 @@ function renderSystemHealthPanel(data) {
       '<span class="health-level ' + healthLevelClass(card.level) + '">' + escapeHtml(card.label) + '</span></div>' +
       '<p class="health-card-count">' + escapeHtml(card.countLabel || '') + '</p>' +
       '<p class="health-card-summary">' + escapeHtml(card.summary || '') + '</p>' +
-      '<div class="health-card-actions"><button type="button" class="button outline" aria-label="Refresh ' + escapeAttr(card.title) + '" onclick="refreshSystemHealth(true)">Refresh</button></div>' +
+      '<div class="health-card-actions"><button type="button" class="button outline" aria-label="Refresh summary for ' + escapeAttr(card.title) + '" onclick="refreshSystemHealth(true)">Refresh Summary</button></div>' +
       '</article>';
   }).join('');
 
   const recoveryHtml = recoveryItems.length
     ? '<div class="recovery-list">' + recoveryItems.map(function(item, index) {
+        const incidentBadge = item.itemKind === 'incident'
+          ? ' <span class="health-level warning">Incident record</span>'
+          : '';
+        const relatedAlert = item.relatedAlertNote
+          ? '<p class="field-help">' + escapeHtml(item.relatedAlertNote) + '</p>'
+          : '';
         return '<div class="recovery-item">' +
-          '<div><h4>' + escapeHtml(item.component) + '</h4>' +
+          '<div><h4>' + escapeHtml(item.component) + incidentBadge + '</h4>' +
           '<p>Cycle ' + escapeHtml(item.cycleId || 'System') +
           (item.employeeName ? ' · ' + escapeHtml(item.employeeName) : '') +
           '</p>' +
           '<p><span class="health-level ' + healthLevelClass(item.level) + '">' + escapeHtml(item.label || item.status) + '</span> ' +
-          escapeHtml(item.status || '') + '</p></div>' +
+          escapeHtml(item.status || '') + '</p>' +
+          relatedAlert +
+          '</div>' +
           '<div class="recovery-item-actions">' +
           '<button type="button" class="button outline" aria-label="View details for ' + escapeAttr(item.component) + '" onclick="openHealthItemDetails(' + index + ')">Details</button>' +
           '<button type="button" class="button warning" aria-label="' + escapeAttr(item.actionLabel || 'Recover') + ' ' + escapeAttr(item.component) + '" onclick="runHealthRecoveryAction(' + index + ')">' +
@@ -1849,22 +1899,30 @@ function renderSystemHealthPanel(data) {
       }).join('') + '</div>'
     : '<div class="health-empty" role="status">Everything looks healthy. No recovery actions are needed.</div>';
 
+  const probeButton = isSandbox
+    ? '<button type="button" class="button warning" onclick="runSandboxLiveProbes()">Run Sandbox Live Probes</button>'
+    : '';
+
   return '<div class="health-shell" aria-label="System Health">' +
     '<section class="health-hero">' +
     '<div><div class="health-level ' + healthLevelClass(data.overallLevel) + '" aria-label="Overall status ' + escapeAttr(data.overallLabel || '') + '">' +
     escapeHtml(data.overallLabel || 'Healthy') + '</div>' +
     '<h2 style="margin-top:12px">' + escapeHtml(data.headline || 'System Health') + '</h2>' +
     '<p>' + (data.cached ? 'Showing cached summary (up to 30 seconds). ' : '') +
-    (data.deepCheck ? 'Deep check results are included. ' : 'Fast sheet and trigger summary. ') +
-    'Deep Drive and Calendar probes run only on request.</p>' +
+    (data.deepCheck
+      ? (data.liveProbes ? 'Sandbox live probe results are included. ' : 'Configuration check results are included. ')
+      : 'Fast sheet and trigger summary. ') +
+    'Live Drive and Calendar probes run only from Sandbox with confirmation.</p>' +
     '<div class="health-metrics">' + metricHtml + '</div></div>' +
     '<div><h3 class="sr-only">Component checklist</h3><ul class="health-checklist">' + checklist + '</ul>' +
     '<div class="button-row" style="margin-top:16px">' +
     '<button type="button" class="button outline" onclick="refreshSystemHealth(true)">Refresh Health</button>' +
-    '<button type="button" class="button secondary" onclick="runDeepHealthCheck()">Run Deep Health Check</button>' +
+    '<button type="button" class="button secondary" onclick="runConfigurationHealthCheck()">Run Configuration Check</button>' +
+    probeButton +
     '</div></div></section>' +
     '<section aria-label="Health cards"><div class="health-cards">' + cardsHtml + '</div></section>' +
-    '<section class="card" aria-label="Recovery Center"><div class="card-header"><div><h2>Recovery Center</h2><p>Only actionable work appears here.</p></div></div>' +
+    renderDeepCheckResultsSection(data) +
+    '<section class="card" aria-label="Recovery Center"><div class="card-header"><div><h2>Recovery Center</h2><p>Authoritative operational recovery work. Matching System Alerts appear as related metadata; the alert viewer keeps the full incident ledger.</p></div></div>' +
     recoveryHtml + '</section></div>';
 }
 
@@ -1889,17 +1947,17 @@ async function refreshSystemHealth(forceRefresh) {
   }
 }
 
-async function runDeepHealthCheck() {
+async function runConfigurationHealthCheck() {
   openModal({
-    title: 'Run Deep Health Check?',
-    body: '<p>This inspects settings, trigger health, and readiness gates. Live Drive, Calendar, and folder probes stay off unless Sandbox live probes are separately confirmed.</p><p>Deep checks are never run automatically.</p>',
-    confirmLabel: 'Run Deep Check',
+    title: 'Run Configuration Check?',
+    body: '<p>This inspects settings, trigger health, and readiness gates from Sheet metadata. Live Drive, Calendar, and folder probes stay off.</p><p>Configuration checks are never run automatically.</p>',
+    confirmLabel: 'Run Configuration Check',
     tone: 'primary',
     onConfirm: async function() {
       closeModal();
       const panel = document.getElementById('systemHealthPanel');
       if (panel) {
-        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Running deep health check…</p></div>';
+        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Running configuration check…</p></div>';
       }
       try {
         const data = await server('runSystemHealthDeepCheck', {
@@ -1913,45 +1971,94 @@ async function runDeepHealthCheck() {
         if (alertsPanel) alertsPanel.innerHTML = renderSystemAlertsPanel(data.alerts || state.v31.systemAlerts);
         showToast(
           data.overallLevel === 'blocking' ? 'warning' : 'success',
-          'Deep health check',
-          formatOperationalClientMessage(data, data.headline || 'Deep check complete.')
+          'Configuration check',
+          formatOperationalClientMessage(data, data.headline || 'Configuration check complete.')
         );
       } catch (error) {
-        showToast('error', 'Deep health check', friendlyErrorMessage(error));
+        showToast('error', 'Configuration check', friendlyErrorMessage(error));
         await refreshSystemHealth(true);
       }
     }
   });
 }
 
-function openHealthItemDetails(index) {
-  const item = ((state.v31 && state.v31.systemHealth && state.v31.systemHealth.recoveryItems) || [])[index];
-  if (!item) {
+async function runSandboxLiveProbes() {
+  const environment = String(state.environment || (state.v31 && state.v31.automation && state.v31.automation.environment) || '');
+  if (environment !== 'Sandbox') {
+    showToast('warning', 'Sandbox live probes', 'Live probes are available only when ENVIRONMENT is Sandbox.');
+    return;
+  }
+  openModal({
+    title: 'Run Sandbox Live Probes?',
+    body: '<p><strong>Warning:</strong> This runs live Drive, Calendar, folder, and template probes against the Sandbox Workspace.</p><p>Production never offers this control. Confirm only when Daniel has approved Sandbox probing.</p>',
+    confirmLabel: 'Run Sandbox Live Probes',
+    tone: 'warning',
+    onConfirm: async function() {
+      closeModal();
+      const panel = document.getElementById('systemHealthPanel');
+      if (panel) {
+        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Running Sandbox live probes…</p></div>';
+      }
+      try {
+        const data = await server('runSystemHealthSandboxLiveProbes', {
+          sandboxConfirmed: true,
+          confirmationToken: 'SANDBOX_LIVE_PROBES'
+        });
+        state.v31 = state.v31 || {};
+        state.v31.systemHealth = data;
+        state.v31.systemAlerts = data.alerts || state.v31.systemAlerts;
+        if (panel) panel.innerHTML = renderSystemHealthPanel(data);
+        const alertsPanel = document.getElementById('systemAlertsPanel');
+        if (alertsPanel) alertsPanel.innerHTML = renderSystemAlertsPanel(data.alerts || state.v31.systemAlerts);
+        showToast(
+          data.overallLevel === 'blocking' ? 'warning' : 'success',
+          'Sandbox live probes',
+          formatOperationalClientMessage(data, data.headline || 'Sandbox live probes complete.')
+        );
+      } catch (error) {
+        showToast('error', 'Sandbox live probes', friendlyErrorMessage(error));
+        await refreshSystemHealth(true);
+      }
+    }
+  });
+}
+
+async function openHealthItemDetails(index) {
+  const cachedItem = ((state.v31 && state.v31.systemHealth && state.v31.systemHealth.recoveryItems) || [])[index];
+  if (!cachedItem || !cachedItem.id) {
     showToast('warning', 'System Health', 'That item is no longer available. Refresh health and try again.');
     return;
   }
-  const pretty = item.details
-    ? JSON.stringify(item.details, null, 2)
-    : '';
-  openModal({
-    title: item.component + ' details',
-    body:
-      '<dl class="health-detail-grid">' +
-      '<dt>Component</dt><dd>' + escapeHtml(item.component) + '</dd>' +
-      '<dt>Current State</dt><dd>' + escapeHtml(item.status || item.label || '') + '</dd>' +
-      '<dt>Cycle</dt><dd>' + escapeHtml(item.cycleId || 'System') + '</dd>' +
-      '<dt>Attempt ID</dt><dd>' + escapeHtml(item.attemptId || 'None') + '</dd>' +
-      '<dt>Started</dt><dd>' + escapeHtml(item.startedAt || 'n/a') + '</dd>' +
-      '<dt>Last Error</dt><dd>' + escapeHtml(item.lastError || 'None') + '</dd>' +
-      '<dt>Recommendation</dt><dd>' + escapeHtml(item.recommendation || '') + '</dd>' +
-      '</dl>' +
-      (pretty
-        ? '<p><strong>Structured details</strong></p><pre class="health-json" tabindex="0">' + escapeHtml(pretty) + '</pre>'
-        : ''),
-    confirmLabel: 'Close',
-    tone: 'primary',
-    onConfirm: function() { closeModal(); }
-  });
+  try {
+    const detail = await server('getSystemHealthItemDetails', cachedItem.id);
+    const item = detail.item || cachedItem;
+    const pretty = detail.prettyDetails ||
+      (item.details ? JSON.stringify(item.details, null, 2) : '');
+    openModal({
+      title: item.component + ' details',
+      body:
+        '<dl class="health-detail-grid">' +
+        '<dt>Component</dt><dd>' + escapeHtml(item.component) + '</dd>' +
+        '<dt>Current State</dt><dd>' + escapeHtml(item.status || item.label || '') + '</dd>' +
+        '<dt>Cycle</dt><dd>' + escapeHtml(item.cycleId || 'System') + '</dd>' +
+        '<dt>Attempt ID</dt><dd>' + escapeHtml(item.attemptId || 'None') + '</dd>' +
+        '<dt>Started</dt><dd>' + escapeHtml(item.startedAt || 'n/a') + '</dd>' +
+        '<dt>Last Error</dt><dd>' + escapeHtml(item.lastError || 'None') + '</dd>' +
+        '<dt>Recommendation</dt><dd>' + escapeHtml(detail.recommendation || item.recommendation || '') + '</dd>' +
+        (item.relatedAlertNote
+          ? '<dt>Related Alert</dt><dd>' + escapeHtml(item.relatedAlertNote) + '</dd>'
+          : '') +
+        '</dl>' +
+        (pretty
+          ? '<p><strong>Structured details</strong></p><pre class="health-json" tabindex="0">' + escapeHtml(pretty) + '</pre>'
+          : ''),
+      confirmLabel: 'Close',
+      tone: 'primary',
+      onConfirm: function() { closeModal(); }
+    });
+  } catch (error) {
+    showToast('error', 'System Health', friendlyErrorMessage(error));
+  }
 }
 
 async function runHealthRecoveryAction(index) {

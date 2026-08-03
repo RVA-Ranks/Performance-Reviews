@@ -2,6 +2,34 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery D correction gate — terminal-cycle and signature health
+
+Run privately in Preview:
+
+```javascript
+runV31SystemHealthTests_();
+runV31ProductionReadinessTests_();
+runV31SignatureTests_();
+runV31FinalizationTests_();
+```
+
+Expected: `failed = 0`, readiness `blocking = []`.
+
+Pure coverage now includes Complete-cycle PDF/distribution/audit defects,
+Cancelled-cycle suppression of launch/workflow retries, the
+`classifySignatureHealth_()` Delivery B matrix, alert-to-recovery association
+without duplicate Recovery Center rows, and readiness-detail shape for the UI.
+
+Manual Admin checks: Configuration Check never auto-runs; Sandbox Live Probes
+control is hidden unless `ENVIRONMENT=Sandbox`; Deep Check Results list
+blocking and warning codes with plain-language messages; Recovery Center shows
+related-alert metadata; Details uses `getSystemHealthItemDetails()`.
+
+**Requires Daniel Sandbox:** live Drive/Calendar/folder/template probes,
+browser accessibility (keyboard, focus order, screen reader), and cold vs
+cached dashboard timing with realistic cycle volume (target cached load under
+two seconds).
+
 ## Delivery D gate — System Health UX
 
 Run privately in Preview:
@@ -17,7 +45,7 @@ items, level merge, durable-component classification, operational messaging
 without “Unknown Error”, and deep-check opt-in shape.
 
 Manual Admin checks: healthy empty state copy, Recovery Center actions open
-existing confirmations, Deep Health Check never auto-runs, alert viewer
+existing confirmations, Configuration Check never auto-runs, alert viewer
 sorting/details/resolve, keyboard focus on buttons and detail JSON, tablet
 layout remains usable.
 

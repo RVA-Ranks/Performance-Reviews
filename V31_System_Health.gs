@@ -2,10 +2,15 @@
  * Delivery D — HR System Health summary and deep-check helpers.
  * Sheet/trigger metadata only on normal load; Drive/Calendar probes stay
  * manual. Recovery actions call existing Delivery B/C endpoints from the UI.
+ *
+ * Correction: Complete cycles stay visible for finalization/signature health;
+ * Cancelled cycles are inspected separately; signature artifact/audit warnings
+ * and reconciliation states are classified; System Alerts attach to matching
+ * recovery items instead of duplicating Recovery Center rows.
  */
 
 const V31_SYSTEM_HEALTH = Object.freeze({
-  CACHE_KEY: 'v31_system_health_summary_v1',
+  CACHE_KEY: 'v31_system_health_summary_v2',
   CACHE_TTL_SECONDS: 30,
   LEVEL: {
     HEALTHY: 'healthy',
@@ -26,6 +31,10 @@ const V31_SYSTEM_HEALTH = Object.freeze({
     'audit',
     'alerts',
   ],
+  ITEM_KIND: {
+    RECOVERY: 'recovery',
+    INCIDENT: 'incident',
+  },
 });
 
 function getSystemHealthLevelRank_(level) {
@@ -129,6 +138,153 @@ function classifyDurableComponentHealth_(status, options) {
   return V31_SYSTEM_HEALTH.LEVEL.HEALTHY;
 }
 
+/**
+ * Pure helper: classify one role's Delivery B signature health.
+ * Does not mutate the cycle. Signed winners stay Signed; warnings are
+ * operational signals only.
+ */
+function classifySignatureHealth_(cycle, role) {
+  const fields = getSignatureClaimFields_(role);
+  const status = String(cycle[fields.statusField] || '');
+  const lastError = String(cycle[fields.errorField] || '');
+  const artifactWarning = String(
+    cycle[fields.artifactWarningField] || ''
+  );
+  const auditWarning = String(cycle[fields.auditWarningField] || '');
+  const reconciliationStatus = String(
+    cycle[fields.reconciliationStatusField] || ''
+  );
+  const attemptId = String(cycle[fields.attemptField] || '');
+  const startedAt = cycle[fields.startedField] || '';
+  const reconciliationStartedAt =
+    cycle[fields.reconciliationStartedField] || '';
+  const recoveryFileId = String(cycle[fields.recoveryFileField] || '');
+  const signed = status === V31.SIGNATURE.SIGNED;
+  const signing =
+    status === V31.SIGNATURE.SIGNING ||
+    status === V31.DELIVERY.SENDING;
+  const deliveryUnknown =
+    status === V31.SIGNATURE.UNKNOWN ||
+    status === V31.DELIVERY.UNKNOWN;
+  const failed =
+    status === V31.SIGNATURE.FAILED ||
+    status === V31.DELIVERY.FAILED;
+  const reconciliationUnknown =
+    reconciliationStatus === V31.SIGNATURE_RECONCILIATION.UNKNOWN ||
+    reconciliationStatus === V31.DELIVERY.UNKNOWN;
+  const reconciliationFailed =
+    reconciliationStatus === V31.SIGNATURE_RECONCILIATION.FAILED ||
+    reconciliationStatus === V31.DELIVERY.FAILED;
+  const reconciling =
+    reconciliationStatus === V31.SIGNATURE_RECONCILIATION.RECONCILING;
+  const signingStale =
+    signing && isDeliveryClaimStale_(startedAt);
+  const reconciliationStale =
+    reconciling && isDeliveryClaimStale_(reconciliationStartedAt);
+
+  let level = V31_SYSTEM_HEALTH.LEVEL.HEALTHY;
+  let actionable = false;
+  let action = 'openCycle';
+  let actionLabel = 'Open Cycle';
+  let recommendation = '';
+
+  if (deliveryUnknown || reconciliationUnknown || reconciliationStale) {
+    level = V31_SYSTEM_HEALTH.LEVEL.BLOCKING;
+    actionable = true;
+    action = 'reconcileSignature';
+    actionLabel = 'Recover';
+    recommendation =
+      'Open signature reconciliation for this role. Do not trash ambiguous artifacts. The Signed winner, if any, is preserved.';
+  } else if (failed || reconciliationFailed) {
+    level = V31_SYSTEM_HEALTH.LEVEL.ATTENTION;
+    actionable = true;
+    action = 'reconcileSignature';
+    actionLabel = 'Recover';
+    recommendation =
+      'Signature or reconciliation failed. Recover from HR reconciliation without requesting a duplicate signature from a Signed winner.';
+  } else if (signingStale) {
+    level = V31_SYSTEM_HEALTH.LEVEL.ATTENTION;
+    actionable = true;
+    action = 'reconcileSignature';
+    actionLabel = 'Recover';
+    recommendation =
+      'Signature claim went stale. HR reconciliation is required before another attempt.';
+  } else if (signing) {
+    level = V31_SYSTEM_HEALTH.LEVEL.RUNNING;
+    actionable = false;
+    action = 'none';
+    actionLabel = 'In Progress';
+    recommendation =
+      'Signature claim is in progress. Wait for completion or re-check after the stale window.';
+  } else if (recoveryFileId && !signed) {
+    level = V31_SYSTEM_HEALTH.LEVEL.ATTENTION;
+    actionable = true;
+    action = 'reconcileSignature';
+    actionLabel = 'Recover';
+    recommendation =
+      'Recovery file metadata exists without an authoritative Signed winner. Reconcile before discarding candidates.';
+  }
+
+  if (artifactWarning) {
+    level = mergeSystemHealthLevel_(
+      level,
+      V31_SYSTEM_HEALTH.LEVEL.WARNING
+    );
+    if (!actionable && signed) {
+      actionable = true;
+      action = 'openCycle';
+      actionLabel = 'Review Warning';
+      recommendation =
+        'Signed winner retained. Review the artifact warning; do not ask the participant to sign again.';
+    } else if (!recommendation) {
+      recommendation =
+        'Signed winner retained when present. Review the artifact warning.';
+    }
+  }
+
+  if (auditWarning) {
+    level = mergeSystemHealthLevel_(
+      level,
+      V31_SYSTEM_HEALTH.LEVEL.WARNING
+    );
+    if (!actionable && signed) {
+      actionable = true;
+      action = 'openCycle';
+      actionLabel = 'Review Warning';
+      recommendation =
+        'Signed winner retained. Review the audit warning; do not ask the participant to sign again.';
+    } else if (!recommendation) {
+      recommendation =
+        'Signed winner retained when present. Review the audit warning.';
+    }
+  }
+
+  return {
+    level: level,
+    actionable: actionable,
+    action: action,
+    actionLabel: actionLabel,
+    status: status,
+    lastError: lastError,
+    artifactWarning: artifactWarning,
+    auditWarning: auditWarning,
+    reconciliationStatus: reconciliationStatus,
+    attemptId: attemptId,
+    startedAt: String(startedAt || ''),
+    recoveryFileId: recoveryFileId,
+    recommendation: recommendation,
+    signed: signed,
+  };
+}
+
+function getSignatureHealthRoleEntries_() {
+  return [
+    { role: PR.ROLE.MANAGER, label: 'Manager Signature' },
+    { role: PR.ROLE.EMPLOYEE, label: 'Employee Signature' },
+    { role: PR.ROLE.HR, label: 'HR Signature' },
+  ];
+}
+
 function buildEmptyHealthCard_(key, title) {
   return {
     key: key,
@@ -180,6 +336,12 @@ function finalizeHealthCards_(cards, checkedAt) {
         key === 'alerts'
           ? '0 unresolved'
           : '0 need attention';
+    } else if (
+      card.level === V31_SYSTEM_HEALTH.LEVEL.RUNNING &&
+      !card.count
+    ) {
+      card.countLabel = 'In progress';
+      card.summary = card.summary || 'Signature or send in progress';
     }
     return card;
   });
@@ -213,12 +375,18 @@ function createRecoveryItem_(input) {
     ),
     action: String(value.action || 'openCycle'),
     actionLabel: String(value.actionLabel || 'Recover'),
+    actionable: value.actionable !== false,
+    itemKind: String(
+      value.itemKind || V31_SYSTEM_HEALTH.ITEM_KIND.RECOVERY
+    ),
     attemptId: String(value.attemptId || ''),
     startedAt: String(value.startedAt || ''),
     lastError: String(value.lastError || ''),
     recommendation: String(value.recommendation || ''),
     details: value.details || null,
     alertId: String(value.alertId || ''),
+    relatedAlertId: String(value.relatedAlertId || ''),
+    relatedAlertNote: String(value.relatedAlertNote || ''),
     severity: String(value.severity || ''),
     componentKey: String(value.componentKey || ''),
     role: String(value.role || ''),
@@ -226,21 +394,334 @@ function createRecoveryItem_(input) {
   };
 }
 
-/**
- * Pure helper: collect actionable recovery items for one cycle row.
- * Uses existing summary helpers; does not mutate the cycle.
- */
-function collectCycleRecoveryItems_(cycle) {
-  const items = [];
-  if (!cycle || isTerminalCycleStatus_(cycle.Status)) {
-    return items;
+function expectedFinalizationAuditEventId_(cycleId) {
+  if (typeof getFinalizationAuditEventId_ === 'function') {
+    return String(getFinalizationAuditEventId_(cycleId) || '');
   }
+  return (
+    String(
+      (typeof V31_FINALIZATION !== 'undefined' &&
+        V31_FINALIZATION.FINALIZATION_EVENT_PREFIX) ||
+        'FINALIZATION_COMPLETE:'
+    ) + String(cycleId || '')
+  );
+}
+
+function needsFinalizationAuditAttention_(status, finalization, cycle) {
+  const audit = String(finalization.finalizationAudit || '');
+  if (audit === 'Delivery Unknown' || audit === 'Failed') {
+    return true;
+  }
+  if (
+    status === PR.CYCLE.FINALIZING &&
+    finalization.managerPdf === V31.DELIVERY.SENT &&
+    finalization.selfPdf === V31.DELIVERY.SENT &&
+    finalization.distribution === V31.DELIVERY.SENT &&
+    audit !== 'Complete'
+  ) {
+    return true;
+  }
+  if (status === PR.CYCLE.COMPLETE) {
+    if (audit !== 'Complete') {
+      return true;
+    }
+    const expected = expectedFinalizationAuditEventId_(
+      cycle['Cycle ID']
+    );
+    if (
+      String(finalization.finalizationAuditEventId || '') !== expected
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function needsPdfAttention_(status, entry) {
+  if (entry.unknown || entry.status === V31.DELIVERY.FAILED) {
+    return true;
+  }
+  if (
+    status === PR.CYCLE.FINALIZING &&
+    entry.status !== V31.DELIVERY.SENT
+  ) {
+    return true;
+  }
+  if (
+    status === PR.CYCLE.COMPLETE &&
+    entry.status !== V31.DELIVERY.SENT
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function needsDistributionAttention_(status, finalization) {
+  if (
+    finalization.distributionUnknown ||
+    finalization.distribution === V31.DELIVERY.FAILED
+  ) {
+    return true;
+  }
+  if (
+    status === PR.CYCLE.FINALIZING &&
+    finalization.distribution !== V31.DELIVERY.SENT &&
+    finalization.managerPdf === V31.DELIVERY.SENT &&
+    finalization.selfPdf === V31.DELIVERY.SENT
+  ) {
+    return true;
+  }
+  if (
+    status === PR.CYCLE.COMPLETE &&
+    finalization.distribution !== V31.DELIVERY.SENT
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function collectSignatureRecoveryItems_(cycle, options) {
+  const includeDetails = !!(options && options.includeDetails);
+  const cycleId = String(cycle['Cycle ID'] || '');
+  const employeeName = String(cycle['Employee Name'] || cycleId);
+  const items = [];
+
+  getSignatureHealthRoleEntries_().forEach(function (entry) {
+    const classification = classifySignatureHealth_(cycle, entry.role);
+    if (classification.level === V31_SYSTEM_HEALTH.LEVEL.HEALTHY) {
+      return;
+    }
+    const warningParts = [];
+    if (classification.artifactWarning) {
+      warningParts.push(
+        'Artifact warning: ' + classification.artifactWarning
+      );
+    }
+    if (classification.auditWarning) {
+      warningParts.push(
+        'Audit warning: ' + classification.auditWarning
+      );
+    }
+    items.push(
+      createRecoveryItem_({
+        id: 'signature:' + entry.role + ':' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'signatures',
+        component: entry.label,
+        role: entry.role,
+        status: classification.status || 'Warning',
+        level: classification.level,
+        actionable: classification.actionable,
+        action: classification.action,
+        actionLabel: classification.actionLabel,
+        attemptId: classification.attemptId,
+        startedAt: classification.startedAt,
+        lastError:
+          classification.lastError ||
+          classification.artifactWarning ||
+          classification.auditWarning ||
+          '',
+        recommendation: classification.recommendation,
+        details: includeDetails
+          ? {
+              artifactWarning: classification.artifactWarning,
+              auditWarning: classification.auditWarning,
+              reconciliationStatus:
+                classification.reconciliationStatus,
+              recoveryFileId: classification.recoveryFileId,
+              signed: classification.signed,
+              warnings: warningParts,
+            }
+          : null,
+      })
+    );
+  });
+
+  return items;
+}
+
+function collectFinalizationRecoveryItems_(cycle, options) {
+  const includeDetails = !!(options && options.includeDetails);
+  const status = String(cycle.Status || '');
+  if (
+    status !== PR.CYCLE.FINALIZING &&
+    status !== PR.CYCLE.COMPLETE
+  ) {
+    return [];
+  }
+
+  const cycleId = String(cycle['Cycle ID'] || '');
+  const employeeName = String(cycle['Employee Name'] || cycleId);
+  const finalization = getFinalizationSummary_(cycle);
+  const items = [];
+
+  [
+    {
+      documentType: PR.TYPE.MANAGER,
+      label: 'Manager PDF',
+      status: finalization.managerPdf,
+      unknown: finalization.managerPdfUnknown,
+      attemptField: 'Manager PDF Attempt ID',
+      startedField: 'Manager PDF Started At',
+      errorField: 'Manager PDF Last Error',
+    },
+    {
+      documentType: PR.TYPE.SELF,
+      label: 'Self PDF',
+      status: finalization.selfPdf,
+      unknown: finalization.selfPdfUnknown,
+      attemptField: 'Self PDF Attempt ID',
+      startedField: 'Self PDF Started At',
+      errorField: 'Self PDF Last Error',
+    },
+  ].forEach(function (entry) {
+    if (!needsPdfAttention_(status, entry)) {
+      return;
+    }
+    items.push(
+      createRecoveryItem_({
+        id: 'pdf:' + entry.documentType + ':' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'pdfs',
+        component: entry.label,
+        documentType: entry.documentType,
+        status: entry.status,
+        level: entry.unknown
+          ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+          : V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
+        action: entry.unknown ? 'reconcilePdf' : 'retryFinalization',
+        actionLabel: entry.unknown ? 'Recover' : 'Retry PDF',
+        attemptId: String(cycle[entry.attemptField] || ''),
+        startedAt: String(cycle[entry.startedField] || ''),
+        lastError: String(cycle[entry.errorField] || ''),
+        recommendation: entry.unknown
+          ? 'Reconcile the deterministic PDF candidate. Do not generate a duplicate while ambiguity remains.'
+          : 'Retry finalization to resume unfinished PDF generation safely.',
+        details: includeDetails
+          ? {
+              cycleStatus: status,
+              pdfStatus: entry.status,
+            }
+          : null,
+      })
+    );
+  });
+
+  if (needsDistributionAttention_(status, finalization)) {
+    items.push(
+      createRecoveryItem_({
+        id: 'distribution:' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'distribution',
+        component: 'Final Distribution',
+        status: finalization.distribution,
+        level: finalization.distributionUnknown
+          ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+          : V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
+        action: finalization.distributionUnknown
+          ? 'markDistributionConfirmed'
+          : 'retryDistribution',
+        actionLabel: finalization.distributionUnknown
+          ? 'Mark Confirmed'
+          : 'Retry Distribution',
+        attemptId: String(
+          cycle['Final Distribution Attempt ID'] || ''
+        ),
+        startedAt: String(
+          cycle['Final Distribution Started At'] || ''
+        ),
+        lastError: finalization.distributionLastError,
+        recommendation: finalization.distributionUnknown
+          ? 'Mark Confirmed with evidence, or use explicit Resend. Automatic resend is prohibited.'
+          : 'Retry finalization to send the final packet after PDF validation.',
+        details: includeDetails
+          ? {
+              recipients: finalization.distributionRecipients,
+            }
+          : null,
+      })
+    );
+  }
+
+  if (needsFinalizationAuditAttention_(status, finalization, cycle)) {
+    const missingEvent =
+      status === PR.CYCLE.COMPLETE &&
+      String(finalization.finalizationAudit || '') === 'Complete' &&
+      String(finalization.finalizationAuditEventId || '') !==
+        expectedFinalizationAuditEventId_(cycleId);
+    items.push(
+      createRecoveryItem_({
+        id: 'audit:' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'audit',
+        component: 'Finalization Audit',
+        status: missingEvent
+          ? 'Complete (event missing)'
+          : finalization.finalizationAudit,
+        level:
+          finalization.finalizationAudit === 'Delivery Unknown' ||
+          missingEvent
+            ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+            : V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
+        action: 'retryFinalization',
+        actionLabel: 'Retry',
+        attemptId: String(
+          cycle['Finalization Audit Attempt ID'] || ''
+        ),
+        startedAt: String(
+          cycle['Finalization Audit Started At'] || ''
+        ),
+        lastError: String(
+          cycle['Finalization Audit Last Error'] ||
+            (missingEvent
+              ? 'Cycle reported a complete audit, but the deterministic audit event ID is missing or mismatched.'
+              : '')
+        ),
+        recommendation:
+          'Retry finalization so the deterministic audit event can be written. Completion requires the audit row.',
+        details: includeDetails
+          ? {
+              eventId: finalization.finalizationAuditEventId,
+              expectedEventId:
+                expectedFinalizationAuditEventId_(cycleId),
+              missingEvent: missingEvent,
+            }
+          : null,
+      })
+    );
+  }
+
+  return items;
+}
+
+/**
+ * Cancelled cycles never generate ordinary launch/workflow recovery tasks.
+ * Signature artifact/audit warnings and unresolved recovery metadata may
+ * still surface when appropriate.
+ */
+function collectCancelledCycleHealthItems_(cycle, options) {
+  return collectSignatureRecoveryItems_(cycle, options).filter(
+    function (item) {
+      return (
+        item.level === V31_SYSTEM_HEALTH.LEVEL.WARNING ||
+        item.level === V31_SYSTEM_HEALTH.LEVEL.BLOCKING ||
+        item.level === V31_SYSTEM_HEALTH.LEVEL.ATTENTION
+      );
+    }
+  );
+}
+
+function collectActiveWorkflowRecoveryItems_(cycle, options) {
+  const includeDetails = !!(options && options.includeDetails);
+  const items = [];
   const cycleId = String(cycle['Cycle ID'] || '');
   const employeeName = String(cycle['Employee Name'] || cycleId);
   const launch = getReviewLaunchComponentSummary_(cycle);
   const notifications = getWorkflowNotificationSummary_(cycle);
-  const finalization = getFinalizationSummary_(cycle);
-  const status = String(cycle.Status || '');
   const calendarEventMissing =
     String(cycle['Last Launch Error'] || '').indexOf(
       'Calendar event missing or inaccessible:'
@@ -262,7 +743,7 @@ function collectCycleRecoveryItems_(cycle) {
           lastError: launch.lastError,
           recommendation:
             'Open launch reconciliation. Mark Confirmed only with delivery evidence, or resend one component.',
-          details: launch,
+          details: includeDetails ? launch : null,
         })
       );
     } else {
@@ -280,7 +761,7 @@ function collectCycleRecoveryItems_(cycle) {
           lastError: launch.lastError,
           recommendation:
             'Retry unfinished launch steps. Sent recipients and completed Calendar creation are skipped.',
-          details: launch,
+          details: includeDetails ? launch : null,
         })
       );
     }
@@ -371,230 +852,169 @@ function collectCycleRecoveryItems_(cycle) {
     );
   });
 
-  [
-    {
-      role: PR.ROLE.MANAGER,
-      label: 'Manager Signature',
-      statusField: 'Manager Signature Status',
-      errorField: 'Manager Signature Last Error',
-      attemptField: 'Manager Signature Attempt ID',
-      startedField: 'Manager Signature Started At',
-    },
-    {
-      role: PR.ROLE.EMPLOYEE,
-      label: 'Employee Signature',
-      statusField: 'Employee Signature Status',
-      errorField: 'Employee Signature Last Error',
-      attemptField: 'Employee Signature Attempt ID',
-      startedField: 'Employee Signature Started At',
-    },
-    {
-      role: PR.ROLE.HR,
-      label: 'HR Signature',
-      statusField: 'HR Signature Status',
-      errorField: 'HR Signature Last Error',
-      attemptField: 'HR Signature Attempt ID',
-      startedField: 'HR Signature Started At',
-    },
-  ].forEach(function (entry) {
-    const signatureStatus = String(cycle[entry.statusField] || '');
-    if (!isDeliveryUnknownStatus_(signatureStatus)) {
-      return;
-    }
-    items.push(
-      createRecoveryItem_({
-        id: 'signature:' + entry.role + ':' + cycleId,
-        cycleId: cycleId,
-        employeeName: employeeName,
-        category: 'signatures',
-        component: entry.label,
-        role: entry.role,
-        status: signatureStatus,
-        level: V31_SYSTEM_HEALTH.LEVEL.BLOCKING,
-        action: 'reconcileSignature',
-        actionLabel: 'Recover',
-        attemptId: String(cycle[entry.attemptField] || ''),
-        startedAt: String(cycle[entry.startedField] || ''),
-        lastError: String(cycle[entry.errorField] || ''),
-        recommendation:
-          'Open signature reconciliation for this role. Do not trash ambiguous artifacts.',
-      })
-    );
-  });
+  return items;
+}
 
-  if (status === PR.CYCLE.FINALIZING || status === PR.CYCLE.COMPLETE) {
-    [
-      {
-        documentType: PR.TYPE.MANAGER,
-        label: 'Manager PDF',
-        status: finalization.managerPdf,
-        unknown: finalization.managerPdfUnknown,
-        idField: 'Manager Review PDF ID',
-        attemptField: 'Manager PDF Attempt ID',
-        startedField: 'Manager PDF Started At',
-        errorField: 'Manager PDF Last Error',
-      },
-      {
-        documentType: PR.TYPE.SELF,
-        label: 'Self PDF',
-        status: finalization.selfPdf,
-        unknown: finalization.selfPdfUnknown,
-        idField: 'Self Evaluation PDF ID',
-        attemptField: 'Self PDF Attempt ID',
-        startedField: 'Self PDF Started At',
-        errorField: 'Self PDF Last Error',
-      },
-    ].forEach(function (entry) {
-      if (
-        !entry.unknown &&
-        entry.status !== V31.DELIVERY.FAILED &&
-        !(
-          status === PR.CYCLE.FINALIZING &&
-          entry.status !== V31.DELIVERY.SENT
-        )
-      ) {
-        return;
-      }
-      items.push(
-        createRecoveryItem_({
-          id: 'pdf:' + entry.documentType + ':' + cycleId,
-          cycleId: cycleId,
-          employeeName: employeeName,
-          category: 'pdfs',
-          component: entry.label,
-          documentType: entry.documentType,
-          status: entry.status,
-          level: entry.unknown
-            ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
-            : V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
-          action: entry.unknown
-            ? 'reconcilePdf'
-            : 'retryFinalization',
-          actionLabel: entry.unknown ? 'Recover' : 'Retry PDF',
-          attemptId: String(cycle[entry.attemptField] || ''),
-          startedAt: String(cycle[entry.startedField] || ''),
-          lastError: String(cycle[entry.errorField] || ''),
-          recommendation: entry.unknown
-            ? 'Reconcile the deterministic PDF candidate. Do not generate a duplicate while ambiguity remains.'
-            : 'Retry finalization to resume unfinished PDF generation safely.',
-        })
-      );
-    });
-
-    if (
-      finalization.distributionUnknown ||
-      finalization.distribution === V31.DELIVERY.FAILED ||
-      (status === PR.CYCLE.FINALIZING &&
-        finalization.distribution !== V31.DELIVERY.SENT &&
-        finalization.managerPdf === V31.DELIVERY.SENT &&
-        finalization.selfPdf === V31.DELIVERY.SENT)
-    ) {
-      items.push(
-        createRecoveryItem_({
-          id: 'distribution:' + cycleId,
-          cycleId: cycleId,
-          employeeName: employeeName,
-          category: 'distribution',
-          component: 'Final Distribution',
-          status: finalization.distribution,
-          level: finalization.distributionUnknown
-            ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
-            : V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
-          action: finalization.distributionUnknown
-            ? 'markDistributionConfirmed'
-            : 'retryDistribution',
-          actionLabel: finalization.distributionUnknown
-            ? 'Mark Confirmed'
-            : 'Retry Distribution',
-          attemptId: String(
-            cycle['Final Distribution Attempt ID'] || ''
-          ),
-          startedAt: String(
-            cycle['Final Distribution Started At'] || ''
-          ),
-          lastError: finalization.distributionLastError,
-          recommendation: finalization.distributionUnknown
-            ? 'Mark Confirmed with evidence, or use explicit Resend. Automatic resend is prohibited.'
-            : 'Retry finalization to send the final packet after PDF validation.',
-          details: {
-            recipients: finalization.distributionRecipients,
-          },
-        })
-      );
-    }
-
-    if (
-      finalization.finalizationAudit === 'Delivery Unknown' ||
-      finalization.finalizationAudit === 'Failed' ||
-      (status === PR.CYCLE.FINALIZING &&
-        finalization.managerPdf === V31.DELIVERY.SENT &&
-        finalization.selfPdf === V31.DELIVERY.SENT &&
-        finalization.distribution === V31.DELIVERY.SENT &&
-        finalization.finalizationAudit !== 'Complete')
-    ) {
-      items.push(
-        createRecoveryItem_({
-          id: 'audit:' + cycleId,
-          cycleId: cycleId,
-          employeeName: employeeName,
-          category: 'audit',
-          component: 'Finalization Audit',
-          status: finalization.finalizationAudit,
-          level:
-            finalization.finalizationAudit === 'Delivery Unknown'
-              ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
-              : V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
-          action: 'retryFinalization',
-          actionLabel: 'Retry',
-          attemptId: String(
-            cycle['Finalization Audit Attempt ID'] || ''
-          ),
-          startedAt: String(
-            cycle['Finalization Audit Started At'] || ''
-          ),
-          lastError: String(
-            cycle['Finalization Audit Last Error'] || ''
-          ),
-          recommendation:
-            'Retry finalization so the deterministic audit event can be written. Completion requires the audit row.',
-          details: {
-            eventId: finalization.finalizationAuditEventId,
-          },
-        })
-      );
-    }
+/**
+ * Pure helper: collect recovery items for one cycle row.
+ * Complete cycles suppress ordinary workflow actions but keep finalization
+ * and signature health. Cancelled cycles are handled separately.
+ */
+function collectCycleRecoveryItems_(cycle, options) {
+  if (!cycle) {
+    return [];
   }
+
+  const status = String(cycle.Status || '');
+  if (status === PR.CYCLE.CANCELLED) {
+    return collectCancelledCycleHealthItems_(cycle, options);
+  }
+
+  const items = [];
+  if (status !== PR.CYCLE.COMPLETE) {
+    collectActiveWorkflowRecoveryItems_(cycle, options).forEach(
+      function (item) {
+        items.push(item);
+      }
+    );
+  }
+
+  collectSignatureRecoveryItems_(cycle, options).forEach(
+    function (item) {
+      items.push(item);
+    }
+  );
+
+  collectFinalizationRecoveryItems_(cycle, options).forEach(
+    function (item) {
+      items.push(item);
+    }
+  );
 
   return items;
 }
 
-function collectAlertRecoveryItems_(alerts) {
-  return (alerts || []).map(function (alert) {
+function alertMatchesRecoveryItem_(alert, item) {
+  const alertCycleId = String(alert.cycleId || '');
+  const itemCycleId = String(item.cycleId || '');
+  if (!alertCycleId || alertCycleId !== itemCycleId) {
+    return false;
+  }
+  const alertComponent = String(alert.component || '');
+  const itemComponent = String(item.component || '');
+  if (alertComponent && alertComponent === itemComponent) {
+    return true;
+  }
+  if (
+    alertComponent === 'Signature' &&
+    item.category === 'signatures'
+  ) {
+    return true;
+  }
+  if (alertComponent === 'PDF' && item.category === 'pdfs') {
+    return true;
+  }
+  if (
+    alertComponent === 'Workflow Notification' &&
+    item.category === 'notifications'
+  ) {
+    return true;
+  }
+  if (
+    alertComponent === 'Calendar Configuration' &&
+    itemComponent === 'Calendar Configuration'
+  ) {
+    return true;
+  }
+  if (
+    alertComponent === 'Final Distribution' &&
+    itemComponent === 'Final Distribution'
+  ) {
+    return true;
+  }
+  if (
+    alertComponent === 'Review Launch' &&
+    itemComponent === 'Review Launch'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function attachRelatedAlertNote_(item, alert) {
+  const notificationSent =
+    alert.notificationSent === true ||
+    String(alert.status || '') === V31.DELIVERY.SENT;
+  item.relatedAlertId = String(alert.alertId || '');
+  item.relatedAlertNote = notificationSent
+    ? 'Related alert: notification sent'
+    : 'Related alert: ' +
+      String(alert.status || 'unresolved') +
+      ' incident record';
+  if (!item.alertId) {
+    item.alertId = String(alert.alertId || '');
+  }
+}
+
+/**
+ * Associate unresolved System Alerts with matching recovery items.
+ * Matched alerts become metadata on the authoritative recovery row.
+ * Unmatched alerts remain as incident records (not duplicate recoveries).
+ */
+function mergeAlertItemsIntoRecovery_(recoveryItems, alerts) {
+  const items = (recoveryItems || []).slice();
+  const unmatched = [];
+
+  (alerts || []).forEach(function (alert) {
+    let matched = false;
+    for (let i = 0; i < items.length; i += 1) {
+      if (
+        items[i].itemKind !==
+          V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT &&
+        alertMatchesRecoveryItem_(alert, items[i])
+      ) {
+        attachRelatedAlertNote_(items[i], alert);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      unmatched.push(alert);
+    }
+  });
+
+  unmatched.forEach(function (alert) {
     const severity = String(alert.severity || 'Warning');
     const level =
       severity === 'Blocking' || severity === 'Security'
         ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
         : V31_SYSTEM_HEALTH.LEVEL.WARNING;
-    return createRecoveryItem_({
-      id: 'alert:' + String(alert.alertId || ''),
-      cycleId: String(alert.cycleId || ''),
-      employeeName: String(alert.cycleId || 'System'),
-      category: 'alerts',
-      component: String(alert.component || 'System Alert'),
-      status: String(alert.status || ''),
-      level: level,
-      action: 'resolveAlert',
-      actionLabel: 'Resolve Alert',
-      alertId: String(alert.alertId || ''),
-      severity: severity,
-      lastError: String(alert.lastError || ''),
-      recommendation:
-        'Review details, then resolve with an audited reason for Blocking or Security alerts.',
-      details: alert.details || null,
-      attemptId: '',
-      startedAt: String(alert.lastOccurredAt || ''),
-    });
+    items.push(
+      createRecoveryItem_({
+        id: 'alert:' + String(alert.alertId || ''),
+        cycleId: String(alert.cycleId || ''),
+        employeeName: String(alert.cycleId || 'System'),
+        category: 'alerts',
+        component: String(alert.component || 'System Alert'),
+        status: String(alert.status || ''),
+        level: level,
+        itemKind: V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT,
+        actionable: true,
+        action: 'resolveAlert',
+        actionLabel: 'Resolve Alert',
+        alertId: String(alert.alertId || ''),
+        severity: severity,
+        lastError: String(alert.lastError || ''),
+        recommendation:
+          'Incident record only. Resolving this alert does not repair the underlying component. Use the matching recovery action when one exists.',
+        details: null,
+        attemptId: '',
+        startedAt: String(alert.lastOccurredAt || ''),
+      })
+    );
   });
+
+  return items;
 }
 
 function buildAutomationHealthCard_(automation, checkedAt) {
@@ -677,10 +1097,23 @@ function buildSystemHealthMetrics_(cards, recoveryItems, alerts, checkedAt) {
   });
   const cycleIds = {};
   (recoveryItems || []).forEach(function (item) {
-    if (item.cycleId && item.category !== 'alerts') {
+    if (
+      item.cycleId &&
+      item.itemKind !== V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT &&
+      item.actionable !== false
+    ) {
       cycleIds[String(item.cycleId)] = true;
     }
   });
+  const actionableRecoveryCount = (recoveryItems || []).filter(
+    function (item) {
+      return (
+        item.actionable !== false &&
+        item.itemKind !== V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT &&
+        item.action !== 'none'
+      );
+    }
+  ).length;
   return {
     healthyComponents: healthyComponents,
     warnings: warnings,
@@ -689,7 +1122,7 @@ function buildSystemHealthMetrics_(cards, recoveryItems, alerts, checkedAt) {
       (alerts && alerts.unresolvedCount) || 0
     ),
     cyclesRequiringRecovery: Object.keys(cycleIds).length,
-    recoveryItemCount: (recoveryItems || []).length,
+    recoveryItemCount: actionableRecoveryCount,
     lastHealthCheck: checkedAt,
   };
 }
@@ -796,12 +1229,36 @@ function clearCachedSystemHealthSummary_() {
   }
 }
 
+function slimSystemHealthSummaryForCache_(summary) {
+  if (!summary) return summary;
+  const slim = {};
+  Object.keys(summary).forEach(function (key) {
+    slim[key] = summary[key];
+  });
+  slim.recoveryItems = (summary.recoveryItems || []).map(
+    function (item) {
+      const copy = {};
+      Object.keys(item).forEach(function (field) {
+        if (field === 'details') return;
+        copy[field] = item[field];
+      });
+      return copy;
+    }
+  );
+  return slim;
+}
+
 function buildSystemHealthSummaryFromRows_(
   cycles,
   automation,
   alertsData,
-  checkedAt
+  checkedAt,
+  options
 ) {
+  const opts = options || {};
+  const collectOptions = {
+    includeDetails: opts.includeDetails === true,
+  };
   const cardsMap = {};
   V31_SYSTEM_HEALTH.CARD_KEYS.forEach(function (key) {
     if (key === 'automation') return;
@@ -811,29 +1268,54 @@ function buildSystemHealthSummaryFromRows_(
     );
   });
 
-  const recoveryItems = [];
+  let recoveryItems = [];
   (cycles || []).forEach(function (cycle) {
-    const items = collectCycleRecoveryItems_(cycle);
+    const items = collectCycleRecoveryItems_(cycle, collectOptions);
     items.forEach(function (item) {
       recoveryItems.push(item);
-      bumpHealthCard_(cardsMap, item.category, item.level, 1);
+      const countIncrement =
+        item.level === V31_SYSTEM_HEALTH.LEVEL.RUNNING ? 0 : 1;
+      bumpHealthCard_(
+        cardsMap,
+        item.category,
+        item.level,
+        countIncrement
+      );
     });
   });
 
-  const alertItems = collectAlertRecoveryItems_(
-    (alertsData && alertsData.alerts) || []
+  // Associate alerts only with actionable recovery rows so in-progress
+  // (Running) rows cannot swallow an incident that HR still needs to see.
+  const unresolvedAlerts = (alertsData && alertsData.alerts) || [];
+  recoveryItems = mergeAlertItemsIntoRecovery_(
+    recoveryItems.filter(function (item) {
+      return item.actionable !== false && item.action !== 'none';
+    }),
+    unresolvedAlerts
   );
-  alertItems.forEach(function (item) {
-    recoveryItems.push(item);
-    bumpHealthCard_(cardsMap, 'alerts', item.level, 1);
-  });
-  if (alertItems.length) {
+
+  const alertCardCount = unresolvedAlerts.length;
+  if (alertCardCount) {
+    let worstAlertLevel = V31_SYSTEM_HEALTH.LEVEL.WARNING;
+    unresolvedAlerts.forEach(function (alert) {
+      const severity = String(alert.severity || 'Warning');
+      const level =
+        severity === 'Blocking' || severity === 'Security'
+          ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+          : V31_SYSTEM_HEALTH.LEVEL.WARNING;
+      worstAlertLevel = mergeSystemHealthLevel_(worstAlertLevel, level);
+    });
+    cardsMap.alerts.level = mergeSystemHealthLevel_(
+      cardsMap.alerts.level,
+      worstAlertLevel
+    );
+    cardsMap.alerts.count = alertCardCount;
     cardsMap.alerts.countLabel =
-      alertItems.length === 1
+      alertCardCount === 1
         ? '1 unresolved'
-        : alertItems.length + ' unresolved';
+        : alertCardCount + ' unresolved';
     cardsMap.alerts.summary =
-      alertItems.length + ' unresolved alert(s)';
+      alertCardCount + ' unresolved alert(s)';
   }
 
   const automationCard = buildAutomationHealthCard_(
@@ -861,6 +1343,8 @@ function buildSystemHealthSummaryFromRows_(
     checkedAt: checkedAt,
     cached: false,
     deepCheck: false,
+    configurationCheck: false,
+    liveProbes: false,
     metrics: metrics,
     cards: cards,
     recoveryItems: recoveryItems,
@@ -896,12 +1380,17 @@ function buildSystemHealthSummary_(options) {
     cycles,
     automation,
     alertsData,
-    checkedAt
+    checkedAt,
+    {
+      includeDetails: opts.includeDetails === true,
+    }
   );
 }
 
 /**
  * HR-only: lightweight System Health summary (cached ~30s).
+ * Structured recovery details are omitted from the cache; load them via
+ * getSystemHealthItemDetails().
  */
 function getSystemHealthSummary(options) {
   assertActiveHrDomain_();
@@ -913,17 +1402,20 @@ function getSystemHealthSummary(options) {
       return cached;
     }
   }
-  const summary = buildSystemHealthSummary_({
-    automation: getAutomationAdminData_(),
-  });
+  const summary = slimSystemHealthSummaryForCache_(
+    buildSystemHealthSummary_({
+      automation: getAutomationAdminData_(),
+      includeDetails: false,
+    })
+  );
   writeCachedSystemHealthSummary_(summary);
   return summary;
 }
 
 /**
- * HR-only: manual deep health check. Never called automatically.
- * Uses production readiness without live Workspace probes unless
- * explicitly confirmed for Sandbox.
+ * HR-only: configuration / readiness check. Never called automatically.
+ * Live Drive/Calendar/folder probes stay off unless Sandbox confirmation
+ * options are provided (see runSystemHealthSandboxLiveProbes).
  */
 function runSystemHealthDeepCheck(options) {
   assertActiveHrDomain_();
@@ -935,10 +1427,15 @@ function runSystemHealthDeepCheck(options) {
     opts.sandboxConfirmed === true &&
     String(opts.confirmationToken || '') === 'SANDBOX_LIVE_PROBES';
 
-  const summary = buildSystemHealthSummary_({
-    automation: getAutomationAdminData_(),
-  });
+  const summary = slimSystemHealthSummaryForCache_(
+    buildSystemHealthSummary_({
+      automation: getAutomationAdminData_(),
+      includeDetails: false,
+    })
+  );
   summary.deepCheck = true;
+  summary.configurationCheck = !liveProbes;
+  summary.liveProbes = liveProbes;
   summary.cached = false;
   summary.deepCheckStartedAt = new Date().toISOString();
 
@@ -959,6 +1456,7 @@ function runSystemHealthDeepCheck(options) {
         },
       ],
       warnings: [],
+      incomplete: true,
     };
   }
 
@@ -968,9 +1466,10 @@ function runSystemHealthDeepCheck(options) {
     warnings: (readiness && readiness.warnings) || [],
     liveProbes: liveProbes,
     liveProbesSkipped: !liveProbes,
+    incomplete: !!(readiness && readiness.incomplete),
     liveProbesNote: liveProbes
       ? 'Sandbox live probes executed.'
-      : 'Live Drive/Calendar/folder probes were not run. Requires Daniel Sandbox confirmation.',
+      : 'Live Drive/Calendar/folder probes were not run. Use Sandbox Live Probes only in ENVIRONMENT=Sandbox with confirmation.',
   };
 
   if (summary.readiness.blocking.length) {
@@ -987,12 +1486,21 @@ function runSystemHealthDeepCheck(options) {
   summary.overallLabel = getSystemHealthLevelLabel_(
     summary.overallLevel
   );
-  summary.headline =
-    summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.HEALTHY
-      ? 'Deep Check Healthy'
-      : summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.BLOCKING
-      ? 'Deep Check Found Blocking Issues'
-      : 'Deep Check Completed With Warnings';
+  if (liveProbes) {
+    summary.headline =
+      summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.HEALTHY
+        ? 'Sandbox Live Probes Healthy'
+        : summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+        ? 'Sandbox Live Probes Found Blocking Issues'
+        : 'Sandbox Live Probes Completed With Warnings';
+  } else {
+    summary.headline =
+      summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.HEALTHY
+        ? 'Configuration Check Healthy'
+        : summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+        ? 'Configuration Check Found Blocking Issues'
+        : 'Configuration Check Completed With Warnings';
+  }
   summary.deepCheckCompletedAt = new Date().toISOString();
   summary.checkedAt = summary.deepCheckCompletedAt;
   writeCachedSystemHealthSummary_(summary);
@@ -1000,12 +1508,36 @@ function runSystemHealthDeepCheck(options) {
 }
 
 /**
+ * HR-only Sandbox entrypoint for live Drive/Calendar/folder probes.
+ * Production must never call this with a successful probe path.
+ */
+function runSystemHealthSandboxLiveProbes(options) {
+  assertActiveHrDomain_();
+  const settings = getSettings_();
+  if (String(settings.ENVIRONMENT || '') !== 'Sandbox') {
+    throw new Error(
+      'Sandbox live probes are unavailable when ENVIRONMENT is not Sandbox.'
+    );
+  }
+  const opts = options || {};
+  return runSystemHealthDeepCheck({
+    liveProbes: true,
+    sandboxConfirmed: opts.sandboxConfirmed === true,
+    confirmationToken: String(opts.confirmationToken || ''),
+  });
+}
+
+/**
  * HR-only: detail payload for one recovery item or alert.
+ * Rebuilds with structured details so the cached summary stays small.
  */
 function getSystemHealthItemDetails(itemId) {
   assertActiveHrDomain_();
-  const summary = getSystemHealthSummary({ forceRefresh: false });
   const wanted = String(itemId || '');
+  const summary = buildSystemHealthSummary_({
+    automation: getAutomationAdminData_(),
+    includeDetails: true,
+  });
   const item = (summary.recoveryItems || []).filter(function (row) {
     return String(row.id) === wanted;
   })[0];
