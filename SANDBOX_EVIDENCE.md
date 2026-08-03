@@ -4,7 +4,7 @@
 **Branch:** `fix/crash-safe-side-effects`  
 **Delivery D tip:** `c234d862e08a53510e39315e477395e287c04f26`  
 **Delivery E tip (previous):** `741701c9b89a322910a8f4588f4beaf4b18236ed`  
-**Current Delivery E close SHA:** _(fill after push)_  
+**Current Delivery E close SHA:** `f6ad5f7acd02b3928bdc60fbd46896f2da74bbb2`  
 
 **Environment requirements:**
 

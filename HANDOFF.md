@@ -8,7 +8,8 @@ highest-priority source of truth.
 ## Delivery E close — security suite and sandbox live probes
 
 **Delivery D tip:** `c234d862e08a53510e39315e477395e287c04f26`  
-**Prior Delivery E tip:** `741701c9b89a322910a8f4588f4beaf4b18236ed`
+**Prior Delivery E tip:** `741701c9b89a322910a8f4588f4beaf4b18236ed`  
+**Current Delivery E close SHA:** `f6ad5f7acd02b3928bdc60fbd46896f2da74bbb2`
 
 Adds `V31_Security_Tests.gs`, `decidePublicAdminAuthorization_()`, executable
 Sandbox-only live probes (`executeSandboxLiveProbes_`) for Calendar, templates,
