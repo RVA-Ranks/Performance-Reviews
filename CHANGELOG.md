@@ -1,5 +1,17 @@
 # V3.1 Changelog
 
+## Delivery F Stage F1 — release candidate freeze
+
+- Froze immutable release candidate
+  `c46c2bd79a0dc7ab6665f3a9dc1ab2a7a67ea453` on
+  `fix/crash-safe-side-effects`.
+- Annotated tag `v3.1-delivery-f-rc` and backup branch
+  `backup/delivery-f-rc-c46c2bd` created for sandbox validation.
+- Confirmed `V31_Security_Tests.gs` and all private suites present.
+- Working tree clean; no application source changes during freeze.
+- Production remains Preview. Sandbox evidence continues in
+  `SANDBOX_EVIDENCE.md`.
+
 ## Delivery E close — security suite and sandbox live probes
 
 - Recorded Delivery D tip `c234d86` and prior Delivery E tip `741701c`.

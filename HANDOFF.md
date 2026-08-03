@@ -5,6 +5,22 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery F — Sandbox validation (Stage F1 frozen)
+
+```text
+RELEASE_CANDIDATE_SHA = c46c2bd79a0dc7ab6665f3a9dc1ab2a7a67ea453
+BRANCH = fix/crash-safe-side-effects
+BACKUP_BRANCH_OR_TAG = v3.1-delivery-f-rc / backup/delivery-f-rc-c46c2bd
+WORKING_TREE = clean
+```
+
+`V31_Security_Tests.gs` is present. Production and sandbox automation stay in
+**Preview** except during the isolated sandbox trigger test. Use
+[`SANDBOX_EVIDENCE.md`](SANDBOX_EVIDENCE.md) for F2–F15 evidence. No feature
+work during Delivery F — fix only defects proven by sandbox tests. Do not
+enable production Live until sandbox blockers = 0, rollback verified, and
+explicit approval.
+
 ## Delivery E close — security suite and sandbox live probes
 
 **Delivery D tip:** `c234d862e08a53510e39315e477395e287c04f26`  
@@ -14,8 +30,7 @@ highest-priority source of truth.
 Adds `V31_Security_Tests.gs`, `decidePublicAdminAuthorization_()`, executable
 Sandbox-only live probes (`executeSandboxLiveProbes_`) for Calendar, templates,
 review folder, bounded completed-PDF Drive validation, and signature artifacts,
-plus `SANDBOX_EVIDENCE.md`. Production cannot execute live probes. Stop for
-Delivery E review before Delivery F.
+plus `SANDBOX_EVIDENCE.md`. Production cannot execute live probes.
 
 ## Delivery E — readiness security and live-boundary honesty
 

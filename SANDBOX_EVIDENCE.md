@@ -1,10 +1,28 @@
 # AITHERAS Sandbox Evidence Template
 
 **Package:** V3.1  
-**Branch:** `fix/crash-safe-side-effects`  
-**Delivery D tip:** `c234d862e08a53510e39315e477395e287c04f26`  
-**Delivery E tip (previous):** `741701c9b89a322910a8f4588f4beaf4b18236ed`  
-**Current Delivery E close SHA:** `f6ad5f7acd02b3928bdc60fbd46896f2da74bbb2`  
+**Branch:** `fix/crash-safe-side-effects`
+
+## Delivery F Stage F1 — Release candidate freeze
+
+```text
+RELEASE_CANDIDATE_SHA = c46c2bd79a0dc7ab6665f3a9dc1ab2a7a67ea453
+BRANCH = fix/crash-safe-side-effects
+BACKUP_BRANCH_OR_TAG = tag v3.1-delivery-f-rc ; branch backup/delivery-f-rc-c46c2bd
+WORKING_TREE = clean
+V31_Security_Tests.gs = present
+```
+
+Every Delivery F test record below must cite this same SHA. Do not modify
+application source during test execution unless a sandbox failure is proven.
+
+**Prior tips:**
+
+```text
+Delivery D: c234d862e08a53510e39315e477395e287c04f26
+Delivery E readiness: 741701c9b89a322910a8f4588f4beaf4b18236ed
+Delivery E close: f6ad5f7acd02b3928bdc60fbd46896f2da74bbb2
+```
 
 **Environment requirements:**
 
@@ -17,13 +35,16 @@ SYSTEM_ALERT_RECIPIENT = aitheras-hr@aitheras.com
 ENABLE_FAULT_INJECTION = false
 ```
 
-Do not enable production Live from this template.
+Do not enable production Live from this template. Use fake employee data only.
+Copied/isolated Sandbox spreadsheet, folders, templates, Calendar, and web app
+only — never real employee-review records.
 
 ---
 
 ## 1. Private automated suites
 
-Run in the Apps Script editor as the automation owner:
+Run in the Apps Script editor as the automation owner against
+`RELEASE_CANDIDATE_SHA`:
 
 ```javascript
 runV31IdempotencyTests_();
@@ -39,7 +60,7 @@ runV31SecurityTests_();
 
 | Suite | Passed | Failed | Skipped | Blocking | Notes |
 |---|---:|---:|---:|---|---|
-| Idempotency |  |  |  |  |  |
+| Idempotency |  |  |  |  | SHA c46c2bd |
 | Finalization |  |  |  |  |  |
 | Workflow notifications |  |  |  |  |  |
 | System alerts |  |  |  |  |  |
@@ -47,7 +68,7 @@ runV31SecurityTests_();
 | Triggers |  |  |  |  |  |
 | System Health |  |  |  |  |  |
 | Production readiness |  |  |  |  |  |
-| Security |  |  |  |  |  |
+| Security |  |  |  |  | Required; file present |
 
 Expected: `failed = 0` and no unexpected blocking rows.
 

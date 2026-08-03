@@ -2,6 +2,22 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery F Stage F1 — release candidate freeze
+
+```text
+RELEASE_CANDIDATE_SHA = c46c2bd79a0dc7ab6665f3a9dc1ab2a7a67ea453
+BRANCH = fix/crash-safe-side-effects
+TAG = v3.1-delivery-f-rc
+BACKUP_BRANCH = backup/delivery-f-rc-c46c2bd
+WORKING_TREE = clean
+V31_Security_Tests.gs = present
+```
+
+Deploy this SHA to the dedicated Sandbox project. Keep production Preview.
+Execute F2–F15 from the Delivery F matrix and record every result in
+`SANDBOX_EVIDENCE.md` with the same SHA. Fix only defects proven by sandbox
+evidence. Do not enable production Live.
+
 ## Delivery E close gate — security suite and sandbox probes
 
 Exact prior SHAs:

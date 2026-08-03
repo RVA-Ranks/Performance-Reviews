@@ -7,6 +7,17 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery F Stage F1 — release candidate freeze
+
+```text
+RELEASE_CANDIDATE_SHA = c46c2bd79a0dc7ab6665f3a9dc1ab2a7a67ea453
+TAG = v3.1-delivery-f-rc
+BACKUP = backup/delivery-f-rc-c46c2bd
+```
+
+Sandbox validation proceeds against this SHA only. Keep production Preview.
+Record all F2–F15 results in [`SANDBOX_EVIDENCE.md`](SANDBOX_EVIDENCE.md).
+
 ## Delivery E close — security suite and sandbox live probes
 
 Delivery D tip `c234d86` and Delivery E tip `741701c` are preserved.
