@@ -2,6 +2,44 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery E close gate — security suite and sandbox probes
+
+Exact prior SHAs:
+
+```text
+Delivery D: c234d862e08a53510e39315e477395e287c04f26
+Delivery E (readiness): 741701c9b89a322910a8f4588f4beaf4b18236ed
+```
+
+Run privately in Preview:
+
+```javascript
+runV31IdempotencyTests_();
+runV31FinalizationTests_();
+runV31WorkflowNotificationTests_();
+runV31SystemAlertTests_();
+runV31SignatureTests_();
+runV31TriggerTests_();
+runV31SystemHealthTests_();
+runV31ProductionReadinessTests_();
+runV31SecurityTests_();
+```
+
+Expected: `failed = 0`.
+
+In Sandbox only, run live probes and record evidence in `SANDBOX_EVIDENCE.md`:
+
+```javascript
+runSystemHealthSandboxLiveProbes({
+  sandboxConfirmed: true,
+  confirmationToken: 'SANDBOX_LIVE_PROBES'
+});
+```
+
+**Requires Daniel Sandbox:** session-backed security matrix, concurrency, Mail
+ambiguity, accessibility, cold/cached timing, and full probe evidence capture.
+Do not enable production Live.
+
 ## Delivery E gate — readiness security and live-boundary suites
 
 Run privately in Preview:

@@ -1,5 +1,18 @@
 # V3.1 Changelog
 
+## Delivery E close — security suite and sandbox live probes
+
+- Recorded Delivery D tip `c234d86` and prior Delivery E tip `741701c`.
+- Added `V31_Security_Tests.gs` and pure `decidePublicAdminAuthorization_()`
+  matrix for employee/manager/HR/owner capability gates.
+- Implemented Sandbox-only `executeSandboxLiveProbes_()` for Calendar,
+  manager/self templates, review folder, bounded completed-PDF Drive
+  validation, and signature artifact access; Production remains blocked.
+- Deep audit verification limits to Complete cycles and
+  `FINALIZATION_COMPLETE:` Event IDs, and records duration.
+- Added `SANDBOX_EVIDENCE.md` procedures and evidence tables.
+- Detail-loading fallback now logs when a full summary rebuild is required.
+
 ## Delivery E — readiness security and live-boundary suites
 
 - Preserved approved Delivery D tip `c234d86`.

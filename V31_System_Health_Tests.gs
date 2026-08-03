@@ -1,8 +1,9 @@
 /**
- * Delivery D pure System Health tests (correction pass).
+ * Delivery E System Health tests (includes Delivery D correction coverage).
  *
  * Run from Apps Script editor: runV31SystemHealthTests_()
  * No Drive, Calendar, Mail, or Sheet writes in the automatic suite.
+ * Executable Sandbox live probes remain Requires Daniel Sandbox evidence.
  */
 
 function runV31SystemHealthTests_() {
@@ -36,10 +37,11 @@ function runV31SystemHealthTests_() {
     }
   });
   [
-    'Requires Daniel Sandbox: deep Drive/Calendar/folder/template probes',
+    'Requires Daniel Sandbox: executable Drive/Calendar/folder/template/PDF probes',
     'Requires Daniel Sandbox: dashboard load timing under concurrent Sheet load',
     'Requires Daniel Sandbox: browser accessibility keyboard/focus/screen-reader checks',
     'Requires Daniel Sandbox: cold vs cached System Health load with 100/1000 cycles',
+    'Requires Daniel Sandbox: deep readiness audit timing with realistic history',
   ].forEach(function (name) {
     results.push({
       name: name,
@@ -736,11 +738,27 @@ function testLiveProbeReportHonesty_() {
     report.requested === true &&
       report.allowed === true &&
       report.executed === false,
-    'Sandbox confirmation must not claim probes executed.'
+    'Sandbox confirmation without probeResults must not claim probes executed.'
   );
   assertHealthTest_(
     report.checksSkipped.indexOf('PDF validation') >= 0,
     'Skipped catalog must include PDF validation.'
+  );
+  const executed = buildSandboxLiveProbeReport_(settings, {
+    liveProbes: true,
+    sandboxConfirmed: true,
+    confirmationToken: 'SANDBOX_LIVE_PROBES',
+    probeResults: {
+      executed: true,
+      checksRun: ['Calendar access', 'Review folder'],
+      checksSkipped: ['PDF validation'],
+    },
+  });
+  assertHealthTest_(
+    executed.executed === true &&
+      executed.checksRun.indexOf('Calendar access') >= 0 &&
+      executed.checksSkipped.indexOf('PDF validation') >= 0,
+    'probeResults.executed=true must surface checksRun and checksSkipped honestly.'
   );
 }
 

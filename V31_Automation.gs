@@ -2935,7 +2935,6 @@ function buildProductionReadinessReport_(
 
 /**
  * Catalog of Workspace probes that require Daniel Sandbox evidence.
- * Until implemented, requested Sandbox reports must list these as skipped.
  */
 function getSandboxLiveProbeCatalog_() {
   return [
@@ -2951,6 +2950,7 @@ function getSandboxLiveProbeCatalog_() {
 /**
  * Pure helper: describe whether Sandbox live probes were requested,
  * allowed, and actually executed. Never claims execution when false.
+ * Pass options.probeResults from executeSandboxLiveProbes_() when run.
  */
 function buildSandboxLiveProbeReport_(settings, options) {
   const opts = options || {};
@@ -2962,14 +2962,434 @@ function buildSandboxLiveProbeReport_(settings, options) {
     opts.sandboxConfirmed === true &&
     String(opts.confirmationToken || '') === 'SANDBOX_LIVE_PROBES';
   const catalog = getSandboxLiveProbeCatalog_();
-  // Delivery E: catalog probes are not yet executed in-process.
-  const executed = false;
+  const probeResults = opts.probeResults || null;
+  if (
+    allowed &&
+    probeResults &&
+    probeResults.executed === true
+  ) {
+    return {
+      requested: true,
+      allowed: true,
+      executed: true,
+      checksRun: (probeResults.checksRun || []).slice(),
+      checksSkipped: (probeResults.checksSkipped || []).slice(),
+    };
+  }
   return {
     requested: requested,
     allowed: allowed,
-    executed: executed,
+    executed: false,
     checksRun: [],
     checksSkipped: requested ? catalog.slice() : [],
+  };
+}
+
+/**
+ * Pure authorization matrix for public admin/recovery surfaces.
+ * Used by V31_Security_Tests.gs; does not call Session or Sheets.
+ */
+function decidePublicAdminAuthorization_(actor) {
+  const value = actor || {};
+  const email = normalizeEmail_(value.email);
+  const domain = String(value.allowedDomain || 'aitheras.com')
+    .trim()
+    .toLowerCase()
+    .replace(/^@/, '');
+  const onDomain =
+    !!email && !!domain && email.endsWith('@' + domain);
+  const isHr = onDomain && value.isActiveHr === true;
+  const isManager = onDomain && value.isManager === true;
+  const isEmployee = onDomain && value.isEmployee === true;
+  const isOwner =
+    onDomain &&
+    normalizeEmail_(value.automationOwnerEmail) === email &&
+    !!email;
+  return {
+    email: email,
+    onDomain: onDomain,
+    isActiveHr: isHr,
+    isManager: isManager,
+    isEmployee: isEmployee,
+    isAutomationOwner: isOwner,
+    canSystemHealth: isHr,
+    canDrainSystemAlerts: isHr,
+    canDrainWorkflowOutbox: isHr,
+    canReconcilePdf: isHr,
+    canReconcileSignature: isHr,
+    canRetryFinalization: isHr,
+    canRetryLaunch: isHr,
+    canRebuildCalendar: isHr,
+    canChangeAutomationSettings: isHr,
+    canPreviewAutomation: isHr,
+    canEnableLiveMode: isHr && isOwner,
+    canAdministerTriggers: isOwner,
+    canSeeCompensation: isHr || isManager,
+    canAccessOtherCycles: isHr,
+    canInvokePrivateSetupOrTestsFromWebClient: false,
+  };
+}
+
+/**
+ * Bounded Sandbox-only Workspace probes. Production must never call this
+ * successfully. Records checksRun/checksSkipped honestly.
+ */
+function executeSandboxLiveProbes_(settings) {
+  const current = settings || getSettings_();
+  if (String(current.ENVIRONMENT || '') !== 'Sandbox') {
+    throw new Error(
+      'executeSandboxLiveProbes_ is prohibited unless ENVIRONMENT is Sandbox.'
+    );
+  }
+
+  const checksRun = [];
+  const checksSkipped = [];
+  const blocking = [];
+  const warnings = [];
+  const reviewFolderId = String(current.REVIEW_FOLDER_ID || '');
+
+  try {
+    const calendar = CalendarApp.getDefaultCalendar();
+    if (!calendar || !calendar.getId()) {
+      throw new Error('Default calendar is inaccessible.');
+    }
+    checksRun.push('Calendar access');
+  } catch (error) {
+    checksRun.push('Calendar access');
+    blocking.push({
+      code: 'CALENDAR_PROBE_FAILED',
+      message: String(error.message || error),
+    });
+  }
+
+  [
+    {
+      label: 'Manager template',
+      setting: 'MANAGER_TEMPLATE_ID',
+      code: 'MANAGER_TEMPLATE_PROBE_FAILED',
+    },
+    {
+      label: 'Self template',
+      setting: 'SELF_TEMPLATE_ID',
+      code: 'SELF_TEMPLATE_PROBE_FAILED',
+    },
+  ].forEach(function (entry) {
+    const fileId = String(current[entry.setting] || '');
+    if (!fileId) {
+      checksSkipped.push(entry.label);
+      warnings.push({
+        code: entry.code,
+        message: entry.setting + ' is blank; probe skipped.',
+      });
+      return;
+    }
+    try {
+      const file = DriveApp.getFileById(fileId);
+      if (file.isTrashed()) {
+        throw new Error(entry.label + ' is trashed.');
+      }
+      checksRun.push(entry.label);
+    } catch (error) {
+      checksRun.push(entry.label);
+      blocking.push({
+        code: entry.code,
+        message: String(error.message || error),
+      });
+    }
+  });
+
+  if (!reviewFolderId) {
+    checksSkipped.push('Review folder');
+    warnings.push({
+      code: 'REVIEW_FOLDER_PROBE_SKIPPED',
+      message: 'REVIEW_FOLDER_ID is blank; probe skipped.',
+    });
+  } else {
+    try {
+      const folder = DriveApp.getFolderById(reviewFolderId);
+      if (!folder || !folder.getName()) {
+        throw new Error('Review folder is inaccessible.');
+      }
+      checksRun.push('Review folder');
+    } catch (error) {
+      checksRun.push('Review folder');
+      blocking.push({
+        code: 'REVIEW_FOLDER_PROBE_FAILED',
+        message: String(error.message || error),
+      });
+    }
+  }
+
+  const pdfProbe = probeCompletedPdfsInSandbox_(
+    current,
+    reviewFolderId
+  );
+  if (pdfProbe.skipped) {
+    checksSkipped.push('PDF validation');
+    warnings.push({
+      code: 'PDF_PROBE_SKIPPED',
+      message: pdfProbe.message,
+    });
+  } else {
+    checksRun.push('PDF validation');
+    pdfProbe.blocking.forEach(function (issue) {
+      blocking.push(issue);
+    });
+    pdfProbe.warnings.forEach(function (issue) {
+      warnings.push(issue);
+    });
+  }
+
+  const signatureProbe = probeSignatureArtifactsInSandbox_(current);
+  if (signatureProbe.skipped) {
+    checksSkipped.push('Signature artifact validation');
+    warnings.push({
+      code: 'SIGNATURE_ARTIFACT_PROBE_SKIPPED',
+      message: signatureProbe.message,
+    });
+  } else {
+    checksRun.push('Signature artifact validation');
+    signatureProbe.blocking.forEach(function (issue) {
+      blocking.push(issue);
+    });
+    signatureProbe.warnings.forEach(function (issue) {
+      warnings.push(issue);
+    });
+  }
+
+  return {
+    executed: true,
+    checksRun: checksRun,
+    checksSkipped: checksSkipped,
+    blocking: blocking,
+    warnings: warnings,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Bounded completed-PDF Drive validation for Sandbox live probes.
+ * Caps inspected Complete cycles to avoid Apps Script timeouts.
+ */
+function probeCompletedPdfsInSandbox_(settings, reviewFolderId) {
+  const blocking = [];
+  const warnings = [];
+  const maxCycles = 25;
+  let cycles = [];
+  try {
+    cycles = getAllObjects_(PR.SHEETS.CYCLES).filter(function (cycle) {
+      return String(cycle.Status || '') === PR.CYCLE.COMPLETE;
+    });
+  } catch (error) {
+    return {
+      skipped: true,
+      message:
+        'Could not load ReviewCycles for PDF probes: ' +
+        String(error.message || error),
+      blocking: blocking,
+      warnings: warnings,
+    };
+  }
+
+  if (!cycles.length) {
+    return {
+      skipped: true,
+      message: 'No Complete cycles available for PDF probes.',
+      blocking: blocking,
+      warnings: warnings,
+    };
+  }
+
+  const sample = cycles.slice(0, maxCycles);
+  sample.forEach(function (cycle) {
+    const cycleId = String(cycle['Cycle ID'] || '');
+    [
+      {
+        label: 'Manager PDF',
+        idField: 'Manager Review PDF ID',
+        documentType: PR.TYPE.MANAGER,
+      },
+      {
+        label: 'Self PDF',
+        idField: 'Self Evaluation PDF ID',
+        documentType: PR.TYPE.SELF,
+      },
+    ].forEach(function (entry) {
+      const fileId = String(cycle[entry.idField] || '');
+      if (!fileId) {
+        warnings.push({
+          code: 'PDF_ID_MISSING',
+          cycleId: cycleId,
+          message:
+            entry.label +
+            ' ID is blank on Complete cycle ' +
+            cycleId +
+            '.',
+        });
+        return;
+      }
+      let facts = {
+        exists: false,
+        trashed: false,
+        mimeType: '',
+        folderId: '',
+        expectedFolderId: String(reviewFolderId || ''),
+        identityOk: true,
+      };
+      try {
+        const file = DriveApp.getFileById(fileId);
+        facts.exists = true;
+        facts.trashed = !!file.isTrashed();
+        facts.mimeType = String(file.getMimeType() || '');
+        const parents = file.getParents();
+        if (parents.hasNext()) {
+          facts.folderId = String(parents.next().getId() || '');
+        }
+        const expectedNames =
+          typeof getRecognizedReviewPdfNames_ === 'function'
+            ? getRecognizedReviewPdfNames_(
+                cycleId,
+                entry.documentType
+              )
+            : [];
+        if (
+          expectedNames.length &&
+          expectedNames.indexOf(String(file.getName() || '')) < 0
+        ) {
+          facts.identityOk = false;
+        }
+      } catch (error) {
+        facts.exists = false;
+      }
+      const classified = classifyCompletedPdfProbeResult_(facts);
+      if (!classified.ok) {
+        blocking.push({
+          code: classified.code,
+          cycleId: cycleId,
+          documentType: entry.documentType,
+          message:
+            entry.label +
+            ' for cycle ' +
+            cycleId +
+            ': ' +
+            classified.message,
+          recommendation:
+            'Reconcile the completed PDF. Do not automatically resend the final packet.',
+        });
+      }
+    });
+  });
+
+  if (cycles.length > maxCycles) {
+    warnings.push({
+      code: 'PDF_PROBE_BOUNDED',
+      message:
+        'PDF probes inspected ' +
+        maxCycles +
+        ' of ' +
+        cycles.length +
+        ' Complete cycles.',
+    });
+  }
+
+  return {
+    skipped: false,
+    message: '',
+    blocking: blocking,
+    warnings: warnings,
+  };
+}
+
+function probeSignatureArtifactsInSandbox_(settings) {
+  const blocking = [];
+  const warnings = [];
+  const maxFiles = 25;
+  let cycles = [];
+  try {
+    cycles = getAllObjects_(PR.SHEETS.CYCLES);
+  } catch (error) {
+    return {
+      skipped: true,
+      message:
+        'Could not load ReviewCycles for signature artifact probes: ' +
+        String(error.message || error),
+      blocking: blocking,
+      warnings: warnings,
+    };
+  }
+
+  const fileIds = [];
+  cycles.forEach(function (cycle) {
+    [
+      'Manager Signature File ID',
+      'Employee Signature File ID',
+      'HR Signature File ID',
+    ].forEach(function (field) {
+      const fileId = String(cycle[field] || '');
+      if (fileId) {
+        fileIds.push({
+          cycleId: String(cycle['Cycle ID'] || ''),
+          field: field,
+          fileId: fileId,
+        });
+      }
+    });
+  });
+
+  if (!fileIds.length) {
+    return {
+      skipped: true,
+      message: 'No signature file IDs available for artifact probes.',
+      blocking: blocking,
+      warnings: warnings,
+    };
+  }
+
+  fileIds.slice(0, maxFiles).forEach(function (entry) {
+    try {
+      const file = DriveApp.getFileById(entry.fileId);
+      if (file.isTrashed()) {
+        blocking.push({
+          code: 'SIGNATURE_ARTIFACT_TRASHED',
+          cycleId: entry.cycleId,
+          message:
+            entry.field +
+            ' for cycle ' +
+            entry.cycleId +
+            ' is trashed.',
+        });
+      }
+    } catch (error) {
+      blocking.push({
+        code: 'SIGNATURE_ARTIFACT_MISSING',
+        cycleId: entry.cycleId,
+        message:
+          entry.field +
+          ' for cycle ' +
+          entry.cycleId +
+          ' is inaccessible: ' +
+          String(error.message || error),
+      });
+    }
+  });
+
+  if (fileIds.length > maxFiles) {
+    warnings.push({
+      code: 'SIGNATURE_ARTIFACT_PROBE_BOUNDED',
+      message:
+        'Signature artifact probes inspected ' +
+        maxFiles +
+        ' of ' +
+        fileIds.length +
+        ' file IDs.',
+    });
+  }
+
+  return {
+    skipped: false,
+    message: '',
+    blocking: blocking,
+    warnings: warnings,
   };
 }
 
@@ -3104,9 +3524,10 @@ function classifyCompletedPdfProbeResult_(facts) {
 
 function buildAuditEventIdSet_(auditRows) {
   const idSet = {};
+  const prefix = 'FINALIZATION_COMPLETE:';
   (auditRows || []).forEach(function (row) {
     const eventId = String(row['Event ID'] || '').trim();
-    if (eventId) {
+    if (eventId.indexOf(prefix) === 0) {
       idSet[eventId] = true;
     }
   });
@@ -3116,11 +3537,68 @@ function buildAuditEventIdSet_(auditRows) {
 function runProductionReadinessChecks_(options) {
   const opts = options || { liveProbes: false };
   const settings = getSettings_();
+  let probeResults = null;
+
+  if (
+    opts.liveProbes === true &&
+    String(settings.ENVIRONMENT || '') === 'Sandbox' &&
+    opts.sandboxConfirmed === true &&
+    String(opts.confirmationToken || '') === 'SANDBOX_LIVE_PROBES'
+  ) {
+    try {
+      probeResults = executeSandboxLiveProbes_(settings);
+    } catch (error) {
+      probeResults = {
+        executed: false,
+        checksRun: [],
+        checksSkipped: getSandboxLiveProbeCatalog_(),
+        blocking: [
+          {
+            code: 'SANDBOX_LIVE_PROBE_FAILED',
+            message: String(error.message || error),
+          },
+        ],
+        warnings: [],
+      };
+    }
+  }
+
   const report = buildProductionReadinessReport_(
     settings,
     getAutomationTriggerHealth_(settings),
-    opts
+    {
+      liveProbes: opts.liveProbes,
+      sandboxConfirmed: opts.sandboxConfirmed,
+      confirmationToken: opts.confirmationToken,
+      probeResults: probeResults,
+    }
   );
+
+  if (probeResults) {
+    (probeResults.blocking || []).forEach(function (issue) {
+      report.blocking.push(issue);
+    });
+    (probeResults.warnings || []).forEach(function (issue) {
+      // Avoid duplicating the REQUIRES_DANIEL_SANDBOX placeholder when
+      // probes actually executed.
+      if (
+        probeResults.executed &&
+        issue.code === 'REQUIRES_DANIEL_SANDBOX'
+      ) {
+        return;
+      }
+      report.warnings.push(issue);
+    });
+    if (probeResults.executed) {
+      report.warnings = (report.warnings || []).filter(function (
+        row
+      ) {
+        return row.code !== 'REQUIRES_DANIEL_SANDBOX';
+      });
+    }
+    report.ok = report.blocking.length === 0;
+  }
+
   if (settings.SIGNATURE_RECOVERY_FOLDER_ID) {
     try {
       const folder = validateSignatureRecoveryFolder_(
@@ -3149,12 +3627,16 @@ function runProductionReadinessChecks_(options) {
   // Deep readiness only: verify deterministic finalization audit rows for
   // Complete cycles that claim a healthy Event ID. Lightweight summary skips.
   if (opts.verifyFinalizationAuditRows === true) {
-    const cycles =
+    const auditStarted = Date.now();
+    const allCycles =
       opts.cycles || getAllObjects_(PR.SHEETS.CYCLES);
+    const completeCycles = (allCycles || []).filter(function (cycle) {
+      return String(cycle.Status || '') === PR.CYCLE.COMPLETE;
+    });
     const auditRows =
       opts.auditRows || getAllObjects_(PR.SHEETS.AUDIT);
     const auditIssues = collectCompleteCycleAuditRowIssues_(
-      cycles,
+      completeCycles,
       buildAuditEventIdSet_(auditRows)
     );
     auditIssues.blocking.forEach(function (issue) {
@@ -3162,6 +3644,10 @@ function runProductionReadinessChecks_(options) {
     });
     report.finalizationAuditRecoveryItems =
       auditIssues.recoveryItems;
+    report.finalizationAuditCheck = {
+      completeCycleCount: completeCycles.length,
+      durationMs: Date.now() - auditStarted,
+    };
     if (auditIssues.blocking.length) {
       report.ok = false;
     }

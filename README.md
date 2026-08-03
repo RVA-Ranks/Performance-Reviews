@@ -7,6 +7,14 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery E close — security suite and sandbox live probes
+
+Delivery D tip `c234d86` and Delivery E tip `741701c` are preserved.
+`V31_Security_Tests.gs` covers the authorization matrix. Sandbox-only live
+probes can execute Calendar/template/folder/PDF/signature checks with honest
+`executed` reporting. Use [`SANDBOX_EVIDENCE.md`](SANDBOX_EVIDENCE.md) to record
+results. Production Live remains prohibited.
+
 ## Delivery E — readiness security and live-boundary honesty
 
 Delivery D tip `c234d86` is preserved. Readiness now reports honest Sandbox

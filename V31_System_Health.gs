@@ -1798,6 +1798,10 @@ function getSystemHealthItemDetails(itemId) {
   }
 
   if (!item) {
+    Logger.log(
+      'System Health detail fallback to full summary rebuild for itemId=' +
+        wanted
+    );
     const summary = buildSystemHealthSummary_({
       automation: getAutomationAdminData_(),
       includeDetails: true,

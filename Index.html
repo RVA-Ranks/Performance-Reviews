@@ -1919,7 +1919,7 @@ function renderSystemHealthPanel(data) {
     : '<div class="health-empty" role="status">Everything looks healthy. No recovery actions are needed.</div>';
 
   const probeButton = isSandbox
-    ? '<button type="button" class="button warning" onclick="runSandboxLiveProbes()">Prepare Sandbox Live-Probe Report</button>'
+    ? '<button type="button" class="button warning" onclick="runSandboxLiveProbes()">Run Sandbox Live Probes</button>'
     : '';
 
   return '<div class="health-shell" aria-label="System Health">' +
@@ -1932,10 +1932,10 @@ function renderSystemHealthPanel(data) {
       ? (data.liveProbes
         ? 'Sandbox live probe execution results are included. '
         : data.liveProbesRequested
-        ? 'Sandbox live-probe report is included; catalog probes were not executed. '
+        ? 'Sandbox live-probe request was prepared; review Deep Check Results for executed vs skipped probes. '
         : 'Configuration check results are included. ')
       : 'Fast sheet and trigger summary. ') +
-    'Live Drive and Calendar probes require Daniel Sandbox evidence and never auto-run.</p>' +
+    'Live Drive and Calendar probes require Sandbox confirmation and never auto-run in Production.</p>' +
     '<div class="health-metrics">' + metricHtml + '</div></div>' +
     '<div><h3 class="sr-only">Component checklist</h3><ul class="health-checklist">' + checklist + '</ul>' +
     '<div class="button-row" style="margin-top:16px">' +
@@ -2008,19 +2008,19 @@ async function runConfigurationHealthCheck() {
 async function runSandboxLiveProbes() {
   const environment = String(state.environment || (state.v31 && state.v31.automation && state.v31.automation.environment) || '');
   if (environment !== 'Sandbox') {
-    showToast('warning', 'Sandbox live-probe report', 'This report is available only when ENVIRONMENT is Sandbox.');
+    showToast('warning', 'Sandbox live probes', 'Live probes are available only when ENVIRONMENT is Sandbox.');
     return;
   }
   openModal({
-    title: 'Prepare Sandbox Live-Probe Report?',
-    body: '<p><strong>Warning:</strong> This prepares the Sandbox live-probe readiness report and configuration gates.</p><p>Catalog Drive/Calendar/template/PDF probes remain <strong>Requires Daniel Sandbox</strong> until executed and evidenced. Production never offers this control.</p>',
-    confirmLabel: 'Prepare Report',
+    title: 'Run Sandbox Live Probes?',
+    body: '<p><strong>Warning:</strong> This runs bounded Sandbox Drive, Calendar, template, PDF, and signature-artifact probes.</p><p>Production never offers this control. Record results in SANDBOX_EVIDENCE.md. Do not enable production Live.</p>',
+    confirmLabel: 'Run Sandbox Live Probes',
     tone: 'warning',
     onConfirm: async function() {
       closeModal();
       const panel = document.getElementById('systemHealthPanel');
       if (panel) {
-        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Preparing Sandbox live-probe report…</p></div>';
+        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Running Sandbox live probes…</p></div>';
       }
       try {
         const data = await server('runSystemHealthSandboxLiveProbes', {
@@ -2033,13 +2033,22 @@ async function runSandboxLiveProbes() {
         if (panel) panel.innerHTML = renderSystemHealthPanel(data);
         const alertsPanel = document.getElementById('systemAlertsPanel');
         if (alertsPanel) alertsPanel.innerHTML = renderSystemAlertsPanel(data.alerts || state.v31.systemAlerts);
+        const executed =
+          data &&
+          data.readiness &&
+          data.readiness.liveProbesExecuted === true;
         showToast(
           data.overallLevel === 'blocking' ? 'warning' : 'success',
-          'Sandbox live-probe report',
-          formatOperationalClientMessage(data, data.headline || 'Sandbox live-probe report ready.')
+          'Sandbox live probes',
+          formatOperationalClientMessage(
+            data,
+            executed
+              ? (data.headline || 'Sandbox live probes executed.')
+              : (data.headline || 'Sandbox live-probe request completed without execution.')
+          )
         );
       } catch (error) {
-        showToast('error', 'Sandbox live-probe report', friendlyErrorMessage(error));
+        showToast('error', 'Sandbox live probes', friendlyErrorMessage(error));
         await refreshSystemHealth(true);
       }
     }

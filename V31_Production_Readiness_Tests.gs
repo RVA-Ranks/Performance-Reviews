@@ -5,8 +5,8 @@
  *   runV31ProductionReadinessTests_()
  *
  * Pure coverage for settings/security gates, live-probe honesty, and
- * Complete-cycle audit-row deep checks. Workspace Drive/Calendar/PDF
- * execution remains Requires Daniel Sandbox.
+ * Complete-cycle audit-row deep checks. Executable Workspace probes and
+ * Drive PDF validation remain Requires Daniel Sandbox evidence.
  */
 
 function runV31ProductionReadinessTests_() {
@@ -80,6 +80,12 @@ function runV31ProductionReadinessTests_() {
       {
         name: 'Completed PDF Drive existence trash MIME folder identity probes',
         severity: 'Blocking',
+        skip: true,
+        skipMessage: 'Requires Daniel Sandbox',
+      },
+      {
+        name: 'Deep readiness audit timing with realistic Complete-cycle volume',
+        severity: 'Major',
         skip: true,
         skipMessage: 'Requires Daniel Sandbox',
       },

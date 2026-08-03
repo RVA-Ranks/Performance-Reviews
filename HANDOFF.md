@@ -5,6 +5,17 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery E close — security suite and sandbox live probes
+
+**Delivery D tip:** `c234d862e08a53510e39315e477395e287c04f26`  
+**Prior Delivery E tip:** `741701c9b89a322910a8f4588f4beaf4b18236ed`
+
+Adds `V31_Security_Tests.gs`, `decidePublicAdminAuthorization_()`, executable
+Sandbox-only live probes (`executeSandboxLiveProbes_`) for Calendar, templates,
+review folder, bounded completed-PDF Drive validation, and signature artifacts,
+plus `SANDBOX_EVIDENCE.md`. Production cannot execute live probes. Stop for
+Delivery E review before Delivery F.
+
 ## Delivery E — readiness security and live-boundary honesty
 
 Delivery D tip preserved:
