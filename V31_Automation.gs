@@ -2895,26 +2895,27 @@ function buildProductionReadinessReport_(
     });
   }
 
-  if (opts.liveProbes) {
-    const sandboxAllowed =
-      String(settings.ENVIRONMENT || '') === 'Sandbox' &&
-      opts.sandboxConfirmed === true &&
-      String(opts.confirmationToken || '') ===
-        'SANDBOX_LIVE_PROBES';
-
-    if (!sandboxAllowed) {
-      blocking.push({
-        code: 'LIVE_PROBE_GUARD',
-        message:
-          'Live probes require Sandbox, sandboxConfirmed=true, and the SANDBOX_LIVE_PROBES confirmation token.',
-      });
-    } else {
-      warnings.push({
-        code: 'REQUIRES_DANIEL_SANDBOX',
-        message:
-          'Live trigger probes require Daniel-provided sandbox resources and recorded evidence.',
-      });
-    }
+  const liveProbeReport = buildSandboxLiveProbeReport_(
+    settings,
+    opts
+  );
+  if (liveProbeReport.requested && !liveProbeReport.allowed) {
+    blocking.push({
+      code: 'LIVE_PROBE_GUARD',
+      message:
+        'Live probes require Sandbox, sandboxConfirmed=true, and the SANDBOX_LIVE_PROBES confirmation token.',
+    });
+  } else if (
+    liveProbeReport.requested &&
+    liveProbeReport.allowed &&
+    !liveProbeReport.executed
+  ) {
+    warnings.push({
+      code: 'REQUIRES_DANIEL_SANDBOX',
+      message:
+        'Sandbox live-probe report prepared. Drive/Calendar/template/PDF probes were not executed and remain Requires Daniel Sandbox.',
+      checksSkipped: liveProbeReport.checksSkipped,
+    });
   }
 
   return {
@@ -2927,16 +2928,198 @@ function buildProductionReadinessReport_(
     blocking: blocking,
     warnings: warnings,
     triggerHealth: triggerHealth,
-    liveProbesExecuted: false,
+    liveProbesExecuted: liveProbeReport.executed === true,
+    liveProbes: liveProbeReport,
   };
 }
 
+/**
+ * Catalog of Workspace probes that require Daniel Sandbox evidence.
+ * Until implemented, requested Sandbox reports must list these as skipped.
+ */
+function getSandboxLiveProbeCatalog_() {
+  return [
+    'Calendar access',
+    'Manager template',
+    'Self template',
+    'Review folder',
+    'PDF validation',
+    'Signature artifact validation',
+  ];
+}
+
+/**
+ * Pure helper: describe whether Sandbox live probes were requested,
+ * allowed, and actually executed. Never claims execution when false.
+ */
+function buildSandboxLiveProbeReport_(settings, options) {
+  const opts = options || {};
+  const requested = opts.liveProbes === true;
+  const allowed =
+    requested &&
+    String((settings && settings.ENVIRONMENT) || '') ===
+      'Sandbox' &&
+    opts.sandboxConfirmed === true &&
+    String(opts.confirmationToken || '') === 'SANDBOX_LIVE_PROBES';
+  const catalog = getSandboxLiveProbeCatalog_();
+  // Delivery E: catalog probes are not yet executed in-process.
+  const executed = false;
+  return {
+    requested: requested,
+    allowed: allowed,
+    executed: executed,
+    checksRun: [],
+    checksSkipped: requested ? catalog.slice() : [],
+  };
+}
+
+/**
+ * Pure helper: Complete cycles that claim a healthy audit Event ID must
+ * still have the deterministic ReviewAuditLog row. Used by deep readiness
+ * only — not the lightweight System Health summary.
+ */
+function collectCompleteCycleAuditRowIssues_(
+  cycles,
+  auditEventIdSet
+) {
+  const blocking = [];
+  const recoveryItems = [];
+  const idSet = auditEventIdSet || {};
+  (cycles || []).forEach(function (cycle) {
+    if (String(cycle.Status || '') !== PR.CYCLE.COMPLETE) {
+      return;
+    }
+    const cycleId = String(cycle['Cycle ID'] || '');
+    const auditStatus = String(
+      cycle['Finalization Audit Status'] || ''
+    );
+    const storedId = String(
+      cycle['Finalization Audit Event ID'] || ''
+    );
+    const expectedId =
+      typeof getFinalizationAuditEventId_ === 'function'
+        ? getFinalizationAuditEventId_(cycleId)
+        : 'FINALIZATION_COMPLETE:' + cycleId;
+    if (auditStatus !== 'Complete' || storedId !== expectedId) {
+      return;
+    }
+    if (idSet[expectedId]) {
+      return;
+    }
+    blocking.push({
+      code: 'FINALIZATION_AUDIT_ROW_MISSING',
+      cycleId: cycleId,
+      message:
+        'Complete cycle ' +
+        cycleId +
+        ' stores Event ID ' +
+        expectedId +
+        ', but the ReviewAuditLog row is missing.',
+      recommendation:
+        'Retry Finalization so the deterministic audit event can be rewritten.',
+    });
+    recoveryItems.push({
+      id: 'audit:' + cycleId,
+      cycleId: cycleId,
+      employeeName: String(cycle['Employee Name'] || cycleId),
+      category: 'audit',
+      component: 'Finalization Audit',
+      status: 'Complete (audit row missing)',
+      level: 'blocking',
+      action: 'retryFinalization',
+      actionLabel: 'Retry',
+      recommendation:
+        'Retry Finalization so the deterministic audit event can be rewritten.',
+      lastError:
+        'Cycle field Event ID is present, but the ReviewAuditLog row is missing.',
+    });
+  });
+  return {
+    blocking: blocking,
+    recoveryItems: recoveryItems,
+  };
+}
+
+/**
+ * Pure helper: classify completed-PDF probe facts without Drive calls.
+ * Live Drive probes remain Requires Daniel Sandbox.
+ */
+function classifyCompletedPdfProbeResult_(facts) {
+  const value = facts || {};
+  if (value.exists !== true) {
+    return {
+      ok: false,
+      code: 'PDF_MISSING',
+      level: 'blocking',
+      message: 'Completed PDF file is missing.',
+    };
+  }
+  if (value.trashed === true) {
+    return {
+      ok: false,
+      code: 'PDF_TRASHED',
+      level: 'blocking',
+      message: 'Completed PDF file is in trash.',
+    };
+  }
+  if (
+    value.mimeType &&
+    String(value.mimeType) !== 'application/pdf'
+  ) {
+    return {
+      ok: false,
+      code: 'PDF_MIME_INVALID',
+      level: 'blocking',
+      message: 'Completed PDF MIME type is invalid.',
+    };
+  }
+  if (
+    value.expectedFolderId &&
+    value.folderId &&
+    String(value.folderId) !== String(value.expectedFolderId)
+  ) {
+    return {
+      ok: false,
+      code: 'PDF_FOLDER_MISMATCH',
+      level: 'blocking',
+      message: 'Completed PDF is outside the review folder.',
+    };
+  }
+  if (value.identityOk === false) {
+    return {
+      ok: false,
+      code: 'PDF_IDENTITY_MISMATCH',
+      level: 'blocking',
+      message:
+        'Completed PDF identity does not match the deterministic cycle artifact.',
+    };
+  }
+  return {
+    ok: true,
+    code: 'PDF_OK',
+    level: 'healthy',
+    message: 'Completed PDF facts are valid.',
+  };
+}
+
+function buildAuditEventIdSet_(auditRows) {
+  const idSet = {};
+  (auditRows || []).forEach(function (row) {
+    const eventId = String(row['Event ID'] || '').trim();
+    if (eventId) {
+      idSet[eventId] = true;
+    }
+  });
+  return idSet;
+}
+
 function runProductionReadinessChecks_(options) {
+  const opts = options || { liveProbes: false };
   const settings = getSettings_();
   const report = buildProductionReadinessReport_(
     settings,
     getAutomationTriggerHealth_(settings),
-    options || { liveProbes: false }
+    opts
   );
   if (settings.SIGNATURE_RECOVERY_FOLDER_ID) {
     try {
@@ -2959,6 +3142,27 @@ function runProductionReadinessChecks_(options) {
         code: 'INVALID_SIGNATURE_RECOVERY_FOLDER',
         message: String(error.message || error),
       });
+      report.ok = false;
+    }
+  }
+
+  // Deep readiness only: verify deterministic finalization audit rows for
+  // Complete cycles that claim a healthy Event ID. Lightweight summary skips.
+  if (opts.verifyFinalizationAuditRows === true) {
+    const cycles =
+      opts.cycles || getAllObjects_(PR.SHEETS.CYCLES);
+    const auditRows =
+      opts.auditRows || getAllObjects_(PR.SHEETS.AUDIT);
+    const auditIssues = collectCompleteCycleAuditRowIssues_(
+      cycles,
+      buildAuditEventIdSet_(auditRows)
+    );
+    auditIssues.blocking.forEach(function (issue) {
+      report.blocking.push(issue);
+    });
+    report.finalizationAuditRecoveryItems =
+      auditIssues.recoveryItems;
+    if (auditIssues.blocking.length) {
       report.ok = false;
     }
   }

@@ -1806,6 +1806,10 @@ function renderDeepCheckResultsSection(data) {
   if (!readiness) return '';
   const blocking = readiness.blocking || [];
   const warnings = readiness.warnings || [];
+  const liveProbeReport =
+    readiness.liveProbes && typeof readiness.liveProbes === 'object'
+      ? readiness.liveProbes
+      : null;
   function renderIssue(issue, tone) {
     const code = escapeHtml(issue.code || 'UNKNOWN');
     const message = escapeHtml(issue.message || '');
@@ -1815,10 +1819,17 @@ function renderDeepCheckResultsSection(data) {
         ? 'Resolve this blocking configuration issue before production use.'
         : 'Review this warning before relying on the configuration.')
     );
+    const skipped = Array.isArray(issue.checksSkipped) && issue.checksSkipped.length
+      ? '<div class="field-help">Skipped probes: ' +
+        escapeHtml(issue.checksSkipped.join(', ')) +
+        '</div>'
+      : '';
     return '<div class="readiness-item ' + tone + '" role="listitem">' +
       '<div><strong>' + code + '</strong></div>' +
       '<div>' + message + '</div>' +
-      '<div class="field-help">Recommendation: ' + recommendation + '</div></div>';
+      '<div class="field-help">Recommendation: ' + recommendation + '</div>' +
+      skipped +
+      '</div>';
   }
   const blockingHtml = blocking.length
     ? blocking.map(function(issue) { return renderIssue(issue, 'error'); }).join('')
@@ -1826,9 +1837,16 @@ function renderDeepCheckResultsSection(data) {
   const warningHtml = warnings.length
     ? warnings.map(function(issue) { return renderIssue(issue, 'warning'); }).join('')
     : '<div class="readiness-item success" role="listitem">No configuration warnings.</div>';
-  const probeNote = readiness.liveProbes
-    ? 'Sandbox live probes ran.'
-    : (readiness.liveProbesNote || 'Live Drive/Calendar/folder probes were not run.');
+  const probesExecuted = readiness.liveProbesExecuted === true;
+  const probeNote = probesExecuted
+    ? 'Sandbox live probes executed.'
+    : (readiness.liveProbesNote || 'Live Drive/Calendar/folder probes were not executed.');
+  const skippedList = liveProbeReport && Array.isArray(liveProbeReport.checksSkipped)
+    ? liveProbeReport.checksSkipped
+    : [];
+  const skippedHtml = skippedList.length && !probesExecuted
+    ? '<p class="field-help">Checks skipped: ' + escapeHtml(skippedList.join(', ')) + '</p>'
+    : '';
   const incompleteNote = readiness.incomplete
     ? '<p class="field-help" role="status">This check was incomplete. Review blocking items and retry.</p>'
     : '';
@@ -1838,6 +1856,7 @@ function renderDeepCheckResultsSection(data) {
     '<span class="health-level ' + healthLevelClass(data.overallLevel) + '">' +
     escapeHtml(data.overallLabel || '') + '</span></div>' +
     incompleteNote +
+    skippedHtml +
     '<h3>Blocking checks</h3><div class="readiness-list" role="list">' + blockingHtml + '</div>' +
     '<h3>Warnings</h3><div class="readiness-list" role="list">' + warningHtml + '</div></section>';
 }
@@ -1900,7 +1919,7 @@ function renderSystemHealthPanel(data) {
     : '<div class="health-empty" role="status">Everything looks healthy. No recovery actions are needed.</div>';
 
   const probeButton = isSandbox
-    ? '<button type="button" class="button warning" onclick="runSandboxLiveProbes()">Run Sandbox Live Probes</button>'
+    ? '<button type="button" class="button warning" onclick="runSandboxLiveProbes()">Prepare Sandbox Live-Probe Report</button>'
     : '';
 
   return '<div class="health-shell" aria-label="System Health">' +
@@ -1910,9 +1929,13 @@ function renderSystemHealthPanel(data) {
     '<h2 style="margin-top:12px">' + escapeHtml(data.headline || 'System Health') + '</h2>' +
     '<p>' + (data.cached ? 'Showing cached summary (up to 30 seconds). ' : '') +
     (data.deepCheck
-      ? (data.liveProbes ? 'Sandbox live probe results are included. ' : 'Configuration check results are included. ')
+      ? (data.liveProbes
+        ? 'Sandbox live probe execution results are included. '
+        : data.liveProbesRequested
+        ? 'Sandbox live-probe report is included; catalog probes were not executed. '
+        : 'Configuration check results are included. ')
       : 'Fast sheet and trigger summary. ') +
-    'Live Drive and Calendar probes run only from Sandbox with confirmation.</p>' +
+    'Live Drive and Calendar probes require Daniel Sandbox evidence and never auto-run.</p>' +
     '<div class="health-metrics">' + metricHtml + '</div></div>' +
     '<div><h3 class="sr-only">Component checklist</h3><ul class="health-checklist">' + checklist + '</ul>' +
     '<div class="button-row" style="margin-top:16px">' +
@@ -1985,19 +2008,19 @@ async function runConfigurationHealthCheck() {
 async function runSandboxLiveProbes() {
   const environment = String(state.environment || (state.v31 && state.v31.automation && state.v31.automation.environment) || '');
   if (environment !== 'Sandbox') {
-    showToast('warning', 'Sandbox live probes', 'Live probes are available only when ENVIRONMENT is Sandbox.');
+    showToast('warning', 'Sandbox live-probe report', 'This report is available only when ENVIRONMENT is Sandbox.');
     return;
   }
   openModal({
-    title: 'Run Sandbox Live Probes?',
-    body: '<p><strong>Warning:</strong> This runs live Drive, Calendar, folder, and template probes against the Sandbox Workspace.</p><p>Production never offers this control. Confirm only when Daniel has approved Sandbox probing.</p>',
-    confirmLabel: 'Run Sandbox Live Probes',
+    title: 'Prepare Sandbox Live-Probe Report?',
+    body: '<p><strong>Warning:</strong> This prepares the Sandbox live-probe readiness report and configuration gates.</p><p>Catalog Drive/Calendar/template/PDF probes remain <strong>Requires Daniel Sandbox</strong> until executed and evidenced. Production never offers this control.</p>',
+    confirmLabel: 'Prepare Report',
     tone: 'warning',
     onConfirm: async function() {
       closeModal();
       const panel = document.getElementById('systemHealthPanel');
       if (panel) {
-        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Running Sandbox live probes…</p></div>';
+        panel.innerHTML = '<div class="card" role="status" aria-live="polite"><h2>System Health</h2><p class="field-help">Preparing Sandbox live-probe report…</p></div>';
       }
       try {
         const data = await server('runSystemHealthSandboxLiveProbes', {
@@ -2012,11 +2035,11 @@ async function runSandboxLiveProbes() {
         if (alertsPanel) alertsPanel.innerHTML = renderSystemAlertsPanel(data.alerts || state.v31.systemAlerts);
         showToast(
           data.overallLevel === 'blocking' ? 'warning' : 'success',
-          'Sandbox live probes',
-          formatOperationalClientMessage(data, data.headline || 'Sandbox live probes complete.')
+          'Sandbox live-probe report',
+          formatOperationalClientMessage(data, data.headline || 'Sandbox live-probe report ready.')
         );
       } catch (error) {
-        showToast('error', 'Sandbox live probes', friendlyErrorMessage(error));
+        showToast('error', 'Sandbox live-probe report', friendlyErrorMessage(error));
         await refreshSystemHealth(true);
       }
     }

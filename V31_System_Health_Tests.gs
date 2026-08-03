@@ -15,7 +15,10 @@ function runV31SystemHealthTests_() {
     ['cancelled cycles suppress workflow recovery', testCancelledCycleHealthBehavior_],
     ['classifySignatureHealth covers Delivery B warning matrix', testClassifySignatureHealthMatrix_],
     ['system alerts attach to matching recovery items', testAlertAssociationDedup_],
+    ['signature and PDF alerts match by role and document identity', testAlertIdentityMatching_],
     ['readiness detail shape is preserved for UI rendering', testReadinessDetailShape_],
+    ['live probe report never claims execution when false', testLiveProbeReportHonesty_],
+    ['item id parser supports cycle and alert detail loading', testParseSystemHealthItemId_],
     ['operational messages never return Unknown Error', testOperationalResultMessaging_],
     ['pretty details format objects without raw dumps failing', testPrettyHealthDetails_],
     ['deep check and sandbox probe APIs exist', testDeepCheckFlagShape_],
@@ -221,7 +224,8 @@ function testMixedCycleRecoveryItems_() {
           status: 'Sent',
           notificationSent: true,
           lastError: 'Signature unknown',
-          details: { note: 'test' },
+          alertKey: '2025-004|Signature|Manager:artifact',
+          details: { role: PR.ROLE.MANAGER, warningType: 'artifact', note: 'test' },
         },
       ],
     },
@@ -562,6 +566,128 @@ function testAlertAssociationDedup_() {
   );
 }
 
+function testAlertIdentityMatching_() {
+  const cycle = {
+    'Cycle ID': 'multi-1',
+    Status: PR.CYCLE.SIGNATURES,
+    'Employee Name': 'Multi Role',
+    'Calendar Status': V31.CALENDAR.CONFIGURED,
+    'Calendar Event ID': 'event-1',
+    'Calendar Configuration Status': V31.CALENDAR.CONFIGURED,
+    'Manager Email Status': V31.DELIVERY.SENT,
+    'Employee Email Status': V31.DELIVERY.SENT,
+    'HR Email Status': V31.DELIVERY.SENT,
+    'Launch Completed At': new Date(),
+    'Manager Signature Status': V31.DELIVERY.UNKNOWN,
+    'Employee Signature Status': V31.DELIVERY.UNKNOWN,
+    'Manager Signature Email Status': V31.DELIVERY.SENT,
+    'Employee Signature Email Status': V31.DELIVERY.SENT,
+    'HR Signature Email Status': V31.DELIVERY.SENT,
+    'Ready Notification Status': V31.DELIVERY.SENT,
+    'Meeting Manager Email Status': V31.DELIVERY.SENT,
+    'Meeting Employee Email Status': V31.DELIVERY.SENT,
+    'Manager PDF Status': V31.DELIVERY.UNKNOWN,
+    'Self PDF Status': V31.DELIVERY.FAILED,
+  };
+  // Force finalizing-like PDF inspection by using Finalizing status for PDF items.
+  cycle.Status = PR.CYCLE.FINALIZING;
+  cycle['Manager Signature Status'] = V31.SIGNATURE.SIGNED;
+  cycle['Employee Signature Status'] = V31.SIGNATURE.SIGNED;
+  cycle['Manager Signature Artifact Warning'] = 'manager artifact warning';
+  cycle['Employee Signature Audit Warning'] = 'employee audit warning';
+
+  const summary = buildSystemHealthSummaryFromRows_(
+    [cycle],
+    {
+      mode: 'Preview',
+      triggerHealth: { healthy: true },
+      signatureRecoveryFolder: { warning: '' },
+    },
+    {
+      unresolvedCount: 4,
+      alerts: [
+        {
+          alertId: 'a-mgr-sig',
+          cycleId: 'multi-1',
+          component: 'Signature',
+          severity: 'Warning',
+          status: 'Sent',
+          notificationSent: true,
+          alertKey: 'multi-1|Signature|Manager:artifact',
+          details: { role: PR.ROLE.MANAGER, warningType: 'artifact' },
+        },
+        {
+          alertId: 'a-emp-sig',
+          cycleId: 'multi-1',
+          component: 'Signature',
+          severity: 'Warning',
+          status: 'Sent',
+          notificationSent: true,
+          alertKey: 'multi-1|Signature|Employee:audit',
+          details: { role: PR.ROLE.EMPLOYEE, warningType: 'audit' },
+        },
+        {
+          alertId: 'a-mgr-pdf',
+          cycleId: 'multi-1',
+          component: 'PDF',
+          severity: 'Blocking',
+          status: 'Pending',
+          alertKey: 'multi-1|PDF|Manager Review:ambiguous',
+          details: { documentType: PR.TYPE.MANAGER },
+        },
+        {
+          alertId: 'a-self-pdf',
+          cycleId: 'multi-1',
+          component: 'PDF',
+          severity: 'Blocking',
+          status: 'Pending',
+          alertKey: 'multi-1|PDF|Self-Evaluation:ambiguous',
+          details: { documentType: PR.TYPE.SELF },
+        },
+      ],
+    },
+    new Date().toISOString()
+  );
+
+  const managerSig = summary.recoveryItems.filter(function (item) {
+    return item.role === PR.ROLE.MANAGER && item.category === 'signatures';
+  })[0];
+  const employeeSig = summary.recoveryItems.filter(function (item) {
+    return item.role === PR.ROLE.EMPLOYEE && item.category === 'signatures';
+  })[0];
+  const managerPdf = summary.recoveryItems.filter(function (item) {
+    return (
+      item.documentType === PR.TYPE.MANAGER && item.category === 'pdfs'
+    );
+  })[0];
+  const selfPdf = summary.recoveryItems.filter(function (item) {
+    return item.documentType === PR.TYPE.SELF && item.category === 'pdfs';
+  })[0];
+
+  assertHealthTest_(
+    managerSig && managerSig.relatedAlertId === 'a-mgr-sig',
+    'Manager signature alert must attach to manager recovery item.'
+  );
+  assertHealthTest_(
+    employeeSig && employeeSig.relatedAlertId === 'a-emp-sig',
+    'Employee signature alert must attach to employee recovery item.'
+  );
+  assertHealthTest_(
+    managerPdf && managerPdf.relatedAlertId === 'a-mgr-pdf',
+    'Manager PDF alert must attach to manager PDF recovery item.'
+  );
+  assertHealthTest_(
+    selfPdf && selfPdf.relatedAlertId === 'a-self-pdf',
+    'Self PDF alert must attach to self PDF recovery item.'
+  );
+  assertHealthTest_(
+    !summary.recoveryItems.some(function (item) {
+      return String(item.id).indexOf('alert:') === 0;
+    }),
+    'Role/document-matched alerts must not create duplicate alert rows.'
+  );
+}
+
 function testReadinessDetailShape_() {
   const readiness = {
     ok: false,
@@ -577,7 +703,7 @@ function testReadinessDetailShape_() {
         message: 'Requires Daniel Sandbox.',
       },
     ],
-    liveProbes: false,
+    liveProbesExecuted: false,
     liveProbesSkipped: true,
     incomplete: false,
     liveProbesNote:
@@ -592,8 +718,51 @@ function testReadinessDetailShape_() {
     'Warning plain-language message must be available to the UI.'
   );
   assertHealthTest_(
-    readiness.liveProbesSkipped === true,
-    'Live-probe skip state must be explicit.'
+    readiness.liveProbesExecuted === false,
+    'Live-probe execution state must be explicit and false when skipped.'
+  );
+}
+
+function testLiveProbeReportHonesty_() {
+  const settings = {
+    ENVIRONMENT: 'Sandbox',
+  };
+  const report = buildSandboxLiveProbeReport_(settings, {
+    liveProbes: true,
+    sandboxConfirmed: true,
+    confirmationToken: 'SANDBOX_LIVE_PROBES',
+  });
+  assertHealthTest_(
+    report.requested === true &&
+      report.allowed === true &&
+      report.executed === false,
+    'Sandbox confirmation must not claim probes executed.'
+  );
+  assertHealthTest_(
+    report.checksSkipped.indexOf('PDF validation') >= 0,
+    'Skipped catalog must include PDF validation.'
+  );
+}
+
+function testParseSystemHealthItemId_() {
+  const signature = parseSystemHealthItemId_(
+    'signature:Manager:2025-001'
+  );
+  assertHealthTest_(
+    signature.kind === 'signature' &&
+      signature.role === 'Manager' &&
+      signature.cycleId === '2025-001',
+    'Signature item IDs must parse role and cycle.'
+  );
+  const alert = parseSystemHealthItemId_('alert:abc-123');
+  assertHealthTest_(
+    alert.kind === 'alert' && alert.alertId === 'abc-123',
+    'Alert item IDs must parse alertId.'
+  );
+  const audit = parseSystemHealthItemId_('audit:2025-001');
+  assertHealthTest_(
+    audit.kind === 'audit' && audit.cycleId === '2025-001',
+    'Audit item IDs must parse cycleId.'
   );
 }
 

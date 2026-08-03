@@ -1,5 +1,22 @@
 # V3.1 Changelog
 
+## Delivery E — readiness security and live-boundary suites
+
+- Preserved approved Delivery D tip `c234d86`.
+- Sandbox live-probe readiness reports now expose
+  `requested` / `allowed` / `executed` / `checksRun` / `checksSkipped` and
+  never claim probes executed when `liveProbesExecuted` is false.
+- Deep readiness verifies deterministic finalization audit rows for Complete
+  cycles that claim a healthy Event ID; missing `ReviewAuditLog` rows block
+  and expose Retry Finalization.
+- System Alert association matches role/document/component identity; generic
+  category fallback requires exactly one candidate.
+- Added pure completed-PDF probe classification; Drive execution remains
+  `Requires Daniel Sandbox`.
+- Removed obsolete `isTerminalCycleStatus_()`; detail loading parses item IDs
+  to avoid a full-history rebuild when possible.
+- Expanded production readiness security and live-boundary test suites.
+
 ## Delivery D correction — terminal-cycle and signature recovery health
 
 - Complete cycles are no longer skipped before PDF, distribution, finalization

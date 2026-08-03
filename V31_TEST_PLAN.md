@@ -2,6 +2,30 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Delivery E gate — readiness security and live-boundary suites
+
+Run privately in Preview:
+
+```javascript
+runV31ProductionReadinessTests_();
+runV31SystemHealthTests_();
+runV31SignatureTests_();
+runV31FinalizationTests_();
+```
+
+Expected: `failed = 0`, readiness `blocking = []` for healthy Preview fixtures.
+
+Pure coverage now includes:
+- Live-probe guard and honesty (`executed=false`, skipped catalog)
+- Complete-cycle Event ID present + audit row missing → Blocking
+- Completed PDF probe classifier facts
+- Role/document System Alert association
+- Public System Health API surface and removal of `isTerminalCycleStatus_`
+
+**Requires Daniel Sandbox:** live Drive/Calendar/template/PDF probe execution,
+completed PDF Drive integrity, browser accessibility, and cold/cached load
+timing.
+
 ## Delivery D correction gate — terminal-cycle and signature health
 
 Run privately in Preview:

@@ -68,11 +68,12 @@ function getSystemHealthLevelLabel_(level) {
   return labels[level] || 'Needs Attention';
 }
 
-function isTerminalCycleStatus_(status) {
-  return (
-    String(status || '') === PR.CYCLE.COMPLETE ||
-    String(status || '') === PR.CYCLE.CANCELLED
-  );
+function isCancelledCycleStatus_(status) {
+  return String(status || '') === PR.CYCLE.CANCELLED;
+}
+
+function isCompleteCycleStatus_(status) {
+  return String(status || '') === PR.CYCLE.COMPLETE;
 }
 
 function isDeliveryUnknownStatus_(status) {
@@ -894,32 +895,91 @@ function collectCycleRecoveryItems_(cycle, options) {
   return items;
 }
 
+function parseSystemAlertIdentity_(alert) {
+  const details =
+    alert && alert.details && typeof alert.details === 'object'
+      ? alert.details
+      : {};
+  const keyParts = String((alert && alert.alertKey) || '').split('|');
+  const incident = keyParts.length >= 3 ? String(keyParts[2] || '') : '';
+  const incidentParts = incident.split(':');
+  let role = String(details.role || '');
+  let documentType = String(details.documentType || '');
+  let componentKey = String(details.componentKey || '');
+  const component = String((alert && alert.component) || '');
+
+  if (!role && component === 'Signature' && incidentParts[0]) {
+    role = String(incidentParts[0]);
+  }
+  if (!documentType && component === 'PDF' && incidentParts[0]) {
+    documentType = String(incidentParts[0]);
+  }
+  if (
+    !componentKey &&
+    component === 'Workflow Notification' &&
+    incidentParts[0]
+  ) {
+    componentKey = String(incidentParts[0]);
+  }
+
+  return {
+    component: component,
+    role: role,
+    documentType: documentType,
+    componentKey: componentKey,
+    incident: incident,
+  };
+}
+
 function alertMatchesRecoveryItem_(alert, item) {
   const alertCycleId = String(alert.cycleId || '');
   const itemCycleId = String(item.cycleId || '');
   if (!alertCycleId || alertCycleId !== itemCycleId) {
     return false;
   }
-  const alertComponent = String(alert.component || '');
+  const identity = parseSystemAlertIdentity_(alert);
+  const alertComponent = identity.component;
   const itemComponent = String(item.component || '');
+
   if (alertComponent && alertComponent === itemComponent) {
     return true;
   }
+
   if (
     alertComponent === 'Signature' &&
     item.category === 'signatures'
   ) {
-    return true;
+    if (identity.role) {
+      return (
+        String(item.role || '') === identity.role ||
+        String(item.role || '').toLowerCase() ===
+          identity.role.toLowerCase()
+      );
+    }
+    return false;
   }
+
   if (alertComponent === 'PDF' && item.category === 'pdfs') {
-    return true;
+    if (identity.documentType) {
+      return (
+        String(item.documentType || '') === identity.documentType
+      );
+    }
+    return false;
   }
+
   if (
     alertComponent === 'Workflow Notification' &&
     item.category === 'notifications'
   ) {
-    return true;
+    if (identity.componentKey) {
+      return (
+        String(item.componentKey || '') === identity.componentKey
+      );
+    }
+    return false;
   }
+
   if (
     alertComponent === 'Calendar Configuration' &&
     itemComponent === 'Calendar Configuration'
@@ -941,6 +1001,15 @@ function alertMatchesRecoveryItem_(alert, item) {
   return false;
 }
 
+function findAlertRecoveryCandidates_(alert, items) {
+  return (items || []).filter(function (item) {
+    return (
+      item.itemKind !== V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT &&
+      alertMatchesRecoveryItem_(alert, item)
+    );
+  });
+}
+
 function attachRelatedAlertNote_(item, alert) {
   const notificationSent =
     alert.notificationSent === true ||
@@ -958,29 +1027,58 @@ function attachRelatedAlertNote_(item, alert) {
 
 /**
  * Associate unresolved System Alerts with matching recovery items.
- * Matched alerts become metadata on the authoritative recovery row.
- * Unmatched alerts remain as incident records (not duplicate recoveries).
+ * Prefer role/document/component identity. Fall back to a generic
+ * category match only when exactly one candidate exists for the cycle.
  */
 function mergeAlertItemsIntoRecovery_(recoveryItems, alerts) {
   const items = (recoveryItems || []).slice();
   const unmatched = [];
 
   (alerts || []).forEach(function (alert) {
-    let matched = false;
-    for (let i = 0; i < items.length; i += 1) {
-      if (
-        items[i].itemKind !==
-          V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT &&
-        alertMatchesRecoveryItem_(alert, items[i])
-      ) {
-        attachRelatedAlertNote_(items[i], alert);
-        matched = true;
-        break;
+    let candidates = findAlertRecoveryCandidates_(alert, items);
+    if (!candidates.length) {
+      const identity = parseSystemAlertIdentity_(alert);
+      const cycleId = String(alert.cycleId || '');
+      const loose = (items || []).filter(function (item) {
+        if (
+          item.itemKind === V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT ||
+          String(item.cycleId || '') !== cycleId
+        ) {
+          return false;
+        }
+        if (
+          identity.component === 'Signature' &&
+          item.category === 'signatures' &&
+          !identity.role
+        ) {
+          return true;
+        }
+        if (
+          identity.component === 'PDF' &&
+          item.category === 'pdfs' &&
+          !identity.documentType
+        ) {
+          return true;
+        }
+        if (
+          identity.component === 'Workflow Notification' &&
+          item.category === 'notifications' &&
+          !identity.componentKey
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (loose.length === 1) {
+        candidates = loose;
       }
     }
-    if (!matched) {
-      unmatched.push(alert);
+
+    if (candidates.length === 1) {
+      attachRelatedAlertNote_(candidates[0], alert);
+      return;
     }
+    unmatched.push(alert);
   });
 
   unmatched.forEach(function (alert) {
@@ -1416,12 +1514,13 @@ function getSystemHealthSummary(options) {
  * HR-only: configuration / readiness check. Never called automatically.
  * Live Drive/Calendar/folder probes stay off unless Sandbox confirmation
  * options are provided (see runSystemHealthSandboxLiveProbes).
+ * Never claims live probes executed when readiness.liveProbesExecuted is false.
  */
 function runSystemHealthDeepCheck(options) {
   assertActiveHrDomain_();
   const opts = options || {};
   const settings = getSettings_();
-  const liveProbes =
+  const liveProbesRequested =
     opts.liveProbes === true &&
     String(settings.ENVIRONMENT || '') === 'Sandbox' &&
     opts.sandboxConfirmed === true &&
@@ -1434,17 +1533,18 @@ function runSystemHealthDeepCheck(options) {
     })
   );
   summary.deepCheck = true;
-  summary.configurationCheck = !liveProbes;
-  summary.liveProbes = liveProbes;
+  summary.configurationCheck = !liveProbesRequested;
+  summary.liveProbesRequested = liveProbesRequested;
   summary.cached = false;
   summary.deepCheckStartedAt = new Date().toISOString();
 
   let readiness;
   try {
     readiness = runProductionReadinessChecks_({
-      liveProbes: liveProbes,
+      liveProbes: liveProbesRequested,
       sandboxConfirmed: opts.sandboxConfirmed === true,
       confirmationToken: String(opts.confirmationToken || ''),
+      verifyFinalizationAuditRows: true,
     });
   } catch (error) {
     readiness = {
@@ -1457,20 +1557,86 @@ function runSystemHealthDeepCheck(options) {
       ],
       warnings: [],
       incomplete: true,
+      liveProbesExecuted: false,
+      liveProbes: {
+        requested: liveProbesRequested,
+        allowed: liveProbesRequested,
+        executed: false,
+        checksRun: [],
+        checksSkipped: liveProbesRequested
+          ? getSandboxLiveProbeCatalog_()
+          : [],
+      },
     };
   }
+
+  const liveProbeReport =
+    (readiness && readiness.liveProbes) ||
+    buildSandboxLiveProbeReport_(settings, {
+      liveProbes: liveProbesRequested,
+      sandboxConfirmed: opts.sandboxConfirmed === true,
+      confirmationToken: String(opts.confirmationToken || ''),
+    });
+  const probesExecuted =
+    readiness && readiness.liveProbesExecuted === true;
+
+  (readiness.finalizationAuditRecoveryItems || []).forEach(
+    function (hint) {
+      const exists = (summary.recoveryItems || []).some(
+        function (item) {
+          return String(item.id) === String(hint.id);
+        }
+      );
+      if (exists) return;
+      summary.recoveryItems.push(
+        createRecoveryItem_({
+          id: hint.id,
+          cycleId: hint.cycleId,
+          employeeName: hint.employeeName,
+          category: hint.category,
+          component: hint.component,
+          status: hint.status,
+          level: V31_SYSTEM_HEALTH.LEVEL.BLOCKING,
+          action: hint.action,
+          actionLabel: hint.actionLabel,
+          recommendation: hint.recommendation,
+          lastError: hint.lastError,
+        })
+      );
+      summary.cards = (summary.cards || []).map(function (card) {
+        if (card.key !== 'audit') return card;
+        card.level = mergeSystemHealthLevel_(
+          card.level,
+          V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+        );
+        card.count = Number(card.count || 0) + 1;
+        card.label = getSystemHealthLevelLabel_(card.level);
+        card.countLabel =
+          card.count === 1
+            ? '1 item needs attention'
+            : card.count + ' items need attention';
+        card.summary = 'Finalization audit row missing';
+        return card;
+      });
+    }
+  );
 
   summary.readiness = {
     ok: !!(readiness && readiness.ok),
     blocking: (readiness && readiness.blocking) || [],
     warnings: (readiness && readiness.warnings) || [],
-    liveProbes: liveProbes,
-    liveProbesSkipped: !liveProbes,
+    liveProbes: liveProbeReport,
+    liveProbesRequested: liveProbesRequested,
+    liveProbesExecuted: probesExecuted,
+    liveProbesSkipped: !probesExecuted,
     incomplete: !!(readiness && readiness.incomplete),
-    liveProbesNote: liveProbes
+    liveProbesNote: probesExecuted
       ? 'Sandbox live probes executed.'
-      : 'Live Drive/Calendar/folder probes were not run. Use Sandbox Live Probes only in ENVIRONMENT=Sandbox with confirmation.',
+      : liveProbesRequested
+      ? 'Sandbox live-probe report prepared. Listed probes were not executed (Requires Daniel Sandbox).'
+      : 'Live Drive/Calendar/folder probes were not requested. Use Prepare Sandbox Live-Probe Report only in ENVIRONMENT=Sandbox with confirmation.',
   };
+  summary.liveProbes = probesExecuted;
 
   if (summary.readiness.blocking.length) {
     summary.overallLevel = mergeSystemHealthLevel_(
@@ -1486,13 +1652,15 @@ function runSystemHealthDeepCheck(options) {
   summary.overallLabel = getSystemHealthLevelLabel_(
     summary.overallLevel
   );
-  if (liveProbes) {
+  if (liveProbesRequested) {
     summary.headline =
       summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.HEALTHY
-        ? 'Sandbox Live Probes Healthy'
+        ? probesExecuted
+          ? 'Sandbox Live Probes Healthy'
+          : 'Sandbox Live-Probe Report Ready'
         : summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.BLOCKING
-        ? 'Sandbox Live Probes Found Blocking Issues'
-        : 'Sandbox Live Probes Completed With Warnings';
+        ? 'Sandbox Live-Probe Report Found Blocking Issues'
+        : 'Sandbox Live-Probe Report Completed With Warnings';
   } else {
     summary.headline =
       summary.overallLevel === V31_SYSTEM_HEALTH.LEVEL.HEALTHY
@@ -1508,8 +1676,9 @@ function runSystemHealthDeepCheck(options) {
 }
 
 /**
- * HR-only Sandbox entrypoint for live Drive/Calendar/folder probes.
- * Production must never call this with a successful probe path.
+ * HR-only Sandbox entrypoint for preparing the live-probe report.
+ * Production must never call this successfully. Catalog probes remain
+ * Requires Daniel Sandbox until implemented and evidenced.
  */
 function runSystemHealthSandboxLiveProbes(options) {
   assertActiveHrDomain_();
@@ -1528,19 +1697,116 @@ function runSystemHealthSandboxLiveProbes(options) {
 }
 
 /**
+ * Parse recovery item IDs so detail loading can avoid a full-history rebuild.
+ * Formats: signature:role:cycleId, pdf:type:cycleId, notification:key:cycleId,
+ * launch-*:cycleId, calendar-*:cycleId, distribution:cycleId, audit:cycleId,
+ * alert:alertId.
+ */
+function parseSystemHealthItemId_(itemId) {
+  const wanted = String(itemId || '');
+  if (wanted.indexOf('alert:') === 0) {
+    return {
+      kind: 'alert',
+      alertId: wanted.slice('alert:'.length),
+      cycleId: '',
+    };
+  }
+  const parts = wanted.split(':');
+  if (parts.length >= 3 && parts[0] === 'signature') {
+    return {
+      kind: 'signature',
+      role: parts[1],
+      cycleId: parts.slice(2).join(':'),
+    };
+  }
+  if (parts.length >= 3 && parts[0] === 'pdf') {
+    return {
+      kind: 'pdf',
+      documentType: parts[1],
+      cycleId: parts.slice(2).join(':'),
+    };
+  }
+  if (parts.length >= 3 && parts[0] === 'notification') {
+    return {
+      kind: 'notification',
+      componentKey: parts[1],
+      cycleId: parts.slice(2).join(':'),
+    };
+  }
+  if (parts.length >= 2) {
+    return {
+      kind: parts[0],
+      cycleId: parts.slice(1).join(':'),
+    };
+  }
+  return { kind: '', cycleId: '', alertId: '' };
+}
+
+/**
  * HR-only: detail payload for one recovery item or alert.
- * Rebuilds with structured details so the cached summary stays small.
+ * Loads the target cycle or alert when the item ID can be parsed.
  */
 function getSystemHealthItemDetails(itemId) {
   assertActiveHrDomain_();
   const wanted = String(itemId || '');
-  const summary = buildSystemHealthSummary_({
-    automation: getAutomationAdminData_(),
-    includeDetails: true,
-  });
-  const item = (summary.recoveryItems || []).filter(function (row) {
-    return String(row.id) === wanted;
-  })[0];
+  const parsed = parseSystemHealthItemId_(wanted);
+  let item = null;
+
+  if (parsed.kind === 'alert' && parsed.alertId) {
+    const alertsData = getSystemAlertsAdminData();
+    const alert = ((alertsData && alertsData.alerts) || []).filter(
+      function (row) {
+        return String(row.alertId) === String(parsed.alertId);
+      }
+    )[0];
+    if (alert) {
+      item = createRecoveryItem_({
+        id: wanted,
+        cycleId: alert.cycleId,
+        employeeName: alert.cycleId || 'System',
+        category: 'alerts',
+        component: alert.component || 'System Alert',
+        status: alert.status,
+        level:
+          alert.severity === 'Blocking' || alert.severity === 'Security'
+            ? V31_SYSTEM_HEALTH.LEVEL.BLOCKING
+            : V31_SYSTEM_HEALTH.LEVEL.WARNING,
+        itemKind: V31_SYSTEM_HEALTH.ITEM_KIND.INCIDENT,
+        action: 'resolveAlert',
+        actionLabel: 'Resolve Alert',
+        alertId: alert.alertId,
+        severity: alert.severity,
+        lastError: alert.lastError,
+        recommendation:
+          'Incident record only. Resolving this alert does not repair the underlying component.',
+        details: alert.details || null,
+        startedAt: alert.lastOccurredAt || '',
+      });
+    }
+  } else if (parsed.cycleId) {
+    try {
+      const location = findCycle_(parsed.cycleId);
+      const cycleItems = collectCycleRecoveryItems_(location.object, {
+        includeDetails: true,
+      });
+      item = cycleItems.filter(function (row) {
+        return String(row.id) === wanted;
+      })[0];
+    } catch (error) {
+      item = null;
+    }
+  }
+
+  if (!item) {
+    const summary = buildSystemHealthSummary_({
+      automation: getAutomationAdminData_(),
+      includeDetails: true,
+    });
+    item = (summary.recoveryItems || []).filter(function (row) {
+      return String(row.id) === wanted;
+    })[0];
+  }
+
   if (!item) {
     throw new Error(
       'That recovery item is no longer present. Refresh System Health.'

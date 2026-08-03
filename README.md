@@ -7,6 +7,14 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Delivery E — readiness security and live-boundary honesty
+
+Delivery D tip `c234d86` is preserved. Readiness now reports honest Sandbox
+live-probe status, verifies Complete-cycle finalization audit rows during deep
+checks, matches System Alerts by role/document identity, and expands the
+production readiness security/live-boundary suites. Catalog Drive probes remain
+Requires Daniel Sandbox.
+
 ## Delivery D correction — terminal-cycle and signature recovery health
 
 System Health now inspects Complete-cycle final artifacts and Delivery B

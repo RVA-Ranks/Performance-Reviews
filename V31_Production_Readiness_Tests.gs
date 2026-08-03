@@ -1,11 +1,12 @@
 /**
- * Delivery A production-readiness tests.
+ * Delivery E production-readiness security and live-boundary tests.
  *
  * Run from the Apps Script editor:
  *   runV31ProductionReadinessTests_()
  *
- * This delivery covers version, environment, owner, fault, and trigger gates.
- * Resource, workflow, and live-boundary checks are expanded in Delivery E.
+ * Pure coverage for settings/security gates, live-probe honesty, and
+ * Complete-cycle audit-row deep checks. Workspace Drive/Calendar/PDF
+ * execution remains Requires Daniel Sandbox.
  */
 
 function runV31ProductionReadinessTests_() {
@@ -41,6 +42,18 @@ function runV31ProductionReadinessTests_() {
         testReadinessLiveProbeGuards_
       ),
       triggerTestCase_(
+        'Sandbox live-probe report never claims execution without probes',
+        testReadinessLiveProbeHonesty_
+      ),
+      triggerTestCase_(
+        'Complete cycle with matching Event ID but missing audit row blocks deep readiness',
+        testReadinessMissingFinalizationAuditRow_
+      ),
+      triggerTestCase_(
+        'Completed PDF probe classifier covers missing trashed folder and identity defects',
+        testCompletedPdfProbeClassifier_
+      ),
+      triggerTestCase_(
         'Healthy Preview configuration can pass trigger gate',
         testReadinessHealthyPreview_
       ),
@@ -48,8 +61,24 @@ function runV31ProductionReadinessTests_() {
         'Production readiness runner remains private',
         testReadinessRunnerPrivate_
       ),
+      triggerTestCase_(
+        'Public System Health APIs remain HR-gated names',
+        testSystemHealthPublicApiSurface_
+      ),
       {
         name: 'Live owner-visible trigger and replacement evidence',
+        severity: 'Blocking',
+        skip: true,
+        skipMessage: 'Requires Daniel Sandbox',
+      },
+      {
+        name: 'Sandbox live Drive/Calendar/template/PDF probe execution',
+        severity: 'Blocking',
+        skip: true,
+        skipMessage: 'Requires Daniel Sandbox',
+      },
+      {
+        name: 'Completed PDF Drive existence trash MIME folder identity probes',
         severity: 'Blocking',
         skip: true,
         skipMessage: 'Requires Daniel Sandbox',
@@ -242,6 +271,144 @@ function testReadinessLiveProbeGuards_() {
     report.liveProbesExecuted === false,
     'Readiness checks must not execute live probes by default.'
   );
+  assertTriggerTest_(
+    report.liveProbes &&
+      report.liveProbes.requested === true &&
+      report.liveProbes.allowed === false &&
+      report.liveProbes.executed === false,
+    'Live-probe report must record requested/allowed/executed honestly.'
+  );
+}
+
+function testReadinessLiveProbeHonesty_() {
+  const settings = readinessSettingsFixture_();
+  settings.ENVIRONMENT = 'Sandbox';
+  settings.AUTOMATION_OWNER_EMAIL = 'owner@aitheras.com';
+  const report = buildProductionReadinessReport_(
+    settings,
+    healthyPreviewTriggerFixture_(settings),
+    {
+      liveProbes: true,
+      sandboxConfirmed: true,
+      confirmationToken: 'SANDBOX_LIVE_PROBES',
+    }
+  );
+
+  assertTriggerTest_(
+    report.liveProbesExecuted === false,
+    'Sandbox confirmation must not claim probes executed before implementation.'
+  );
+  assertTriggerTest_(
+    report.liveProbes &&
+      report.liveProbes.requested === true &&
+      report.liveProbes.allowed === true &&
+      report.liveProbes.executed === false,
+    'Allowed Sandbox probe report must keep executed=false until probes exist.'
+  );
+  assertTriggerTest_(
+    Array.isArray(report.liveProbes.checksSkipped) &&
+      report.liveProbes.checksSkipped.indexOf('Calendar access') >=
+        0 &&
+      report.liveProbes.checksSkipped.indexOf('PDF validation') >= 0,
+    'Skipped probe catalog must list Calendar and PDF validation.'
+  );
+  assertTriggerTest_(
+    report.warnings.some(function (row) {
+      return row.code === 'REQUIRES_DANIEL_SANDBOX';
+    }),
+    'Unexecuted Sandbox probes must warn Requires Daniel Sandbox.'
+  );
+  assertTriggerTest_(
+    !report.blocking.some(function (row) {
+      return row.code === 'LIVE_PROBE_GUARD';
+    }),
+    'Valid Sandbox confirmation must not raise LIVE_PROBE_GUARD.'
+  );
+}
+
+function testReadinessMissingFinalizationAuditRow_() {
+  const cycleId = 'complete-audit-missing';
+  const eventId = 'FINALIZATION_COMPLETE:' + cycleId;
+  const cycle = {
+    'Cycle ID': cycleId,
+    Status: PR.CYCLE.COMPLETE,
+    'Employee Name': 'Audit Missing',
+    'Finalization Audit Status': 'Complete',
+    'Finalization Audit Event ID': eventId,
+  };
+  const issues = collectCompleteCycleAuditRowIssues_([cycle], {});
+  assertTriggerTest_(
+    issues.blocking.some(function (row) {
+      return row.code === 'FINALIZATION_AUDIT_ROW_MISSING';
+    }),
+    'Missing audit row must block deep readiness.'
+  );
+  assertTriggerTest_(
+    issues.recoveryItems.some(function (item) {
+      return (
+        item.action === 'retryFinalization' &&
+        item.id === 'audit:' + cycleId
+      );
+    }),
+    'Missing audit row must expose Retry Finalization recovery.'
+  );
+
+  const present = collectCompleteCycleAuditRowIssues_([cycle], (function () {
+    const set = {};
+    set[eventId] = true;
+    return set;
+  })());
+  assertTriggerTest_(
+    present.blocking.length === 0,
+    'Present audit row must not block.'
+  );
+}
+
+function testCompletedPdfProbeClassifier_() {
+  assertTriggerTest_(
+    classifyCompletedPdfProbeResult_({ exists: false }).code ===
+      'PDF_MISSING',
+    'Missing PDF must be classified.'
+  );
+  assertTriggerTest_(
+    classifyCompletedPdfProbeResult_({
+      exists: true,
+      trashed: true,
+    }).code === 'PDF_TRASHED',
+    'Trashed PDF must be classified.'
+  );
+  assertTriggerTest_(
+    classifyCompletedPdfProbeResult_({
+      exists: true,
+      trashed: false,
+      mimeType: 'application/pdf',
+      folderId: 'other',
+      expectedFolderId: 'review',
+    }).code === 'PDF_FOLDER_MISMATCH',
+    'Wrong folder must be classified.'
+  );
+  assertTriggerTest_(
+    classifyCompletedPdfProbeResult_({
+      exists: true,
+      trashed: false,
+      mimeType: 'application/pdf',
+      folderId: 'review',
+      expectedFolderId: 'review',
+      identityOk: false,
+    }).code === 'PDF_IDENTITY_MISMATCH',
+    'Identity mismatch must be classified.'
+  );
+  assertTriggerTest_(
+    classifyCompletedPdfProbeResult_({
+      exists: true,
+      trashed: false,
+      mimeType: 'application/pdf',
+      folderId: 'review',
+      expectedFolderId: 'review',
+      identityOk: true,
+    }).ok === true,
+    'Valid PDF facts must pass.'
+  );
 }
 
 function testReadinessHealthyPreview_() {
@@ -269,5 +436,36 @@ function testReadinessRunnerPrivate_() {
   assertTriggerTest_(
     runProductionReadinessChecks_.name.slice(-1) === '_',
     'Readiness runner must not be exposed to google.script.run.'
+  );
+}
+
+function testSystemHealthPublicApiSurface_() {
+  assertTriggerTest_(
+    typeof getSystemHealthSummary === 'function',
+    'getSystemHealthSummary must remain a public HR API.'
+  );
+  assertTriggerTest_(
+    typeof runSystemHealthDeepCheck === 'function',
+    'runSystemHealthDeepCheck must remain a public HR API.'
+  );
+  assertTriggerTest_(
+    typeof runSystemHealthSandboxLiveProbes === 'function',
+    'runSystemHealthSandboxLiveProbes must remain a public HR API.'
+  );
+  assertTriggerTest_(
+    typeof getSystemHealthItemDetails === 'function',
+    'getSystemHealthItemDetails must remain a public HR API.'
+  );
+  assertTriggerTest_(
+    typeof collectCompleteCycleAuditRowIssues_ === 'function',
+    'Audit-row deep-check helper must exist.'
+  );
+  assertTriggerTest_(
+    typeof buildSandboxLiveProbeReport_ === 'function',
+    'Live-probe honesty helper must exist.'
+  );
+  assertTriggerTest_(
+    typeof isTerminalCycleStatus_ === 'undefined',
+    'Obsolete isTerminalCycleStatus_ must be removed.'
   );
 }

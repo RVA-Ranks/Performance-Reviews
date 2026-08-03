@@ -5,7 +5,22 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Delivery E — readiness security and live-boundary honesty
+
+Delivery D tip preserved:
+`c234d862e08a53510e39315e477395e287c04f26`
+(`fix(admin): surface terminal-cycle and signature recovery health`).
+
+Delivery E begins with readiness security/live-boundary suites:
+Sandbox live-probe reports never claim execution when probes did not run;
+deep readiness verifies deterministic `FINALIZATION_COMPLETE:<cycleId>`
+audit rows for Complete cycles; System Alerts match by role/document/
+component identity; completed-PDF probe classification is pure-tested while
+Drive execution remains Requires Daniel Sandbox.
+
 ## Delivery D correction — terminal-cycle and signature recovery health
+
+**Approved tip:** `c234d862e08a53510e39315e477395e287c04f26`
 
 Complete cycles remain visible to System Health for PDF, distribution,
 finalization-audit, and signature warning inspection; Cancelled cycles never
@@ -15,7 +30,6 @@ Signed winner. Configuration Check is separate from Sandbox Live Probes
 (`ENVIRONMENT=Sandbox` only). Matching System Alerts attach to the
 authoritative recovery item; the alert viewer remains the incident ledger.
 Structured recovery details load through `getSystemHealthItemDetails()`.
-Stop before Delivery E.
 
 ## Delivery D — HR System Health and recovery UX
 
