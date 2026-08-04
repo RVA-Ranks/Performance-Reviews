@@ -356,4 +356,32 @@ function testSecurityPublicRecoveryApiSurface_() {
     typeof rebuildReviewCalendarEvent === 'function',
     'rebuildReviewCalendarEvent must remain a public HR API.'
   );
+  assertTriggerTest_(
+    typeof getPreviousReviewContext === 'function',
+    'getPreviousReviewContext must remain a public manager/HR API.'
+  );
+  assertTriggerTest_(
+    typeof getPreviousReviewCycle === 'function',
+    'getPreviousReviewCycle must remain a public manager/HR API.'
+  );
+  assertTriggerTest_(
+    typeof getPreviousReviewPdf === 'function',
+    'getPreviousReviewPdf must remain a public manager/HR API.'
+  );
+  assertTriggerTest_(
+    typeof findPreviousCompletedReview_ === 'function' &&
+      String(findPreviousCompletedReview_.name || '').slice(-1) === '_',
+    'findPreviousCompletedReview_ must remain private.'
+  );
+  assertTriggerTest_(
+    isPreviousReviewCallerAuthorized_({
+      isHr: false,
+      isCurrentManager: true,
+    }) === true &&
+      isPreviousReviewCallerAuthorized_({
+        isHr: false,
+        isCurrentManager: false,
+      }) === false,
+    'Previous-review access requires current manager or HR.'
+  );
 }

@@ -50,6 +50,8 @@ jobs:
             "V31_Production_Readiness_Tests.gs"
             "V31_Security_Tests.gs"
             "V31_Signature_Tests.gs"
+            "V31_Previous_Review.gs"
+            "V31_Previous_Review_Tests.gs"
             "Index.html"
             "appsscript.json"
             "README.md"
@@ -261,5 +263,21 @@ jobs:
             V31_Signature_Tests.gs; then
             echo \
               "::error file=V31_Signature_Tests.gs::Missing runV31SignatureTests_()."
+            exit 1
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+runV31PreviousReviewTests_[[:space:]]*\(' \
+            V31_Previous_Review_Tests.gs; then
+            echo \
+              "::error file=V31_Previous_Review_Tests.gs::Missing runV31PreviousReviewTests_()."
+            exit 1
+          fi
+
+          if ! grep -Eq \
+            'function[[:space:]]+getPreviousReviewContext[[:space:]]*\(' \
+            V31_Previous_Review.gs; then
+            echo \
+              "::error file=V31_Previous_Review.gs::Missing getPreviousReviewContext()."
             exit 1
           fi
