@@ -5,6 +5,28 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Previous Review Context (post-v3.1 — separate branch)
+
+Branch: `feat/previous-review-context`
+
+When the current assigned manager (or HR) opens a cycle, the app loads a
+read-only summary of that employee's most recent completed prior review via
+`getPreviousReviewContext(cycleId)`. Full historical viewing uses
+`getPreviousReviewCycle` / `getPreviousReviewPdf`, authorized through the
+**current** cycle assignment (not former-manager status alone).
+
+- Prefer same Review Type; otherwise latest other type with a clear label.
+- Only `Complete` cycles qualify; cancelled/open/meeting/signature/finalizing
+  are excluded.
+- Employees do not receive the manager-context panel.
+- Compensation, recovery metadata, signature file IDs, and attempt IDs are
+  never returned in the summary DTO.
+- No migration. No Drive ACL changes.
+- Tests: `runV31PreviousReviewTests_()`
+
+Do **not** merge into the frozen Delivery F RC until the production pilot is
+stable. Stop for review before merge.
+
 ## Delivery F — Sandbox validation (Stage F1 frozen)
 
 ```text

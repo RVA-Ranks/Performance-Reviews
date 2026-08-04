@@ -2,6 +2,52 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Previous Review Context (post-v3.1)
+
+Branch: `feat/previous-review-context` (do not mix into frozen Delivery F RC).
+
+Run privately in Preview:
+
+```javascript
+runV31PreviousReviewTests_();
+runV31SecurityTests_();
+```
+
+### Lookup matrix
+
+| Fixture | Expected previous |
+|---|---|
+| Annual 2024 Complete + 90-Day 2025 Complete + Annual 2025 Complete + Annual 2026 current | Annual 2025 |
+| Same without Annual 2025 | 90-Day 2025 + Different review type |
+
+### Exclusion
+
+Cancelled, Open for Input, Review Meeting Open, Awaiting Signatures, Finalizing,
+current cycle, and same-name/different-email rows must not resolve.
+
+### Authorization (Sandbox separate accounts)
+
+| Caller | Expected |
+|---|---|
+| Current assigned manager | Allowed |
+| Former manager not on current cycle | Denied |
+| Unrelated manager | Denied |
+| Employee | Denied from manager-context API |
+| HR | Allowed |
+
+### Privacy
+
+Response must not contain compensation decision/notes, salary, signature file
+IDs, recovery details, audit warnings, or attempt IDs.
+
+### UI
+
+- Collapsed by default; expands via View Summary / keyboard
+- Async load; current editor remains usable on failure
+- Empty state: no previous completed review
+- Full previous review is read-only without compensation/recovery controls
+- Missing PDFs show “PDF available through HR” without Drive ACL changes
+
 ## Delivery F Stage F1 — release candidate freeze
 
 ```text

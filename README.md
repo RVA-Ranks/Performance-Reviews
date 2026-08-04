@@ -7,6 +7,15 @@ Engineering work is governed by
 Read it before every delivery and treat Daniel's explicit business decisions as
 the only higher-priority source of truth.
 
+## Previous Review Context (post-v3.1)
+
+Separate branch `feat/previous-review-context` adds an authorized Previous
+Review panel for managers and HR. Implementation lives in
+`V31_Previous_Review.gs` / `V31_Previous_Review_Tests.gs` and the manager editor
+in `Index.html`. Historical reviews stay immutable; compensation is never
+exposed; Drive sharing is unchanged. Merge only after the Delivery F production
+pilot is stable.
+
 ## Delivery F Stage F1 — release candidate freeze
 
 ```text

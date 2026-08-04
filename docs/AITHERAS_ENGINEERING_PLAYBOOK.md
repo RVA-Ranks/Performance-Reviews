@@ -947,7 +947,18 @@ V31_Signature_Tests.gs
 V31_Trigger_Tests.gs
 V31_Security_Tests.gs
 V31_Production_Readiness_Tests.gs
+V31_Previous_Review.gs
+V31_Previous_Review_Tests.gs
 ```
+
+### Previous Review Context
+
+Post-v3.1 enhancement on `feat/previous-review-context`. Current assigned
+managers and HR may read a limited summary of an employee's most recent
+completed prior review. Authorization is based on the **current** cycle
+assignment. Historical reviews remain immutable; compensation is never returned;
+Drive sharing is not changed. No schema migration unless later performance
+evidence justifies caching a previous-cycle ID on the row.
 
 Common result shape:
 

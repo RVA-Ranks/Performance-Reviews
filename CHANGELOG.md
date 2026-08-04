@@ -1,5 +1,20 @@
 # V3.1 Changelog
 
+## Previous Review Context — post-v3.1 enhancement (`feat/previous-review-context`)
+
+- Added authorized previous-review context for the current assigned manager and
+  HR: `getPreviousReviewContext`, `getPreviousReviewCycle`, and
+  `getPreviousReviewPdf` in `V31_Previous_Review.gs`.
+- Resolves the employee's most recent completed prior review (same review type
+  preferred; other-type fallback labeled). Matching uses Employee ID when
+  present, otherwise normalized email — never name alone.
+- Manager editor shows an async, collapsed Previous Review panel; historical
+  view is read-only and hides compensation, editing, and recovery controls.
+- No schema migration; no Drive sharing changes; compensation and recovery
+  metadata are excluded from the summary DTO.
+- Added `V31_Previous_Review_Tests.gs` plus security-surface coverage. Does not
+  modify the frozen Delivery F release candidate (`v3.1-delivery-f-rc`).
+
 ## Delivery F Stage F1 — release candidate freeze
 
 - Froze immutable release candidate
