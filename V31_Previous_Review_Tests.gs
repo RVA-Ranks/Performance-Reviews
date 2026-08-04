@@ -44,6 +44,22 @@ function runV31PreviousReviewTests_() {
       testPreviousReviewPrivacyExclusion_
     ),
     triggerTestCase_(
+      'Full historical DTO sanitizes injected forbidden JSON fields',
+      testPreviousReviewFullViewPrivacy_
+    ),
+    triggerTestCase_(
+      'Unverifiable chronology is ineligible',
+      testPreviousReviewChronologyFailClosed_
+    ),
+    triggerTestCase_(
+      'Cache identity includes fallback setting and rejects wrong-type hits',
+      testPreviousReviewCacheFallbackIdentity_
+    ),
+    triggerTestCase_(
+      'Unsupported historical documentType is rejected',
+      testPreviousReviewDocumentTypeValidation_
+    ),
+    triggerTestCase_(
       'Legacy factor shapes and malformed JSON do not crash',
       testPreviousReviewLegacyJsonResilience_
     ),
@@ -52,8 +68,16 @@ function runV31PreviousReviewTests_() {
       testPreviousReviewMissingPdfNote_
     ),
     triggerTestCase_(
+      'Stored PDF availability is distinct from verified',
+      testPreviousReviewPdfStoredVsVerified_
+    ),
+    triggerTestCase_(
       'Historical cycle view is read-only and hides compensation',
       testPreviousReviewHistoricalReadOnlyShape_
+    ),
+    triggerTestCase_(
+      'Factor summary includes only historically present factors',
+      testPreviousReviewHistoricalFactorsOnly_
     ),
     {
       name: 'Current manager session can load previous context for assigned employee',
@@ -68,13 +92,25 @@ function runV31PreviousReviewTests_() {
       skipMessage: 'Requires Daniel Sandbox',
     },
     {
-      name: 'Employee session denied from getPreviousReviewContext',
+      name: 'Unrelated manager denied from previous-review endpoints',
       severity: 'Blocking',
       skip: true,
       skipMessage: 'Requires Daniel Sandbox',
     },
     {
-      name: 'HR session can open full previous review and authorized PDF path',
+      name: 'Employee session denied from getPreviousReviewContext/Cycle/Pdf',
+      severity: 'Blocking',
+      skip: true,
+      skipMessage: 'Requires Daniel Sandbox',
+    },
+    {
+      name: 'HR session can open full previous review and validated PDF path',
+      severity: 'Blocking',
+      skip: true,
+      skipMessage: 'Requires Daniel Sandbox',
+    },
+    {
+      name: 'Historical PDF rejects wrong MIME, trash, folder, and identity mismatches',
       severity: 'Blocking',
       skip: true,
       skipMessage: 'Requires Daniel Sandbox',
@@ -497,6 +533,10 @@ function testPreviousReviewMissingPdfNote_() {
     'PDF availability flags must be false'
   );
   assertTriggerTest_(
+    dto.managerPdfVerified === false && dto.selfPdfVerified === false,
+    'Verified flags must remain false without download validation'
+  );
+  assertTriggerTest_(
     dto.pdfAccessNote === 'PDF available through HR',
     'Missing PDFs must surface HR note'
   );
@@ -507,27 +547,230 @@ function testPreviousReviewMissingPdfNote_() {
   return {};
 }
 
+function testPreviousReviewPdfStoredVsVerified_() {
+  const prior = previousReviewFixtureRows_().filter(function (row) {
+    return row['Cycle ID'] === 'CYC-2025-ANNUAL';
+  })[0];
+  const dto = buildPreviousReviewSummaryDto_(prior, {
+    periodLabel: '2025 Annual',
+    sameReviewType: true,
+  });
+  assertTriggerTest_(
+    dto.managerPdfAvailable === true,
+    'Nonblank stored ID sets managerPdfAvailable'
+  );
+  assertTriggerTest_(
+    dto.managerPdfVerified === false,
+    'Stored ID alone must not set managerPdfVerified'
+  );
+  assertTriggerTest_(
+    /verified only when downloaded/i.test(String(dto.pdfAccessNote || '')),
+    'Summary must note that stored IDs are unverified until download'
+  );
+  return {};
+}
+
+function testPreviousReviewFullViewPrivacy_() {
+  const prior = previousReviewFixtureRows_().filter(function (row) {
+    return row['Cycle ID'] === 'CYC-2025-ANNUAL';
+  })[0];
+  prior['Manager Review JSON'] = JSON.stringify({
+    overallRating: '4',
+    overallComments: 'ok',
+    ratings: [{ factorId: 'communication', rating: 4, comments: '' }],
+    compensationDecision: 'Adjustment Submitted',
+    salary: '99999',
+    internalHrNotes: 'secret',
+    recoveryDetails: 'recover-me',
+    signatureFileId: 'sig-1',
+    attemptId: 'attempt-xyz',
+  });
+  prior['Self Evaluation JSON'] = JSON.stringify({
+    overallComments: 'self',
+    goalsForNextPeriod: 'Grow',
+    ratings: [],
+    salary: '111',
+    compensationDecisionNotes: 'hidden',
+  });
+  prior['Meeting JSON'] = JSON.stringify({
+    managerFinalComments: 'Discussed',
+    developmentGoals: 'Goal A',
+    actionSteps: 'Step A',
+    employeeComments: 'Agreed',
+    recoveryDetails: 'meeting-recovery',
+    attemptId: 'meeting-attempt',
+  });
+
+  const view = buildPreviousReviewCycleDto_(
+    prior,
+    { periodLabel: '2025 Annual', sameReviewType: true },
+    { isHr: true, isManager: true, currentCycleId: 'CYC-2026-ANNUAL' }
+  );
+  const forbidden = historicalPayloadContainsForbiddenPrivacy_(view);
+  assertTriggerTest_(
+    !forbidden,
+    'Full historical DTO must not contain forbidden field: ' + forbidden
+  );
+  assertTriggerTest_(
+    view.managerReview &&
+      view.managerReview.overallComments === 'ok' &&
+      !Object.prototype.hasOwnProperty.call(
+        view.managerReview,
+        'compensationDecision'
+      ),
+    'Manager review must be allow-listed only'
+  );
+  assertTriggerTest_(
+    view.meeting &&
+      view.meeting.developmentGoals === 'Goal A' &&
+      !Object.prototype.hasOwnProperty.call(view.meeting, 'attemptId'),
+    'Meeting payload must be allow-listed only'
+  );
+  assertTriggerTest_(
+    view.v31.canSeeCompensation === false &&
+      view.canEditManagerReview === false,
+    'Historical view must remain read-only without compensation'
+  );
+  return {};
+}
+
+function testPreviousReviewChronologyFailClosed_() {
+  const current = previousReviewFixtureCurrent_();
+  const undated = {
+    'Cycle ID': 'CYC-UNDATED',
+    Status: 'Complete',
+    'Review Type': 'Annual',
+    'Employee Email': 'employee.a@aitheras.com',
+    'Review Period End': '',
+    'Completed At': '',
+    'Updated At': '',
+  };
+  const chrono = classifyPreviousReviewChronology_(current, undated);
+  assertTriggerTest_(
+    chrono.eligible === false &&
+      chrono.reason === 'PREVIOUS_REVIEW_DATE_UNVERIFIABLE',
+    'Undated Complete rows must be ineligible'
+  );
+  assertTriggerTest_(
+    isPreviousCompletedReviewCandidate_(current, undated) === false,
+    'Unverifiable chronology must not qualify as previous'
+  );
+
+  const future = {
+    'Cycle ID': 'CYC-FUTURE',
+    Status: 'Complete',
+    'Review Type': 'Annual',
+    'Employee Email': 'employee.a@aitheras.com',
+    'Review Period End': new Date('2027-12-31'),
+    'Completed At': new Date('2027-01-01'),
+    'Updated At': new Date('2027-01-01'),
+  };
+  assertTriggerTest_(
+    isPreviousCompletedReviewCandidate_(current, future) === false,
+    'Later period end must not qualify as previous'
+  );
+
+  const equalEndOnly = {
+    'Cycle ID': 'CYC-EQUAL',
+    Status: 'Complete',
+    'Review Type': 'Annual',
+    'Employee Email': 'employee.a@aitheras.com',
+    'Review Period End': new Date('2026-12-31'),
+    'Completed At': '',
+    'Updated At': '',
+  };
+  assertTriggerTest_(
+    isPreviousCompletedReviewCandidate_(current, equalEndOnly) === false,
+    'Equal period end without other evidence must not qualify'
+  );
+  return {};
+}
+
+function testPreviousReviewCacheFallbackIdentity_() {
+  assertTriggerTest_(
+    previousReviewCacheKey_('CYC-1', true) !==
+      previousReviewCacheKey_('CYC-1', false),
+    'Fallback true/false must use distinct cache keys'
+  );
+  assertTriggerTest_(
+    /fallback-true$/.test(previousReviewCacheKey_('CYC-1', true)) &&
+      /fallback-false$/.test(previousReviewCacheKey_('CYC-1', false)),
+    'Cache key must encode fallback setting'
+  );
+
+  const current = previousReviewFixtureCurrent_();
+  const otherType = previousReviewFixtureRows_().filter(function (row) {
+    return row['Cycle ID'] === 'CYC-2025-90DAY';
+  })[0];
+  assertTriggerTest_(
+    isCachedPreviousReviewStillValid_(current, otherType, true) === true,
+    'Different-type cache hit valid when fallback enabled'
+  );
+  assertTriggerTest_(
+    isCachedPreviousReviewStillValid_(current, otherType, false) === false,
+    'Different-type cache hit must be rejected when fallback disabled'
+  );
+  return {};
+}
+
+function testPreviousReviewDocumentTypeValidation_() {
+  const prior = previousReviewFixtureRows_().filter(function (row) {
+    return row['Cycle ID'] === 'CYC-2025-ANNUAL';
+  })[0];
+  let rejected = false;
+  try {
+    resolvePreviousReviewStoredPdfId_(prior, 'Not A Real Type');
+  } catch (error) {
+    rejected = /Unsupported historical document type/i.test(
+      String(error.message || error)
+    );
+  }
+  assertTriggerTest_(
+    rejected,
+    'Unsupported documentType must throw explicitly'
+  );
+  assertTriggerTest_(
+    resolvePreviousReviewStoredPdfId_(prior, PR.TYPE.MANAGER) ===
+      'pdf-mgr-2025',
+    'Manager document type must resolve manager PDF ID'
+  );
+  return {};
+}
+
+function testPreviousReviewHistoricalFactorsOnly_() {
+  const manager = sanitizeHistoricalManagerReview_({
+    ratings: [{ factorId: 'communication', rating: 4, comments: '' }],
+    overallComments: 'ok',
+  });
+  const self = sanitizeHistoricalSelfEvaluation_({
+    ratings: [{ factorId: 'legacy_factor_x', rating: 3, comments: '' }],
+  });
+  const factors = buildPreviousReviewFactorRatings_(manager, self);
+  assertTriggerTest_(
+    factors.length === 2,
+    'Only historically present factors should appear'
+  );
+  const ids = factors
+    .map(function (item) {
+      return item.factorId;
+    })
+    .sort();
+  assertTriggerTest_(
+    ids.join(',') === 'communication,legacy_factor_x',
+    'Unexpected factor set: ' + ids.join(',')
+  );
+  return {};
+}
+
 function testPreviousReviewHistoricalReadOnlyShape_() {
   const prior = previousReviewFixtureRows_().filter(function (row) {
     return row['Cycle ID'] === 'CYC-2025-ANNUAL';
   })[0];
-  // Simulate the shape returned by getPreviousReviewCycle without Session.
-  const view = {
-    historicalPreviousReview: true,
-    canEditManagerReview: false,
-    canEditSelfEvaluation: false,
-    canStartMeeting: false,
-    canEditManagerMeeting: false,
-    canEditEmployeeMeeting: false,
-    canReleaseSignatures: false,
-    signatureTasks: [],
-    v31: {
-      compensationRequired: false,
-      canSeeCompensation: false,
-      canManageCompensation: false,
-      historicalReadOnly: true,
-    },
-  };
+  const view = buildPreviousReviewCycleDto_(
+    prior,
+    { periodLabel: '2025 Annual', sameReviewType: true },
+    { isHr: false, isManager: true, currentCycleId: 'CYC-2026-ANNUAL' }
+  );
   assertTriggerTest_(
     view.historicalPreviousReview === true &&
       view.canEditManagerReview === false &&
@@ -535,13 +778,13 @@ function testPreviousReviewHistoricalReadOnlyShape_() {
       view.v31.canSeeCompensation === false,
     'Historical view must remain read-only without compensation'
   );
-  const dto = buildPreviousReviewSummaryDto_(prior, {
-    periodLabel: '2025 Annual',
-    sameReviewType: true,
-  });
   assertTriggerTest_(
-    dto.fullReviewAvailable === true,
-    'Full review route availability must be advertised'
+    view.managerPdfVerified === false,
+    'Full view must not claim PDF verified from stored ID alone'
+  );
+  assertTriggerTest_(
+    view.canDownloadManager === true,
+    'Stored manager PDF ID should enable download attempt'
   );
   return {};
 }

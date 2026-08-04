@@ -2861,6 +2861,7 @@ function finalizeReviewCycleLegacy_(cycleId, options) {
       cycle['Updated At'] = new Date();
       writeCycle_(location.rowNumber, cycle);
       SpreadsheetApp.flush();
+      invalidatePreviousReviewCachesForEmployee_(cycle);
 
       return cycle;
     });

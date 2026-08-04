@@ -16,16 +16,25 @@ read-only summary of that employee's most recent completed prior review via
 **current** cycle assignment (not former-manager status alone).
 
 - Prefer same Review Type; otherwise latest other type with a clear label.
-- Only `Complete` cycles qualify; cancelled/open/meeting/signature/finalizing
-  are excluded.
+- Only `Complete` cycles with **provable** chronology qualify; unverifiable
+  dates are excluded (`PREVIOUS_REVIEW_DATE_UNVERIFIABLE`).
 - Employees do not receive the manager-context panel.
-- Compensation, recovery metadata, signature file IDs, and attempt IDs are
-  never returned in the summary DTO.
-- No migration. No Drive ACL changes.
-- Tests: `runV31PreviousReviewTests_()`
+- Summary and full historical responses use allow-listed DTOs only — never raw
+  historical JSON. Compensation, recovery metadata, signature file IDs, and
+  attempt IDs are never returned.
+- Historical PDF download reuses `validateAuthoritativeFinalPdfId_` (MIME,
+  trash, folder, deterministic filename for the prior cycle). Stored ID ≠
+  verified.
+- Cache keys include `PREVIOUS_REVIEW_FALLBACK_ANY_TYPE`; completing a review
+  invalidates that employee's previous-review cache entries.
+- **Employee identity (this release, no migration):** Employee ID when present
+  on both rows, else normalized email. Email changes require HR correction of
+  historical rows until a future Employee ID migration.
+- Tests: `runV31PreviousReviewTests_()` (Sandbox endpoint sessions still
+  required before merge)
 
 Do **not** merge into the frozen Delivery F RC until the production pilot is
-stable. Stop for review before merge.
+stable and Sandbox endpoint authorization passes. Stop for review before merge.
 
 ## Delivery F — Sandbox validation (Stage F1 frozen)
 

@@ -5,16 +5,20 @@
  * employee's most recent completed prior review. Does not mutate history,
  * expose compensation, or change Drive sharing.
  *
- * Employee identity: prefer stable Employee ID when present on both rows,
- * otherwise normalized Employee Email. Never match by name alone.
- * (Current ReviewCycles schema has no Employee ID column; email is used.)
+ * Employee identity strategy (this release — no migration):
+ * Prefer stable Employee ID when present on both rows, otherwise normalized
+ * Employee Email. Never match by name alone. ReviewCycles currently has no
+ * Employee ID column, so production matching is email-based. Email renames,
+ * domain changes, or corrected typos break continuity until HR updates the
+ * historical Employee Email values (or a later release adds Employee ID).
  */
 
 const V31_PREVIOUS_REVIEW = Object.freeze({
-  CACHE_PREFIX: 'v31_prev_review_id_v1:',
+  CACHE_PREFIX: 'v31_prev_review_id_v2:',
   CACHE_TTL_SECONDS: 300,
   NOT_RECORDED: 'Not Recorded',
   HISTORICAL_FACTOR: 'Historical factor',
+  DATE_UNVERIFIABLE: 'PREVIOUS_REVIEW_DATE_UNVERIFIABLE',
 });
 
 /**
@@ -32,7 +36,8 @@ function isPreviousCompletedReviewCandidate_(currentCycle, candidate) {
   if (!employeesMatchForPreviousReview_(currentCycle, candidate)) {
     return false;
   }
-  return isPreviousReviewCompletedBeforeCurrent_(currentCycle, candidate);
+  return classifyPreviousReviewChronology_(currentCycle, candidate)
+    .eligible;
 }
 
 /**
@@ -53,31 +58,66 @@ function employeesMatchForPreviousReview_(currentCycle, candidate) {
   return !!(currentEmail && currentEmail === candidateEmail);
 }
 
-function isPreviousReviewCompletedBeforeCurrent_(currentCycle, candidate) {
+/**
+ * Chronology must be proven. Unverifiable Complete rows are ineligible.
+ */
+function classifyPreviousReviewChronology_(currentCycle, candidate) {
   const currentEnd = toMillisSafe_(currentCycle['Review Period End']);
   const candidateEnd = toMillisSafe_(candidate['Review Period End']);
-  if (currentEnd && candidateEnd && candidateEnd < currentEnd) {
-    return true;
+  if (currentEnd && candidateEnd) {
+    if (candidateEnd < currentEnd) {
+      return { eligible: true, reason: '' };
+    }
+    if (candidateEnd > currentEnd) {
+      return {
+        eligible: false,
+        reason: 'PREVIOUS_REVIEW_AFTER_CURRENT_PERIOD',
+      };
+    }
+    // Equal period ends require other evidence below.
   }
+
   const currentCompleted = toMillisSafe_(currentCycle['Completed At']);
   const candidateCompleted = toMillisSafe_(candidate['Completed At']);
   if (currentCompleted && candidateCompleted) {
-    return candidateCompleted < currentCompleted;
+    if (candidateCompleted < currentCompleted) {
+      return { eligible: true, reason: '' };
+    }
+    if (candidateCompleted > currentCompleted) {
+      return {
+        eligible: false,
+        reason: 'PREVIOUS_REVIEW_AFTER_CURRENT_COMPLETION',
+      };
+    }
   }
-  if (candidateCompleted && !currentCompleted) {
-    return true;
+
+  // Open/current unfinished cycle: completed-at before current period end.
+  if (candidateCompleted && currentEnd && !currentCompleted) {
+    if (candidateCompleted < currentEnd) {
+      return { eligible: true, reason: '' };
+    }
   }
+
   const currentUpdated = toMillisSafe_(currentCycle['Updated At']);
   const candidateUpdated = toMillisSafe_(candidate['Updated At']);
-  if (currentUpdated && candidateUpdated) {
-    return candidateUpdated < currentUpdated;
+  if (
+    currentUpdated &&
+    candidateUpdated &&
+    candidateCompleted &&
+    candidateUpdated < currentUpdated
+  ) {
+    return { eligible: true, reason: '' };
   }
-  // Current open cycles without completion: any prior Complete for the
-  // employee is eligible when period end is not after current period end.
-  if (candidateEnd && currentEnd) {
-    return candidateEnd <= currentEnd;
-  }
-  return !!candidateCompleted || String(candidate.Status) === PR.CYCLE.COMPLETE;
+
+  return {
+    eligible: false,
+    reason: V31_PREVIOUS_REVIEW.DATE_UNVERIFIABLE,
+  };
+}
+
+function isPreviousReviewCompletedBeforeCurrent_(currentCycle, candidate) {
+  return classifyPreviousReviewChronology_(currentCycle, candidate)
+    .eligible;
 }
 
 function toMillisSafe_(value) {
@@ -135,7 +175,7 @@ function comparePreviousReviewCandidates_(currentCycle, left, right) {
  * Private resolver: one previous completed review for the employee.
  * Pure when cycles are provided; otherwise reads ReviewCycles once.
  */
-function findPreviousCompletedReview_(currentCycle, allCycles) {
+function findPreviousCompletedReview_(currentCycle, allCycles, options) {
   if (!currentCycle) {
     return {
       found: false,
@@ -143,8 +183,12 @@ function findPreviousCompletedReview_(currentCycle, allCycles) {
     };
   }
 
+  const opts = options || {};
   const rows = allCycles || getAllObjects_(PR.SHEETS.CYCLES);
-  const allowAnyType = isPreviousReviewFallbackAnyTypeEnabled_();
+  const allowAnyType =
+    opts.allowAnyType == null
+      ? isPreviousReviewFallbackAnyTypeEnabled_()
+      : !!opts.allowAnyType;
   const currentType = String(currentCycle['Review Type'] || '');
 
   let candidates = (rows || []).filter(function (candidate) {
@@ -204,31 +248,78 @@ function buildPreviousReviewPeriodLabel_(cycle) {
   return type;
 }
 
-function readCachedPreviousReviewCycleId_(currentCycleId) {
+function previousReviewCacheKey_(currentCycleId, allowAnyType) {
+  return (
+    V31_PREVIOUS_REVIEW.CACHE_PREFIX +
+    String(currentCycleId || '') +
+    ':fallback-' +
+    (allowAnyType ? 'true' : 'false')
+  );
+}
+
+function readCachedPreviousReviewCycleId_(currentCycleId, allowAnyType) {
   try {
     const cache = CacheService.getScriptCache();
     if (!cache) return '';
     return String(
-      cache.get(
-        V31_PREVIOUS_REVIEW.CACHE_PREFIX + String(currentCycleId || '')
-      ) || ''
+      cache.get(previousReviewCacheKey_(currentCycleId, allowAnyType)) ||
+        ''
     );
   } catch (error) {
     return '';
   }
 }
 
-function writeCachedPreviousReviewCycleId_(currentCycleId, previousCycleId) {
+function writeCachedPreviousReviewCycleId_(
+  currentCycleId,
+  previousCycleId,
+  allowAnyType
+) {
   try {
     const cache = CacheService.getScriptCache();
     if (!cache || !previousCycleId) return;
     cache.put(
-      V31_PREVIOUS_REVIEW.CACHE_PREFIX + String(currentCycleId || ''),
+      previousReviewCacheKey_(currentCycleId, allowAnyType),
       String(previousCycleId),
       V31_PREVIOUS_REVIEW.CACHE_TTL_SECONDS
     );
   } catch (error) {
     // ignore cache failures
+  }
+}
+
+function removeCachedPreviousReviewCycleId_(currentCycleId) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) return;
+    cache.remove(previousReviewCacheKey_(currentCycleId, true));
+    cache.remove(previousReviewCacheKey_(currentCycleId, false));
+  } catch (error) {
+    // ignore cache failures
+  }
+}
+
+/**
+ * Clear previous-review caches for an employee's open/current cycles when a
+ * review becomes Complete so a newer prior can be selected.
+ * Five-minute TTL may still retain a selection until invalidation or expiry;
+ * completion invalidation is the forced refresh path.
+ */
+function invalidatePreviousReviewCachesForEmployee_(completedCycle) {
+  if (!completedCycle) return;
+  try {
+    const rows = getAllObjects_(PR.SHEETS.CYCLES);
+    (rows || []).forEach(function (row) {
+      if (!employeesMatchForPreviousReview_(completedCycle, row)) {
+        return;
+      }
+      removeCachedPreviousReviewCycleId_(String(row['Cycle ID'] || ''));
+    });
+  } catch (error) {
+    Logger.log(
+      'invalidatePreviousReviewCachesForEmployee_ failed: ' +
+        String(error.message || error)
+    );
   }
 }
 
@@ -276,18 +367,43 @@ function assertPreviousReviewAccess_(currentCycleId) {
   };
 }
 
+function isCachedPreviousReviewStillValid_(
+  currentCycle,
+  cachedCycle,
+  allowAnyType
+) {
+  if (
+    !isPreviousCompletedReviewCandidate_(currentCycle, cachedCycle)
+  ) {
+    return false;
+  }
+  if (allowAnyType) return true;
+  return (
+    String(cachedCycle['Review Type'] || '') ===
+    String(currentCycle['Review Type'] || '')
+  );
+}
+
 function resolvePreviousReviewForAccess_(access, options) {
   const opts = options || {};
+  const allowAnyType =
+    opts.allowAnyType == null
+      ? isPreviousReviewFallbackAnyTypeEnabled_()
+      : !!opts.allowAnyType;
   const cachedId = opts.skipCache
     ? ''
-    : readCachedPreviousReviewCycleId_(access.currentCycleId);
+    : readCachedPreviousReviewCycleId_(
+        access.currentCycleId,
+        allowAnyType
+      );
   if (cachedId) {
     try {
       const cachedCycle = findCycle_(cachedId).object;
       if (
-        isPreviousCompletedReviewCandidate_(
+        isCachedPreviousReviewStillValid_(
           access.currentCycle,
-          cachedCycle
+          cachedCycle,
+          allowAnyType
         )
       ) {
         return {
@@ -309,12 +425,14 @@ function resolvePreviousReviewForAccess_(access, options) {
 
   const resolved = findPreviousCompletedReview_(
     access.currentCycle,
-    opts.cycles
+    opts.cycles,
+    { allowAnyType: allowAnyType }
   );
   if (resolved.found) {
     writeCachedPreviousReviewCycleId_(
       access.currentCycleId,
-      resolved.cycleId
+      resolved.cycleId,
+      allowAnyType
     );
   }
   return resolved;
@@ -340,11 +458,13 @@ function getFactorLabelForId_(factorId) {
       return PR.FACTORS[i].label;
     }
   }
-  return wanted
-    ? V31_PREVIOUS_REVIEW.HISTORICAL_FACTOR
-    : V31_PREVIOUS_REVIEW.HISTORICAL_FACTOR;
+  return V31_PREVIOUS_REVIEW.HISTORICAL_FACTOR;
 }
 
+/**
+ * Only factors present in historical manager or employee ratings.
+ * Do not seed every current factor as Not Recorded.
+ */
 function buildPreviousReviewFactorRatings_(managerReview, selfEvaluation) {
   const managerById = {};
   const employeeById = {};
@@ -364,9 +484,6 @@ function buildPreviousReviewFactorRatings_(managerReview, selfEvaluation) {
   });
 
   const ids = {};
-  PR.FACTORS.forEach(function (factor) {
-    ids[factor.id] = true;
-  });
   Object.keys(managerById).forEach(function (id) {
     ids[id] = true;
   });
@@ -415,35 +532,131 @@ function splitGoalsText_(value) {
     });
 }
 
-function buildPreviousReviewSummaryDto_(previousCycle, resolution) {
-  let managerReview = emptyManagerReview_();
-  let selfEvaluation = emptySelfEvaluation_();
-  let meeting = emptyMeeting_();
-
+function parsePreviousReviewJsonSafe_(raw, fallback) {
   try {
-    managerReview = parseJson_(
+    return parseJson_(raw, fallback);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+/**
+ * Allow-listed manager review fields only — never pass raw historical JSON.
+ */
+function sanitizeHistoricalManagerReview_(raw) {
+  const source = raw || {};
+  const ratings = [];
+  ((source.ratings || []) || []).forEach(function (item) {
+    if (!item || !item.factorId) return;
+    ratings.push({
+      factorId: String(item.factorId || ''),
+      factorLabel: String(item.factorLabel || ''),
+      rating: item.rating == null ? '' : item.rating,
+      comments: String(item.comments || ''),
+    });
+  });
+  return {
+    ratings: ratings,
+    overallRating:
+      source.overallRating == null ? '' : source.overallRating,
+    overallComments: String(source.overallComments || ''),
+    areasForImprovement: String(source.areasForImprovement || ''),
+    actionSteps: String(source.actionSteps || ''),
+    supervisorComments: String(source.supervisorComments || ''),
+    submittedAt: String(source.submittedAt || ''),
+  };
+}
+
+/**
+ * Allow-listed self-evaluation fields only.
+ */
+function sanitizeHistoricalSelfEvaluation_(raw) {
+  const source = raw || {};
+  const ratings = [];
+  ((source.ratings || []) || []).forEach(function (item) {
+    if (!item || !item.factorId) return;
+    ratings.push({
+      factorId: String(item.factorId || ''),
+      factorLabel: String(item.factorLabel || ''),
+      rating: item.rating == null ? '' : item.rating,
+      comments: String(item.comments || ''),
+    });
+  });
+  return {
+    ratings: ratings,
+    overallRating:
+      source.overallRating == null ? '' : source.overallRating,
+    overallComments: String(source.overallComments || ''),
+    keyAccomplishments: String(source.keyAccomplishments || ''),
+    areasForGrowth: String(source.areasForGrowth || ''),
+    goalsForNextPeriod: String(source.goalsForNextPeriod || ''),
+    supportNeeded: String(source.supportNeeded || ''),
+    submittedAt: String(source.submittedAt || ''),
+  };
+}
+
+/**
+ * Allow-listed meeting outcome fields only.
+ */
+function sanitizeHistoricalMeeting_(raw) {
+  const source = raw || {};
+  return {
+    managerFinalComments: String(source.managerFinalComments || ''),
+    developmentGoals: String(source.developmentGoals || ''),
+    actionSteps: String(source.actionSteps || ''),
+    employeeComments: String(source.employeeComments || ''),
+  };
+}
+
+/**
+ * Pure helper: assert historical view payload has no forbidden privacy keys.
+ */
+function historicalPayloadContainsForbiddenPrivacy_(payload) {
+  const blob = JSON.stringify(payload || {}).toLowerCase();
+  const forbidden = [
+    'compensationdecision',
+    'compensation decision',
+    'compensationdecisionnotes',
+    'compensation decision notes',
+    'salary',
+    'internalhrnotes',
+    'internal hr notes',
+    'recoverydetails',
+    'recovery details',
+    'signaturefileid',
+    'signature file id',
+    'attemptid',
+    'attempt id',
+    'finalization last error',
+    'finalizationlasterror',
+  ];
+  for (let i = 0; i < forbidden.length; i += 1) {
+    if (blob.indexOf(forbidden[i]) >= 0) {
+      return forbidden[i];
+    }
+  }
+  return '';
+}
+
+function buildPreviousReviewSummaryDto_(previousCycle, resolution) {
+  const managerReview = sanitizeHistoricalManagerReview_(
+    parsePreviousReviewJsonSafe_(
       previousCycle['Manager Review JSON'],
       emptyManagerReview_()
-    );
-  } catch (error) {
-    managerReview = emptyManagerReview_();
-  }
-  try {
-    selfEvaluation = parseJson_(
+    )
+  );
+  const selfEvaluation = sanitizeHistoricalSelfEvaluation_(
+    parsePreviousReviewJsonSafe_(
       previousCycle['Self Evaluation JSON'],
       emptySelfEvaluation_()
-    );
-  } catch (error) {
-    selfEvaluation = emptySelfEvaluation_();
-  }
-  try {
-    meeting = parseJson_(
+    )
+  );
+  const meeting = sanitizeHistoricalMeeting_(
+    parsePreviousReviewJsonSafe_(
       previousCycle['Meeting JSON'],
       emptyMeeting_()
-    );
-  } catch (error) {
-    meeting = emptyMeeting_();
-  }
+    )
+  );
 
   const overallValue = managerReview.overallRating;
   const goals = splitGoalsText_(selfEvaluation.goalsForNextPeriod);
@@ -453,8 +666,12 @@ function buildPreviousReviewSummaryDto_(previousCycle, resolution) {
     });
   }
 
-  const managerPdfAvailable = !!previousCycle['Manager Review PDF ID'];
-  const selfPdfAvailable = !!previousCycle['Self Evaluation PDF ID'];
+  const managerPdfAvailable = !!String(
+    previousCycle['Manager Review PDF ID'] || ''
+  ).trim();
+  const selfPdfAvailable = !!String(
+    previousCycle['Self Evaluation PDF ID'] || ''
+  ).trim();
 
   return {
     found: true,
@@ -490,10 +707,142 @@ function buildPreviousReviewSummaryDto_(previousCycle, resolution) {
     fullReviewAvailable: true,
     managerPdfAvailable: managerPdfAvailable,
     selfPdfAvailable: selfPdfAvailable,
+    managerPdfVerified: false,
+    selfPdfVerified: false,
     pdfAccessNote:
       managerPdfAvailable || selfPdfAvailable
-        ? ''
+        ? 'Stored PDF IDs are verified only when downloaded.'
         : 'PDF available through HR',
+  };
+}
+
+/**
+ * Build the allow-listed full historical cycle DTO (no raw JSON passthrough).
+ */
+function buildPreviousReviewCycleDto_(
+  previousCycle,
+  resolution,
+  access
+) {
+  const managerReview = sanitizeHistoricalManagerReview_(
+    parsePreviousReviewJsonSafe_(
+      previousCycle['Manager Review JSON'],
+      emptyManagerReview_()
+    )
+  );
+  const selfEvaluation = sanitizeHistoricalSelfEvaluation_(
+    parsePreviousReviewJsonSafe_(
+      previousCycle['Self Evaluation JSON'],
+      emptySelfEvaluation_()
+    )
+  );
+  const meeting = sanitizeHistoricalMeeting_(
+    parsePreviousReviewJsonSafe_(
+      previousCycle['Meeting JSON'],
+      emptyMeeting_()
+    )
+  );
+
+  const managerWithSignatures = addSignatureTimes_(
+    managerReview,
+    previousCycle,
+    PR.TYPE.MANAGER
+  );
+  const selfWithSignatures = addSignatureTimes_(
+    selfEvaluation,
+    previousCycle,
+    PR.TYPE.SELF
+  );
+
+  const managerPdfAvailable = !!String(
+    previousCycle['Manager Review PDF ID'] || ''
+  ).trim();
+  const selfPdfAvailable = !!String(
+    previousCycle['Self Evaluation PDF ID'] || ''
+  ).trim();
+
+  return {
+    cycleId: String(previousCycle['Cycle ID'] || ''),
+    status: PR.CYCLE.COMPLETE,
+    reviewType: String(previousCycle['Review Type'] || ''),
+    reviewPeriodStart: formatDate_(
+      previousCycle['Review Period Start']
+    ),
+    reviewPeriodEnd: formatDate_(
+      previousCycle['Review Period End']
+    ),
+    reviewMeetingDate: formatDate_(
+      previousCycle['Review Meeting Date']
+    ),
+    employeeName: String(previousCycle['Employee Name'] || ''),
+    employeeEmail: String(previousCycle['Employee Email'] || ''),
+    employeeJobTitle: String(
+      previousCycle['Employee Job Title'] || ''
+    ),
+    departmentProject: String(
+      previousCycle['Department / Project'] || ''
+    ),
+    managerName: String(previousCycle['Manager Name'] || ''),
+    managerEmail: String(previousCycle['Manager Email'] || ''),
+    hrName: String(previousCycle['HR Name'] || ''),
+    hrEmail: String(previousCycle['HR Email'] || ''),
+    managerReviewStatus: String(
+      previousCycle['Manager Review Status'] || ''
+    ),
+    selfEvaluationStatus: String(
+      previousCycle['Self Evaluation Status'] || ''
+    ),
+    completedAt: formatDateTime_(previousCycle['Completed At']),
+    updatedAt: formatDateTime_(previousCycle['Updated At']),
+    isHr: !!(access && access.isHr),
+    isManager: !!(access && access.isManager),
+    isEmployee: false,
+    historicalPreviousReview: true,
+    linkedFromCycleId: access ? access.currentCycleId : '',
+    sameReviewType: !!(resolution && resolution.sameReviewType),
+    periodLabel:
+      (resolution && resolution.periodLabel) ||
+      buildPreviousReviewPeriodLabel_(previousCycle),
+    managerReviewVisible: true,
+    selfEvaluationVisible: true,
+    managerReview: managerWithSignatures,
+    selfEvaluation: selfWithSignatures,
+    meeting: meeting,
+    managerReviewProgress: calculateReviewProgress_(
+      managerReview,
+      PR.TYPE.MANAGER
+    ),
+    selfEvaluationProgress: calculateReviewProgress_(
+      selfEvaluation,
+      PR.TYPE.SELF
+    ),
+    signatureState: getCombinedSignatureState_(previousCycle),
+    canEditManagerReview: false,
+    canEditSelfEvaluation: false,
+    canStartMeeting: false,
+    canEditManagerMeeting: false,
+    canEditEmployeeMeeting: false,
+    canReleaseSignatures: false,
+    signatureTasks: [],
+    canDownloadManager: managerPdfAvailable,
+    canDownloadSelf: selfPdfAvailable,
+    managerPdfAvailable: managerPdfAvailable,
+    selfPdfAvailable: selfPdfAvailable,
+    managerPdfVerified: false,
+    selfPdfVerified: false,
+    v31: {
+      compensationRequired: false,
+      compensationComplete: true,
+      canSeeCompensation: false,
+      canManageCompensation: false,
+      historicalReadOnly: true,
+    },
+    primaryAction: {
+      key: 'overview',
+      label: 'View Completed Review',
+      tone: 'neutral',
+      required: false,
+    },
   };
 }
 
@@ -546,110 +895,39 @@ function getPreviousReviewCycle(currentCycleId) {
     );
   }
 
-  const previousCycle = resolution.cycle;
-  const managerReview = parseJson_(
-    previousCycle['Manager Review JSON'],
-    emptyManagerReview_()
+  return buildPreviousReviewCycleDto_(
+    resolution.cycle,
+    resolution,
+    access
   );
-  const selfEvaluation = parseJson_(
-    previousCycle['Self Evaluation JSON'],
-    emptySelfEvaluation_()
-  );
-  const meeting = parseJson_(
-    previousCycle['Meeting JSON'],
-    emptyMeeting_()
-  );
+}
 
-  return {
-    cycleId: String(previousCycle['Cycle ID'] || ''),
-    status: PR.CYCLE.COMPLETE,
-    reviewType: String(previousCycle['Review Type'] || ''),
-    reviewPeriodStart: formatDate_(
-      previousCycle['Review Period Start']
-    ),
-    reviewPeriodEnd: formatDate_(
-      previousCycle['Review Period End']
-    ),
-    reviewMeetingDate: formatDate_(
-      previousCycle['Review Meeting Date']
-    ),
-    employeeName: String(previousCycle['Employee Name'] || ''),
-    employeeEmail: String(previousCycle['Employee Email'] || ''),
-    employeeJobTitle: String(
-      previousCycle['Employee Job Title'] || ''
-    ),
-    departmentProject: String(
-      previousCycle['Department / Project'] || ''
-    ),
-    managerName: String(previousCycle['Manager Name'] || ''),
-    managerEmail: String(previousCycle['Manager Email'] || ''),
-    hrName: String(previousCycle['HR Name'] || ''),
-    hrEmail: String(previousCycle['HR Email'] || ''),
-    managerReviewStatus: String(
-      previousCycle['Manager Review Status'] || ''
-    ),
-    selfEvaluationStatus: String(
-      previousCycle['Self Evaluation Status'] || ''
-    ),
-    completedAt: formatDateTime_(previousCycle['Completed At']),
-    updatedAt: formatDateTime_(previousCycle['Updated At']),
-    isHr: access.isHr,
-    isManager: access.isManager,
-    isEmployee: false,
-    historicalPreviousReview: true,
-    linkedFromCycleId: access.currentCycleId,
-    sameReviewType: resolution.sameReviewType,
-    periodLabel: resolution.periodLabel,
-    managerReviewVisible: true,
-    selfEvaluationVisible: true,
-    managerReview: addSignatureTimes_(
-      managerReview,
-      previousCycle,
-      PR.TYPE.MANAGER
-    ),
-    selfEvaluation: addSignatureTimes_(
-      selfEvaluation,
-      previousCycle,
-      PR.TYPE.SELF
-    ),
-    meeting: meeting,
-    managerReviewProgress: calculateReviewProgress_(
-      managerReview,
-      PR.TYPE.MANAGER
-    ),
-    selfEvaluationProgress: calculateReviewProgress_(
-      selfEvaluation,
-      PR.TYPE.SELF
-    ),
-    signatureState: getCombinedSignatureState_(previousCycle),
-    canEditManagerReview: false,
-    canEditSelfEvaluation: false,
-    canStartMeeting: false,
-    canEditManagerMeeting: false,
-    canEditEmployeeMeeting: false,
-    canReleaseSignatures: false,
-    signatureTasks: [],
-    canDownloadManager: !!previousCycle['Manager Review PDF ID'],
-    canDownloadSelf: !!previousCycle['Self Evaluation PDF ID'],
-    v31: {
-      compensationRequired: false,
-      compensationComplete: true,
-      canSeeCompensation: false,
-      canManageCompensation: false,
-      historicalReadOnly: true,
-    },
-    primaryAction: {
-      key: 'overview',
-      label: 'View Completed Review',
-      tone: 'neutral',
-      required: false,
-    },
-  };
+/**
+ * Validate historical document type and return the authoritative stored ID.
+ */
+function resolvePreviousReviewStoredPdfId_(previousCycle, documentType) {
+  if (
+    documentType !== PR.TYPE.MANAGER &&
+    documentType !== PR.TYPE.SELF
+  ) {
+    throw new Error('Unsupported historical document type.');
+  }
+  const fileId =
+    documentType === PR.TYPE.MANAGER
+      ? previousCycle['Manager Review PDF ID']
+      : previousCycle['Self Evaluation PDF ID'];
+  const id = String(fileId || '').trim();
+  if (!id) {
+    throw new Error(
+      'The previous review PDF is not available. PDF available through HR.'
+    );
+  }
+  return id;
 }
 
 /**
  * Public API: download a prior-cycle PDF using current-cycle authorization.
- * Does not change Drive sharing.
+ * Reuses strict authoritative PDF validation. Does not change Drive sharing.
  */
 function getPreviousReviewPdf(currentCycleId, documentType) {
   const access = assertPreviousReviewAccess_(currentCycleId);
@@ -661,22 +939,26 @@ function getPreviousReviewPdf(currentCycleId, documentType) {
   }
 
   const previousCycle = resolution.cycle;
-  const fileId =
-    documentType === PR.TYPE.MANAGER
-      ? previousCycle['Manager Review PDF ID']
-      : previousCycle['Self Evaluation PDF ID'];
+  const previousCycleId = String(previousCycle['Cycle ID'] || '');
+  const fileId = resolvePreviousReviewStoredPdfId_(
+    previousCycle,
+    documentType
+  );
 
-  if (!fileId) {
-    throw new Error(
-      'The previous review PDF is not available. PDF available through HR.'
-    );
-  }
+  // Strict validation: MIME, trash, approved folder, deterministic name
+  // for the prior cycle and document type. Reject on any failure.
+  validateAuthoritativeFinalPdfId_(
+    previousCycleId,
+    documentType,
+    fileId
+  );
 
   const blob = DriveApp.getFileById(String(fileId)).getBlob();
   return {
     fileName: blob.getName(),
     mimeType: blob.getContentType(),
     base64: Utilities.base64Encode(blob.getBytes()),
-    previousCycleId: String(previousCycle['Cycle ID'] || ''),
+    previousCycleId: previousCycleId,
+    verified: true,
   };
 }

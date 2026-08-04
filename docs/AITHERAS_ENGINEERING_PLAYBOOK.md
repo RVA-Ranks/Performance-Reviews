@@ -957,8 +957,13 @@ Post-v3.1 enhancement on `feat/previous-review-context`. Current assigned
 managers and HR may read a limited summary of an employee's most recent
 completed prior review. Authorization is based on the **current** cycle
 assignment. Historical reviews remain immutable; compensation is never returned;
-Drive sharing is not changed. No schema migration unless later performance
-evidence justifies caching a previous-cycle ID on the row.
+Drive sharing is not changed. Historical PDF downloads must pass
+`validateAuthoritativeFinalPdfId_`. Chronology must be proven; unverifiable
+Complete rows are ineligible. Cache keys include
+`PREVIOUS_REVIEW_FALLBACK_ANY_TYPE`. Completing a review invalidates that
+employee's previous-review cache. Employee identity is email-based unless both
+rows carry Employee ID (no migration this release). No schema migration unless
+later performance evidence justifies caching a previous-cycle ID on the row.
 
 Common result shape:
 

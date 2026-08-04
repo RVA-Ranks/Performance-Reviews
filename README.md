@@ -13,8 +13,11 @@ Separate branch `feat/previous-review-context` adds an authorized Previous
 Review panel for managers and HR. Implementation lives in
 `V31_Previous_Review.gs` / `V31_Previous_Review_Tests.gs` and the manager editor
 in `Index.html`. Historical reviews stay immutable; compensation is never
-exposed; Drive sharing is unchanged. Merge only after the Delivery F production
-pilot is stable.
+exposed; Drive sharing is unchanged. Historical PDFs are validated with the
+same authoritative final-PDF checks used elsewhere. Employee matching uses
+Employee ID when present, otherwise email (no migration this release). Merge
+only after Sandbox endpoint authorization and the Delivery F production pilot
+are stable.
 
 ## Delivery F Stage F1 — release candidate freeze
 

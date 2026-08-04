@@ -1171,12 +1171,15 @@
       list-style: none;
       cursor: pointer;
       padding: 14px 16px;
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: flex-start;
+      display: block;
     }
     .previous-review-card summary::-webkit-details-marker { display: none; }
+    .previous-review-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 16px 14px;
+    }
     .previous-review-card .previous-review-title {
       margin: 0;
       font-size: 15px;
@@ -4343,16 +4346,14 @@ function renderPreviousReviewPanel() {
         '</ul></div>'
       : '';
 
-    return '<details class="previous-review-card" id="previousReviewPanel"' + (expanded ? ' open' : '') +
+    return '<div class="previous-review-card" id="previousReviewPanel">' +
+      '<details' + (expanded ? ' open' : '') +
       ' ontoggle="rememberPreviousReviewExpanded(this.open)">' +
       '<summary><div><p class="previous-review-title">' + escapeHtml(heading) + '</p>' +
       '<p class="previous-review-meta">' + escapeHtml(ctx.periodLabel || ctx.reviewType || 'Prior review') +
       ' · ' + escapeHtml(formatPreviousReviewCompleted(ctx.completedAt)) + '</p>' + badge +
       '<p class="previous-review-meta" style="margin-top:8px">Overall Rating: ' + escapeHtml(overall) + '</p>' +
       collapsedGoals +
-      '</div><div class="button-row" style="flex-shrink:0">' +
-      '<button type="button" class="button outline" onclick="event.preventDefault();event.stopPropagation();expandPreviousReviewSummary()">View Summary</button>' +
-      '<button type="button" class="button primary" onclick="event.preventDefault();event.stopPropagation();openFullPreviousReview()">Open Full Previous Review</button>' +
       '</div></summary>' +
       '<div class="previous-review-body">' +
       '<h4>Previous Overall Rating</h4><p>' + escapeHtml(overall) +
@@ -4374,9 +4375,11 @@ function renderPreviousReviewPanel() {
         ? '<ul class="previous-review-goals">' + goals.map(function(goal) { return '<li>' + escapeHtml(goal) + '</li>'; }).join('') + '</ul>'
         : '<p>Not Recorded</p>') +
       (ctx.pdfAccessNote ? '<p class="field-help" style="margin-top:12px">' + escapeHtml(ctx.pdfAccessNote) + '</p>' : '') +
-      '<div class="button-row" style="margin-top:14px">' +
+      '</div></details>' +
+      '<div class="previous-review-actions">' +
+      '<button type="button" class="button outline" onclick="expandPreviousReviewSummary()">View Summary</button>' +
       '<button type="button" class="button primary" onclick="openFullPreviousReview()">Open Full Previous Review</button>' +
-      '</div></div></details>';
+      '</div></div>';
   }
 
   return '<div class="previous-review-loading" id="previousReviewPanel" role="status">Loading previous review context…</div>';
@@ -4384,8 +4387,10 @@ function renderPreviousReviewPanel() {
 
 function expandPreviousReviewSummary() {
   const panel = document.getElementById('previousReviewPanel');
-  if (panel && panel.tagName === 'DETAILS') {
-    panel.open = true;
+  if (!panel) return;
+  const details = panel.tagName === 'DETAILS' ? panel : panel.querySelector('details');
+  if (details) {
+    details.open = true;
     rememberPreviousReviewExpanded(true);
   }
 }

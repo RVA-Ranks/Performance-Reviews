@@ -37,16 +37,38 @@ current cycle, and same-name/different-email rows must not resolve.
 
 ### Privacy
 
-Response must not contain compensation decision/notes, salary, signature file
-IDs, recovery details, audit warnings, or attempt IDs.
+Inject forbidden properties into historical JSON blobs and confirm neither the
+summary nor `buildPreviousReviewCycleDto_` / full historical response contains
+compensation, salary, internal HR notes, recovery details, signature file IDs,
+or attempt IDs.
+
+### PDF security
+
+`getPreviousReviewPdf` must reject unsupported `documentType`, missing IDs,
+wrong MIME, trashed files, files outside `REVIEW_FOLDER_ID`, and
+non-deterministic filenames. Only validated prior-cycle PDFs return bytes.
+
+### Chronology
+
+Complete rows with missing/invalid dates are ineligible
+(`PREVIOUS_REVIEW_DATE_UNVERIFIABLE`). Later period ends never qualify.
+
+### Cache
+
+Cache keys include `fallback-true` / `fallback-false`. Disabling fallback must
+reject a cached different-type hit. Completing a review invalidates that
+employee's previous-review cache entries.
+
+### Identity
+
+Employee ID (when both rows have one) wins over email. Same name / different
+email never matches. Email renames require HR historical correction until a
+future Employee ID migration.
 
 ### UI
 
-- Collapsed by default; expands via View Summary / keyboard
-- Async load; current editor remains usable on failure
-- Empty state: no previous completed review
-- Full previous review is read-only without compensation/recovery controls
-- Missing PDFs show “PDF available through HR” without Drive ACL changes
+Action buttons sit outside the disclosure `<summary>`. Factor lists show only
+historically present factors. Stored PDF availability is not claimed verified.
 
 ## Delivery F Stage F1 — release candidate freeze
 

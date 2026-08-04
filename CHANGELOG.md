@@ -1,5 +1,23 @@
 # V3.1 Changelog
 
+## Previous Review Context — security/privacy correction
+
+- `getPreviousReviewPdf` now validates document type and reuses
+  `validateAuthoritativeFinalPdfId_` before returning bytes (MIME, trash,
+  approved folder, deterministic prior-cycle filename).
+- Chronology fail-closed: Complete rows without provable prior dates are
+  ineligible (`PREVIOUS_REVIEW_DATE_UNVERIFIABLE`).
+- Full historical view uses allow-listed DTOs; raw manager/self/meeting JSON
+  is never returned to the client.
+- Cache keys include fallback setting; cache hits revalidate same-type when
+  fallback is disabled; Complete transitions invalidate employee caches.
+- Summary distinguishes stored PDF IDs from verified downloads; factor lists
+  include only historically present factors.
+- Action buttons moved outside the disclosure `<summary>`.
+- Employee identity remains email-based this release (optional Employee ID
+  when present); no schema migration.
+- No Drive sharing changes. Do not merge until Sandbox endpoint auth passes.
+
 ## Previous Review Context — post-v3.1 enhancement (`feat/previous-review-context`)
 
 - Added authorized previous-review context for the current assigned manager and
