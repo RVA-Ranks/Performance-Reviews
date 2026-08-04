@@ -1160,6 +1160,82 @@
       line-height: 1.45;
       white-space: pre-wrap;
     }
+    .previous-review-card {
+      margin: 0 0 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, #fbfaf8 0%, #fff 100%);
+      overflow: hidden;
+    }
+    .previous-review-card summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .previous-review-card summary::-webkit-details-marker { display: none; }
+    .previous-review-card .previous-review-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+    .previous-review-card .previous-review-meta {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .previous-review-badge {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--warning-soft);
+      color: var(--warning);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .previous-review-body {
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--line);
+    }
+    .previous-review-body h4 {
+      margin: 14px 0 6px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+    .previous-review-goals {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .previous-review-loading,
+    .previous-review-empty,
+    .previous-review-error {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px dashed var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .previous-review-error {
+      color: var(--danger);
+      border-color: var(--danger-soft);
+      background: var(--danger-soft);
+    }
+    .historical-banner {
+      margin: 0 0 14px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      background: var(--brand-faint);
+      color: var(--brand-dark);
+      font-weight: 700;
+    }
     @media (max-width: 1100px) {
       .health-hero,
       .health-cards,
@@ -1382,6 +1458,9 @@ let meetingDirty = false;
 let meetingAutosaveTimer = null;
 let autosaveDelayMs = 5000;
 let deepLinkConsumed = false;
+let previousReviewContext = null;
+let previousReviewContextCycleId = '';
+let previousReviewContextLoading = false;
 
 const editorState = {
   manager: createEditorState(),
@@ -2682,15 +2761,20 @@ async function loadCycle(cycleId, action) {
 
 function openCycle(cycle, action) {
   currentCycle = cycle;
+  if (!cycle.historicalPreviousReview) {
+    previousReviewContext = null;
+    previousReviewContextCycleId = '';
+    previousReviewContextLoading = false;
+  }
   initializeDrafts(cycle);
   initializeMeetingDraft(cycle);
-  preferredCycleAction = action || cycle.primaryAction.key || 'overview';
+  preferredCycleAction = action || (cycle.primaryAction && cycle.primaryAction.key) || 'overview';
   currentCycleTab = actionToTab(preferredCycleAction, cycle);
   renderCycleWorkspace();
   navigate('cycle');
   setTopbar(cycle.employeeName + ' — ' + cycle.reviewType, humanStatus(cycle.status));
 
-  if (preferredCycleAction === 'compensation') {
+  if (preferredCycleAction === 'compensation' && !cycle.historicalPreviousReview) {
     setTimeout(function() {
       openCompensationWorkflow(cycle.cycleId);
     }, 350);
@@ -2706,17 +2790,46 @@ function renderCycleWorkspace() {
   if (!currentCycle) return;
   const cycle = currentCycle;
   const tabs = buildCycleTabs(cycle);
+  const historicalBanner = cycle.historicalPreviousReview
+    ? '<div class="historical-banner" role="status">Completed previous review · Read-only' +
+      (cycle.periodLabel ? ' · ' + escapeHtml(cycle.periodLabel) : '') +
+      (cycle.sameReviewType === false ? ' · Different review type' : '') +
+      '</div>'
+    : '';
+  const backLabel = cycle.historicalPreviousReview
+    ? '‹ Back to current review'
+    : '‹ Back to reviews';
+  const backAction = cycle.historicalPreviousReview
+    ? 'returnToCurrentReviewFromPrevious()'
+    : 'navigate(\'reviews\')';
   document.getElementById('cycleView').innerHTML =
-    '<div class="cycle-hero"><div class="cycle-hero-top"><div><button class="breadcrumb-button" onclick="navigate(\'reviews\')">‹ Back to reviews</button><h1>' + escapeHtml(cycle.employeeName) + ' — ' + escapeHtml(cycle.reviewType) + '</h1><p>' + escapeHtml(cycle.employeeJobTitle) + ' · ' + escapeHtml(cycle.departmentProject) + ' · Meeting ' + escapeHtml(cycle.reviewMeetingDate) + '</p></div>' +
-    '<div class="cycle-hero-actions button-row">' + statusPill(cycle.status) + renderCycleHeaderActions(cycle) + '</div></div>' + renderTimeline(cycle.lifecycle) + '</div>' +
-    renderSignatureRecoveryWarning(cycle) +
+    '<div class="cycle-hero"><div class="cycle-hero-top"><div><button class="breadcrumb-button" onclick="' + backAction + '">' + backLabel + '</button><h1>' + escapeHtml(cycle.employeeName) + ' — ' + escapeHtml(cycle.reviewType) + '</h1><p>' + escapeHtml(cycle.employeeJobTitle || '') + ' · ' + escapeHtml(cycle.departmentProject || '') + ' · Meeting ' + escapeHtml(cycle.reviewMeetingDate || '') + '</p></div>' +
+    '<div class="cycle-hero-actions button-row">' + statusPill(cycle.status) + renderCycleHeaderActions(cycle) + '</div></div>' + historicalBanner + (cycle.lifecycle ? renderTimeline(cycle.lifecycle) : '') + '</div>' +
+    (cycle.historicalPreviousReview ? '' : renderSignatureRecoveryWarning(cycle)) +
     '<div class="cycle-tabs">' + tabs.map(function(tab) { return '<button class="cycle-tab ' + (tab.key === currentCycleTab ? 'active' : '') + '" onclick="activateCycleTab(\'' + tab.key + '\')">' + escapeHtml(tab.label) + (tab.attention ? '<span class="tab-dot"></span>' : '') + '</button>'; }).join('') + '</div>' +
     '<div id="cycleTabContent"></div>';
   renderActiveCycleTab();
 }
 
+function returnToCurrentReviewFromPrevious() {
+  const linkedId = currentCycle && currentCycle.linkedFromCycleId;
+  if (!linkedId) {
+    navigate('reviews');
+    return;
+  }
+  loadCycle(linkedId, 'manager');
+}
+
 function renderCycleHeaderActions(cycle) {
   let html = '';
+  if (cycle.historicalPreviousReview) {
+    if (cycle.canDownloadManager) html += '<button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button>';
+    if (cycle.canDownloadSelf) html += '<button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button>';
+    if (!cycle.canDownloadManager && !cycle.canDownloadSelf) {
+      html += '<span class="field-help">PDF available through HR</span>';
+    }
+    return html;
+  }
   if (cycle.canStartMeeting) html += '<button class="button success" onclick="confirmStartMeeting()">Start Review Meeting</button>';
   if (cycle.canReleaseSignatures) html += '<button class="button warning" onclick="openReleaseModal()">Finalize & Release</button>';
   if (cycle.isHr && cycle.v31 && cycle.status !== 'Complete') {
@@ -3337,12 +3450,21 @@ function renderTimeline(stages) {
 }
 
 function buildCycleTabs(cycle) {
+  if (cycle.historicalPreviousReview) {
+    return [
+      { key: 'overview', label: 'Overview' },
+      { key: 'manager', label: 'Manager Review' },
+      { key: 'self', label: 'Self-Evaluation' },
+      { key: 'meeting', label: 'Review Meeting' },
+      { key: 'signatures', label: 'Signatures' }
+    ];
+  }
   return [
     { key: 'overview', label: 'Overview' },
     { key: 'manager', label: 'Manager Review', attention: cycle.canEditManagerReview },
     { key: 'self', label: 'Self-Evaluation', attention: cycle.canEditSelfEvaluation },
     { key: 'meeting', label: 'Review Meeting', attention: cycle.canStartMeeting || cycle.status === 'Review Meeting Open' },
-    { key: 'signatures', label: 'Signatures', attention: cycle.signatureTasks.length > 0 }
+    { key: 'signatures', label: 'Signatures', attention: cycle.signatureTasks && cycle.signatureTasks.length > 0 }
   ];
 }
 
@@ -3457,6 +3579,7 @@ function renderCycleGuidance(cycle) {
 
 function renderCompensationCard(cycle) {
   if (
+    cycle.historicalPreviousReview ||
     !cycle.v31 ||
     !cycle.v31.compensationRequired ||
     (!cycle.isManager && !cycle.isHr)
@@ -3517,15 +3640,20 @@ function renderReviewTab(type, target) {
   const visible = isManager ? currentCycle.managerReviewVisible : currentCycle.selfEvaluationVisible;
   const editable = isManager ? currentCycle.canEditManagerReview : currentCycle.canEditSelfEvaluation;
   const title = isManager ? 'Manager Performance Review' : 'Employee Self-Evaluation';
+  const previousPanel = isManager && !currentCycle.historicalPreviousReview
+    ? renderPreviousReviewPanel()
+    : '';
 
   if (!visible) {
-    target.innerHTML = '<div class="card"><div class="empty-state"><div class="empty-state-icon">◉</div><strong>' + title + ' is private</strong>This evaluation remains hidden until both participants submit and the review meeting is opened.</div></div>';
+    target.innerHTML = previousPanel + '<div class="card"><div class="empty-state"><div class="empty-state-icon">◉</div><strong>' + title + ' is private</strong>This evaluation remains hidden until both participants submit and the review meeting is opened.</div></div>';
+    maybeLoadPreviousReviewContext();
     return;
   }
 
   if (!editable) {
     const review = isManager ? currentCycle.managerReview : currentCycle.selfEvaluation;
-    target.innerHTML = '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>' + escapeHtml(humanDocumentStatus(isManager ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus)) + '</p></div></div>' + renderReadOnlyReview(review, type) + '</div>';
+    target.innerHTML = previousPanel + '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>' + escapeHtml(humanDocumentStatus(isManager ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus)) + '</p></div></div>' + renderReadOnlyReview(review, type) + '</div>';
+    maybeLoadPreviousReviewContext();
     return;
   }
 
@@ -3577,14 +3705,18 @@ function renderReviewEditor(type, target) {
   const progress = calculateClientProgress(model.draft, type);
   const steps = EDITOR_STEPS[type];
   const title = type === 'manager' ? 'Manager Performance Review' : 'Employee Self-Evaluation';
+  const previousPanel = type === 'manager' && !currentCycle.historicalPreviousReview
+    ? renderPreviousReviewPanel()
+    : '';
 
-  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>Drafts save automatically while you work. Submission permanently seals your independent evaluation.</p></div>' + statusPillForDocument(type === 'manager' ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus) + '</div>' +
+  target.innerHTML = previousPanel + '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>Drafts save automatically while you work. Submission permanently seals your independent evaluation.</p></div>' + statusPillForDocument(type === 'manager' ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus) + '</div>' +
     '<div class="editor-shell"><aside class="editor-sidebar"><div class="progress-block"><div id="editorProgressNumber" class="editor-progress-number">' + progress.percent + '%</div><div class="progress-track"><div id="editorProgressFill" class="progress-fill" style="width:' + progress.percent + '%"></div></div><div id="editorProgressMeta" class="editor-progress-meta">' + progress.ratingsCompleted + ' of ' + progress.ratingsTotal + ' ratings · ' + progress.errors.length + ' required item(s) missing</div></div>' +
     steps.map(function(step, index) { return '<button class="editor-step-button ' + (index === model.step ? 'active ' : '') + (isStepComplete(model.draft, type, index) ? 'complete' : '') + '" onclick="setEditorStep(\'' + type + '\',' + index + ')"><span class="step-number">' + (index + 1) + '</span><span>' + escapeHtml(step.label) + '</span></button>'; }).join('') + '</aside>' +
     '<div class="editor-main"><div id="editorStepContent"></div><div class="editor-footer"><button class="button outline" onclick="moveEditorStep(\'' + type + '\',-1)" ' + (model.step === 0 ? 'disabled' : '') + '>Previous</button><button class="button secondary" onclick="manualSaveReview(\'' + type + '\')">Save draft</button><div class="editor-footer-spacer"></div><span id="editorFooterStatus" class="editor-footer-status">' + editorSaveStatusText(type) + '</span>' + (model.step < steps.length - 1 ? '<button class="button primary" onclick="moveEditorStep(\'' + type + '\',1)">Next</button>' : '<button class="button primary" onclick="requestSubmitReview(\'' + type + '\')">Submit and Seal</button>') + '</div></div></div></div>';
 
   renderEditorStep(type);
   updateGlobalSaveIndicator();
+  maybeLoadPreviousReviewContext();
 }
 
 function renderEditorStep(type) {
@@ -3930,8 +4062,28 @@ function ratingsById(ratings) {
 
 function renderReadOnlyReview(review, type) {
   const byId = ratingsById(review.ratings);
+  const factorRows = [];
+  const seen = {};
+  (state.factors || []).forEach(function(factor) {
+    seen[factor.id] = true;
+    const item = byId[factor.id] || {};
+    factorRows.push({ label: factor.label, rating: item.rating, comments: item.comments });
+  });
+  if (currentCycle && currentCycle.historicalPreviousReview) {
+    Object.keys(byId).forEach(function(factorId) {
+      if (seen[factorId]) return;
+      const item = byId[factorId] || {};
+      factorRows.push({
+        label: item.factorLabel || 'Historical factor',
+        rating: item.rating,
+        comments: item.comments
+      });
+    });
+  }
   let html = '<div class="table-wrap"><table><thead><tr><th>Factor</th><th>Rating</th><th>Comments</th></tr></thead><tbody>';
-  state.factors.forEach(function(factor) { const item = byId[factor.id] || {}; html += '<tr><td><strong>' + escapeHtml(factor.label) + '</strong></td><td>' + escapeHtml(ratingLabel(item.rating)) + '</td><td>' + escapeHtml(item.comments || '') + '</td></tr>'; });
+  factorRows.forEach(function(row) {
+    html += '<tr><td><strong>' + escapeHtml(row.label) + '</strong></td><td>' + escapeHtml(ratingLabel(row.rating)) + '</td><td>' + escapeHtml(row.comments || '') + '</td></tr>';
+  });
   html += '</tbody></table></div>';
   const fields = type === 'manager' ? [
     ['Overall Rating', ratingLabel(review.overallRating)], ['Overall Comments', review.overallComments], ['Areas for Improvement', review.areasForImprovement], ['Action Steps', review.actionSteps], ['Supervisor Comments', review.supervisorComments], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Manager Signed', review.managerSignedAt || 'Pending'], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
@@ -4075,17 +4227,18 @@ async function releaseSignatures() {
 function renderSignaturesTab(target) {
   const cycle = currentCycle;
   const stateSig = cycle.signatureState || {};
+  const tasks = cycle.signatureTasks || [];
   const statusRows = [
     ['Manager', stateSig.managerSigned ? 'Signed' : 'Pending'], ['Employee', stateSig.employeeSigned ? 'Signed' : 'Pending'], ['HR', stateSig.hrSigned ? 'Signed' : (stateSig.managerSigned && stateSig.employeeSigned ? 'Ready to sign' : 'Waiting for participants')]
   ];
   let taskHtml = '';
-  if (cycle.signatureTasks.length) {
-    const task = cycle.signatureTasks[0];
+  if (tasks.length && !cycle.historicalPreviousReview) {
+    const task = tasks[0];
     taskHtml = '<div class="card"><div class="card-header"><div><h2>Sign Performance Review Packet</h2><p>Your single signature will be applied to both final review documents.</p></div>' + statusPill('Action required','amber') + '</div><div class="warning-banner">You are signing as <strong>' + escapeHtml(task.role) + '</strong>. Your signature acknowledges that both documents were reviewed and discussed; it does not necessarily indicate agreement with every rating.</div><div class="signature-wrap"><canvas id="packetSignature"></canvas><div class="signature-actions"><button class="button text" onclick="clearSignature(\'packetSignature\')">Clear signature</button></div></div><div class="button-row" style="margin-top:14px"><button id="signPacketButton" class="button primary" onclick="submitSignature()">Sign Both Review Documents</button></div></div>';
   }
-  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Signature Status</h2><p>The manager and employee may sign in either order. HR signs last.</p></div></div><div class="summary-grid">' + statusRows.map(function(row) { return '<div class="summary-label">' + row[0] + '</div><div>' + statusPill(row[1], row[1] === 'Signed' ? 'green' : row[1] === 'Ready to sign' ? 'amber' : '') + '</div>'; }).join('') + '</div></div>' + taskHtml +
+  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Signature Status</h2><p>' + (cycle.historicalPreviousReview ? 'Historical signature status for the completed previous review.' : 'The manager and employee may sign in either order. HR signs last.') + '</p></div></div><div class="summary-grid">' + statusRows.map(function(row) { return '<div class="summary-label">' + row[0] + '</div><div>' + statusPill(row[1], row[1] === 'Signed' ? 'green' : row[1] === 'Ready to sign' ? 'amber' : '') + '</div>'; }).join('') + '</div></div>' + taskHtml +
     (cycle.status === 'Complete' ? '<div class="card"><div class="success-banner"><strong>Review complete.</strong> The final signed documents are ready.</div><div class="button-row"><button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button><button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button></div></div>' : '');
-  if (cycle.signatureTasks.length) requestAnimationFrame(function() { initializeSignaturePad('packetSignature'); });
+  if (tasks.length && !cycle.historicalPreviousReview) requestAnimationFrame(function() { initializeSignaturePad('packetSignature'); });
 }
 
 async function submitSignature() {
@@ -4124,10 +4277,177 @@ function croppedSignature(canvasId){
 async function downloadPdf(type) {
   try {
     showToast('info','Preparing document','Your signed PDF is being prepared.');
-    const file = await server('getReviewPdf', currentCycle.cycleId, type);
+    const file = currentCycle.historicalPreviousReview
+      ? await server('getPreviousReviewPdf', currentCycle.linkedFromCycleId, type)
+      : await server('getReviewPdf', currentCycle.cycleId, type);
     const bytes = Uint8Array.from(atob(file.base64),function(c){return c.charCodeAt(0);});
     const blob = new Blob([bytes],{type:file.mimeType}); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url;link.download=file.fileName;document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);
   } catch(error) { showToast('error','Could not download document',errorMessage(error)); }
+}
+
+function previousReviewExpandedKey() {
+  return currentCycle ? 'aitheras-prev-review-open:' + currentCycle.cycleId : '';
+}
+
+function isPreviousReviewExpanded() {
+  try {
+    return sessionStorage.getItem(previousReviewExpandedKey()) === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
+function rememberPreviousReviewExpanded(open) {
+  try {
+    sessionStorage.setItem(previousReviewExpandedKey(), open ? '1' : '0');
+  } catch (error) {}
+}
+
+function formatPreviousReviewCompleted(value) {
+  if (!value) return 'Completed date not recorded';
+  return 'Completed ' + String(value);
+}
+
+function renderPreviousReviewPanel() {
+  if (!currentCycle || currentCycle.historicalPreviousReview) return '';
+  if (!(currentCycle.isManager || currentCycle.isHr)) return '';
+
+  if (previousReviewContextLoading && previousReviewContextCycleId === currentCycle.cycleId && !previousReviewContext) {
+    return '<div class="previous-review-loading" id="previousReviewPanel" role="status">Loading previous review context…</div>';
+  }
+
+  if (previousReviewContextCycleId === currentCycle.cycleId && previousReviewContext) {
+    if (!previousReviewContext.found) {
+      if (previousReviewContext.reason === 'LOOKUP_FAILED') {
+        return '<div class="previous-review-error" id="previousReviewPanel" role="status">' +
+          escapeHtml(previousReviewContext.message || 'Previous review context could not be loaded. The current review is still available.') +
+          '</div>';
+      }
+      return '<div class="previous-review-empty" id="previousReviewPanel" role="status">' +
+        escapeHtml(previousReviewContext.message || 'No previous completed review was found for this employee.') +
+        '</div>';
+    }
+
+    const ctx = previousReviewContext;
+    const expanded = isPreviousReviewExpanded();
+    const heading = ctx.sameReviewType === false ? 'Most recent completed review' : 'Previous Review';
+    const overall = (ctx.overallRating && ctx.overallRating.label) || 'Not Recorded';
+    const goals = (ctx.goals || []).slice(0, 5);
+    const factors = ctx.factorRatings || [];
+    const badge = ctx.sameReviewType === false
+      ? '<span class="previous-review-badge">Different review type</span>'
+      : '';
+    const collapsedGoals = goals.length
+      ? '<div style="margin-top:8px"><strong>Key Goals</strong><ul class="previous-review-goals">' +
+        goals.map(function(goal) { return '<li>' + escapeHtml(goal) + '</li>'; }).join('') +
+        '</ul></div>'
+      : '';
+
+    return '<details class="previous-review-card" id="previousReviewPanel"' + (expanded ? ' open' : '') +
+      ' ontoggle="rememberPreviousReviewExpanded(this.open)">' +
+      '<summary><div><p class="previous-review-title">' + escapeHtml(heading) + '</p>' +
+      '<p class="previous-review-meta">' + escapeHtml(ctx.periodLabel || ctx.reviewType || 'Prior review') +
+      ' · ' + escapeHtml(formatPreviousReviewCompleted(ctx.completedAt)) + '</p>' + badge +
+      '<p class="previous-review-meta" style="margin-top:8px">Overall Rating: ' + escapeHtml(overall) + '</p>' +
+      collapsedGoals +
+      '</div><div class="button-row" style="flex-shrink:0">' +
+      '<button type="button" class="button outline" onclick="event.preventDefault();event.stopPropagation();expandPreviousReviewSummary()">View Summary</button>' +
+      '<button type="button" class="button primary" onclick="event.preventDefault();event.stopPropagation();openFullPreviousReview()">Open Full Previous Review</button>' +
+      '</div></summary>' +
+      '<div class="previous-review-body">' +
+      '<h4>Previous Overall Rating</h4><p>' + escapeHtml(overall) +
+      (ctx.previousManagerName ? ' · Manager: ' + escapeHtml(ctx.previousManagerName) : '') + '</p>' +
+      '<h4>Previous Factor Ratings</h4>' +
+      (factors.length
+        ? '<div class="table-wrap"><table><thead><tr><th>Factor</th><th>Manager</th><th>Employee</th></tr></thead><tbody>' +
+          factors.map(function(factor) {
+            return '<tr><td>' + escapeHtml(factor.factorLabel || 'Historical factor') +
+              (factor.historicalOnly ? ' <span class="previous-review-badge">Historical</span>' : '') +
+              '</td><td>' + escapeHtml(String(factor.managerRating)) +
+              '</td><td>' + escapeHtml(String(factor.employeeRating)) + '</td></tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<p>Not Recorded</p>') +
+      '<h4>Previous Manager Summary</h4><p>' + escapeHtml(ctx.managerSummary || 'Not Recorded') + '</p>' +
+      '<h4>Previous Employee Summary</h4><p>' + escapeHtml(ctx.employeeSummary || 'Not Recorded') + '</p>' +
+      '<h4>Previous Goals</h4>' +
+      (goals.length
+        ? '<ul class="previous-review-goals">' + goals.map(function(goal) { return '<li>' + escapeHtml(goal) + '</li>'; }).join('') + '</ul>'
+        : '<p>Not Recorded</p>') +
+      (ctx.pdfAccessNote ? '<p class="field-help" style="margin-top:12px">' + escapeHtml(ctx.pdfAccessNote) + '</p>' : '') +
+      '<div class="button-row" style="margin-top:14px">' +
+      '<button type="button" class="button primary" onclick="openFullPreviousReview()">Open Full Previous Review</button>' +
+      '</div></div></details>';
+  }
+
+  return '<div class="previous-review-loading" id="previousReviewPanel" role="status">Loading previous review context…</div>';
+}
+
+function expandPreviousReviewSummary() {
+  const panel = document.getElementById('previousReviewPanel');
+  if (panel && panel.tagName === 'DETAILS') {
+    panel.open = true;
+    rememberPreviousReviewExpanded(true);
+  }
+}
+
+function maybeLoadPreviousReviewContext() {
+  if (!currentCycle || currentCycle.historicalPreviousReview) return;
+  if (!(currentCycle.isManager || currentCycle.isHr)) return;
+  if (previousReviewContextLoading && previousReviewContextCycleId === currentCycle.cycleId) return;
+  if (previousReviewContextCycleId === currentCycle.cycleId && previousReviewContext) return;
+  loadPreviousReviewContext(currentCycle.cycleId);
+}
+
+async function loadPreviousReviewContext(cycleId) {
+  previousReviewContextLoading = true;
+  previousReviewContextCycleId = cycleId;
+  previousReviewContext = null;
+  refreshPreviousReviewPanelIfVisible();
+  try {
+    const result = await server('getPreviousReviewContext', cycleId);
+    if (currentCycle && currentCycle.cycleId === cycleId && !currentCycle.historicalPreviousReview) {
+      previousReviewContext = result || {
+        found: false,
+        reason: 'NO_PREVIOUS_COMPLETED_REVIEW',
+        message: 'No previous completed review was found for this employee.'
+      };
+      previousReviewContextLoading = false;
+      refreshPreviousReviewPanelIfVisible();
+    }
+  } catch (error) {
+    if (currentCycle && currentCycle.cycleId === cycleId && !currentCycle.historicalPreviousReview) {
+      previousReviewContext = {
+        found: false,
+        reason: 'LOOKUP_FAILED',
+        message: 'Previous review context could not be loaded. The current review is still available.'
+      };
+      previousReviewContextLoading = false;
+      refreshPreviousReviewPanelIfVisible();
+    }
+  }
+}
+
+function refreshPreviousReviewPanelIfVisible() {
+  if (!currentCycle || currentCycleTab !== 'manager' || currentCycle.historicalPreviousReview) return;
+  if (!(currentCycle.isManager || currentCycle.isHr)) return;
+  const panel = document.getElementById('previousReviewPanel');
+  if (!panel || !panel.parentNode) return;
+  const html = renderPreviousReviewPanel();
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  const next = wrap.firstChild;
+  if (next) panel.parentNode.replaceChild(next, panel);
+}
+
+async function openFullPreviousReview() {
+  if (!currentCycle || currentCycle.historicalPreviousReview) return;
+  try {
+    showToast('info', 'Opening previous review', 'Loading the completed historical review…');
+    const cycle = await server('getPreviousReviewCycle', currentCycle.cycleId);
+    openCycle(cycle, 'overview');
+  } catch (error) {
+    showToast('error', 'Could not open previous review', errorMessage(error));
+  }
 }
 
 
