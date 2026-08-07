@@ -732,6 +732,22 @@ function saveIndependentReview_(
     savedAt: saved.savedAt,
     savedAtIso: saved.savedAtIso,
     message: saved.message,
+    compensationDecisionRequired:
+      type === PR.TYPE.MANAGER &&
+      !!submit &&
+      v31Boolean_(
+        getSettings_().COMPENSATION_DECISION_REQUIRED,
+        true
+      ) &&
+      !isV31CompensationComplete_(
+        findCycle_(cycleId).object
+      ),
+    compensationDecision:
+      type === PR.TYPE.MANAGER && submit
+        ? normalizeCompensationDecision_(
+            findCycle_(cycleId).object['Compensation Decision']
+          )
+        : '',
   };
 }
 
@@ -754,6 +770,12 @@ function startReviewMeeting(cycleId) {
     if (String(stored['Status']) !== PR.CYCLE.READY) {
       throw new Error(
         'Both reviews must be submitted before the meeting can be opened.'
+      );
+    }
+
+    if (!isV31CompensationComplete_(stored)) {
+      throw new Error(
+        'The compensation decision must be resolved before the review meeting can be opened.'
       );
     }
 
@@ -890,7 +912,7 @@ function releaseReviewSignatures(cycleId) {
 
     if (!isV31CompensationComplete_(stored)) {
       throw new Error(
-        'Record the compensation decision before releasing the review packet for signature.'
+        'Resolve the compensation decision before releasing the review packet for signature.'
       );
     }
 
@@ -1293,6 +1315,19 @@ function signReviewCycle(cycleId, signatureDataUrl) {
   }
 
   if (commitResult.role === PR.ROLE.HR) {
+    let compensationPdfResult = null;
+    try {
+      compensationPdfResult =
+        maybeGenerateCompensationPdfAfterSignatures_(cycleId);
+    } catch (compensationPdfError) {
+      compensationPdfResult = {
+        ok: false,
+        error: String(
+          compensationPdfError.message || compensationPdfError
+        ),
+      };
+    }
+
     const finalizeResult =
       attemptFinalizationAfterSignature_(cycleId);
 
@@ -1301,13 +1336,18 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       partial:
         !!auditWarning ||
         !!canonicalWarning ||
-        !!notificationWarning,
+        !!notificationWarning ||
+        !!(compensationPdfResult && compensationPdfResult.error),
       signatureRecorded: true,
       outcome: commitResult.outcome,
       warning: [
         auditWarning,
         canonicalWarning,
         notificationWarning,
+        compensationPdfResult && compensationPdfResult.error
+          ? 'HR signature recorded, but compensation CAF PDF needs recovery: ' +
+            compensationPdfResult.error
+          : '',
       ]
         .filter(Boolean)
         .join(' '),
@@ -1317,17 +1357,24 @@ function signReviewCycle(cycleId, signatureDataUrl) {
           auditWarning,
           canonicalWarning,
           notificationWarning,
+          compensationPdfResult && compensationPdfResult.error
+            ? 'Compensation CAF PDF needs recovery.'
+            : '',
         ].filter(Boolean).length
           ? ' ' +
             [
               auditWarning,
               canonicalWarning,
               notificationWarning,
+              compensationPdfResult && compensationPdfResult.error
+                ? 'Compensation CAF PDF needs recovery.'
+                : '',
             ]
               .filter(Boolean)
               .join(' ')
           : ''),
       finalization: finalizeResult,
+      compensationPdf: compensationPdfResult,
     };
   }
 
@@ -2340,6 +2387,9 @@ function determinePrimaryAction_(cycle, email, isHr) {
   if (
     isManager &&
     !isV31CompensationComplete_(cycle) &&
+    normalizeCompensationDecision_(
+      cycle['Compensation Decision']
+    ) === V31.COMPENSATION.PENDING &&
     ![PR.DOC.NOT_STARTED, PR.DOC.DRAFT].includes(
       String(cycle['Manager Review Status'])
     ) &&
@@ -2753,7 +2803,8 @@ function updateCycleReadiness_(cycle) {
   if (
     String(cycle['Manager Review Status']) === PR.DOC.SUBMITTED &&
     String(cycle['Self Evaluation Status']) === PR.DOC.SUBMITTED &&
-    String(cycle['Status']) === PR.CYCLE.OPEN
+    String(cycle['Status']) === PR.CYCLE.OPEN &&
+    isV31CompensationComplete_(cycle)
   ) {
     cycle['Status'] = PR.CYCLE.READY;
   }
@@ -5594,6 +5645,12 @@ function getActiveAssignments_() {
           row['Department / Project'] || ''
         ),
         hireDate: formatDate_(row['Hire Date']),
+        currentPayRate: (function () {
+          const rate = Number(row['Current Pay Rate']);
+          return Number.isFinite(rate) && rate > 0
+            ? Math.round(rate * 100) / 100
+            : null;
+        })(),
       };
     });
 }

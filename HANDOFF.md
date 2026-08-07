@@ -894,6 +894,7 @@ Columns:
 - Job Title
 - Department / Project
 - Hire Date
+- Current Pay Rate
 - Active
 - Review Automation
 
@@ -1464,53 +1465,51 @@ The server must still authorize the record after a deep link is opened.
 
 # 19. Compensation Adjustment Integration
 
-The Compensation Adjustment workflow is a separate existing Apps Script application.
+Integrated review-linked compensation lives in Performance Reviews.
 
-Known existing production URL from the prior build:
+## Authoritative model
 
-`https://script.google.com/macros/s/AKfycbxAPXkbQ2Qyigdlh54IW5PKhkEnOeEEsOQCzbgNQZBG5utKIo1i2_BC3xM6hugYbF46/exec`
+- Rate source: `EmployeeAssignments.Current Pay Rate` (header lookup)
+- Annual salary: always `rate × 2080` (`STANDARD_ANNUAL_HOURS`)
+- Live workflow: `CompensationRecords` (one row per adjustment-bearing cycle)
+- History: `CompensationHistory` (append-only on CAF seal)
+- Cycle mirrors: Decision, Status, Record ID, CAF Final PDF ID
 
-Verify this URL before production use rather than relying on this document.
+## Decision vocabulary
 
-The review portal stores the URL in:
+- `Pending`
+- `No Adjustment Recommended`
+- `Adjustment Recommended` (legacy `Adjustment Submitted` migrates here)
 
-`COMPENSATION_ADJUSTMENT_URL`
+## Status vocabulary
 
-Do not hardcode it into the client.
+- `Awaiting Owner Decision`
+- `Awaiting Signatures`
+- `Complete`
+- plus PDF / rate-update durability states
 
-## Current integration model
+## Gate
 
-The review portal:
+No Adjustment (after double confirm) resolves compensation.
 
-- Opens the compensation app in a new tab.
-- Does not pass or verify a compensation record ID.
-- Does not receive a callback from the compensation app.
-- Relies on the manager or HR to record:
-  - Adjustment Submitted
-  - No Adjustment Recommended
+Adjustment Recommended requires HR-recorded owner final decision before the
+meeting/signature eligibility gate is satisfied. Open Meeting and Release
+Signatures remain explicit user actions.
 
-## Recommended future integration
+## CAF PDF
 
-Add a structured link between the systems:
+Generated once after Manager + Employee + HR PR signatures exist.
+Filename: `AITHERAS_<cycleId>_Compensation_Adjustment_FINAL.pdf`
+Folder setting: `COMPENSATION_FOLDER_ID`
 
-- Review Cycle ID
-- Employee email
-- Employee name
-- Review type
-- Manager email
-- Compensation request ID
-- Compensation workflow status
-- Submitted timestamp
+Standalone legacy CAF remains available for unrelated adjustments and must not
+be migrated mid-flight.
 
-Best long-term behavior:
+## Modules
 
-1. Manager clicks Compensation Adjustment from the review cycle.
-2. The compensation app opens with employee and cycle context prefilled.
-3. Submission writes the compensation request ID back to the review cycle.
-4. Review portal automatically recognizes completion.
-5. Employee still sees no compensation details.
-
-Any cross-app handoff must use signed or server-validated identifiers, not trust arbitrary URL values.
+- `V31_Compensation.gs`
+- `V31_Compensation_Pdf.gs`
+- `V31_Compensation_Tests.gs`
 
 ---
 

@@ -1,5 +1,26 @@
 # V3.1 Changelog
 
+## Compensation integration — recommendation / owner decision / CAF (`feat/compensation-integration`)
+
+- Manager recommendation is in-app (not standalone CAF dashboard): recommend
+  adjustment or confirm no adjustment with second confirmation.
+- `EmployeeAssignments.Current Pay Rate` (header-based) is the sole rate source;
+  annual salary is always derived as rate × 2080.
+- Added `CompensationRecords` and append-only `CompensationHistory`.
+- HR Compensation Queue records owner approve/override; manager recommendation
+  remains immutable. HR may edit owner decision only before any PR signature.
+- Meeting/signature eligibility requires owner decision when an adjustment was
+  recommended; controls still require Open Meeting / Release Signatures.
+- Employee sees a read-only acknowledgement panel before signing when approved
+  compensation exists; manager recommendation and owner notes stay hidden.
+- Final CAF PDF generates once after all three PR signatures, stored under
+  `COMPENSATION_FOLDER_ID` as `AITHERAS_<cycleId>_Compensation_Adjustment_FINAL.pdf`.
+- Effective-date automation updates `Current Pay Rate` exactly once; history
+  appends on CAF seal, not on roster update.
+- Legacy `Adjustment Submitted` migrates to `Adjustment Recommended`.
+- New modules: `V31_Compensation.gs`, `V31_Compensation_Pdf.gs`,
+  `V31_Compensation_Tests.gs`. Standalone CAF remains for unrelated adjustments.
+
 ## Previous Review Context — security/privacy correction
 
 - `getPreviousReviewPdf` now validates document type and reuses

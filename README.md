@@ -151,23 +151,26 @@ Google Calendar also sends its normal invitation notification because the users 
 
 All of these settings can be changed from the HR Administration page.
 
-### Compensation task
+### Compensation workflow
 
-Managers now see the Compensation Adjustment workflow:
+After the manager submits their review, they either:
 
-- In the Action Center
-- In the review Overview tab
-- In the launch email
-- In the How-To Guide
+- Recommend a compensation adjustment (read-only current pay rate from
+  `EmployeeAssignments.Current Pay Rate`, recommended rate or %, effective date,
+  business justification), or
+- Confirm **No Adjustment Recommended** (second confirmation required)
 
-The manager records one of two outcomes:
+HR records the owner decision in the Compensation Queue (approve recommendation
+or approve a different amount). Owner Name is required; override notes are
+required. The meeting/signature path stays blocked until that owner decision is
+recorded when an adjustment was recommended.
 
-- `Adjustment Submitted`
-- `No Adjustment Recommended`
+After Manager, Employee, and HR each sign once through PR, the system generates
+a standalone CAF PDF into `COMPENSATION_FOLDER_ID`. Employees see final approved
+rates only on the signature acknowledgement panel and in that CAF PDF.
 
-By default, the review packet cannot be released for signature until the compensation decision is recorded.
-
-Employees do not receive the Compensation Adjustment URL or compensation-decision details.
+On the effective date, automation updates `Current Pay Rate` automatically and
+preserves an append-only `CompensationHistory` row (written when the CAF seals).
 
 ### Guided help
 

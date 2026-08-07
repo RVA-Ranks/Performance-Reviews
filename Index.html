@@ -1651,10 +1651,10 @@ function renderActionList(actions) {
     const tone = cycle.actionTone === 'warning' ? 'warning' : cycle.actionTone === 'success' ? 'success' : '';
     const icon = cycle.actionKey === 'signature' ? '✎' : cycle.actionKey === 'meeting' ? '◉' : cycle.actionKey === 'compensation' ? '$' : '▤';
     const progress = cycle.actionKey === 'manager-review' ? cycle.managerProgress : cycle.actionKey === 'self-evaluation' ? cycle.selfProgress : null;
-    const compensation = cycle.v31 && cycle.v31.compensationActionRequired
-      ? '<div class="task-subactions"><button class="button outline" onclick="openCompensationWorkflow(\'' +
+      const compensation = cycle.v31 && cycle.v31.compensationActionRequired
+      ? '<div class="task-subactions"><button class="button outline" onclick="openCompensationDecisionModal(\'' +
         escapeAttr(cycle.cycleId) +
-        '\')">Open Compensation Adjustment</button><span class="task-subaction-note">Then record the compensation decision in this portal.</span></div>'
+        '\')">Complete Compensation Decision</button></div>'
       : '';
 
     return '<div class="action-card ' + tone + '"><div class="action-icon">' + icon + '</div><div><div class="action-title">' + escapeHtml(cycle.actionLabel) + '</div>' +
@@ -1748,28 +1748,29 @@ function renderHelpView() {
     '<div class="process-step"><strong>Review cycle launches</strong>Four weeks before the six-month or annual anniversary, the system emails HR, the manager, and the employee and creates one shared calendar event.</div>' +
     '<div class="process-step"><strong>Independent preparation</strong>The manager completes the Manager Performance Review. The employee completes the Self-Evaluation. Neither sees the other submission yet.</div>' +
     '<div class="process-step"><strong>Review meeting</strong>After both evaluations are submitted, the manager or HR opens the meeting workspace. Both evaluations become visible for discussion.</div>' +
-    '<div class="process-step"><strong>Finalization</strong>The manager records meeting outcomes, goals, and action steps. The compensation decision must also be recorded.</div>' +
-    '<div class="process-step"><strong>Signatures and records</strong>The manager and employee each sign once. HR signs last. Both final PDFs are emailed and remain available in the portal.</div>' +
+    '<div class="process-step"><strong>Finalization</strong>The manager records meeting outcomes, goals, and action steps. Compensation must be resolved (no adjustment, or owner-approved recommendation) before signatures.</div>' +
+    '<div class="process-step"><strong>Signatures and records</strong>The manager and employee each sign once. HR signs last. Both final PDFs are emailed and remain available in the portal. Approved adjustments also generate a standalone CAF PDF.</div>' +
     '</div></section>' +
 
     '<section id="help-manager" class="help-section"><h2>Manager Guide</h2>' +
     '<h3>1. Open the assignment</h3><p>Use the link in the launch email or open the Action Center on your dashboard. The Manager Review tab opens directly.</p>' +
     '<h3>2. Complete the manager review</h3><p>Rate every factor from 1–7 or choose N/A. Ratings of 1, 2, 6, or 7 require a supporting example. Drafts autosave while you work.</p>' +
-    '<h3>3. Review compensation</h3><p>Open the Compensation Adjustment workflow from your dashboard or the review Overview tab. Afterward, record either <strong>Adjustment Submitted</strong> or <strong>No Adjustment Recommended</strong> in the review portal.</p>' +
-    '<h3>4. Submit and seal</h3><p>Review the completeness summary and submit. Your ratings and comments are locked after submission.</p>' +
-    '<h3>5. Conduct the meeting</h3><p>Once both evaluations are submitted, open the Review Meeting tab at the actual meeting. Discuss rating gaps and record agreed goals and action steps.</p>' +
-    '<h3>6. Finalize and sign</h3><p>Complete the final checklist and release the packet. Sign once when prompted; your signature applies to both documents.</p></section>' +
+    '<h3>3. Submit and seal</h3><p>Review the completeness summary and submit. Your ratings and comments are locked after submission.</p>' +
+    '<h3>4. Compensation recommendation</h3><p>Immediately after submission, recommend an adjustment or confirm no adjustment (with a second confirmation). Current Pay Rate is read-only from HR data. You recommend only — owners decide later.</p>' +
+    '<h3>5. Conduct the meeting</h3><p>Once both evaluations are submitted and compensation is resolved, open the Review Meeting tab at the actual meeting. Discuss rating gaps and record agreed goals and action steps.</p>' +
+    '<h3>6. Finalize and sign</h3><p>Complete the final checklist and release the packet. Sign once when prompted; your signature applies to both review documents and any compensation agreement.</p></section>' +
 
     '<section id="help-employee" class="help-section"><h2>Employee Guide</h2>' +
     '<h3>1. Open your self-evaluation</h3><p>Use the email button or the Action Center. Only you and HR can view your draft before the meeting.</p>' +
     '<h3>2. Complete every factor</h3><p>Use the rating definitions, describe accomplishments, identify growth areas, and propose goals. Drafts save automatically.</p>' +
     '<h3>3. Submit before the deadline</h3><p>Submission seals your independent evaluation. Your manager still cannot view it until both evaluations are submitted and the meeting opens.</p>' +
     '<h3>4. Participate in the meeting</h3><p>Review both evaluations, discuss differences, and add post-meeting comments when needed.</p>' +
-    '<h3>5. Sign once</h3><p>Your single electronic signature applies to both the manager review and your self-evaluation. Signing acknowledges the discussion and does not necessarily mean agreement with every statement.</p></section>' +
+    '<h3>5. Sign once</h3><p>Your single electronic signature applies to both the manager review and your self-evaluation. If a compensation adjustment was approved, you will see a read-only acknowledgement panel with the final rates before signing. Signing acknowledges the discussion and does not necessarily mean agreement with every statement.</p></section>' +
 
     '<section id="help-hr" class="help-section"><h2>HR Guide</h2>' +
-    '<h3>Automation setup</h3><p>Keep EmployeeAssignments current, especially hire dates, manager emails, and the Review Automation checkbox. In Administration, verify the preview before enabling Live mode.</p>' +
+    '<h3>Automation setup</h3><p>Keep EmployeeAssignments current, especially hire dates, manager emails, Current Pay Rate, and the Review Automation checkbox. In Administration, verify the preview and COMPENSATION_FOLDER_ID before enabling Live mode.</p>' +
     '<h3>What the automation sends</h3><p>For each qualifying review, the system creates one cycle, one calendar event, and three workflow emails: HR confirmation, manager instructions, and employee instructions.</p>' +
+    '<h3>Compensation Queue</h3><p>Manager recommendations appear immediately. Record the owner decision (approve or override) there. Owner decision unlocks the meeting gate when an adjustment was recommended.</p>' +
     '<h3>Monitoring</h3><p>Use the HR dashboard to see status, due dates, compensation decisions, meetings ready to begin, and outstanding signatures. HR can view both evaluations but cannot edit the participants’ original responses.</p>' +
     '<h3>Manual launch</h3><p>Use Create Review Cycle Manually for off-cycle, promotion, corrective, or replacement reviews. Manual launches use the same emails and calendar workflow.</p></section>' +
 
@@ -1787,7 +1788,7 @@ function renderHelpView() {
     '<div class="faq-item"><strong>Can the manager see the self-evaluation before submitting?</strong><p>No. The evaluations remain independent until both are submitted and the meeting workspace is opened.</p></div>' +
     '<div class="faq-item"><strong>What does a rating of 4 mean?</strong><p>Four means the employee fully and consistently meets expectations. It is a successful rating, not a weak one.</p></div>' +
     '<div class="faq-item"><strong>What happens if I close the browser?</strong><p>Drafts autosave to the server. Unsynced changes are also kept in the current browser and restored when you reopen the review.</p></div>' +
-    '<div class="faq-item"><strong>What if no compensation change is recommended?</strong><p>The manager records No Adjustment Recommended. A formal adjustment form is not required in that case.</p></div>' +
+    '<div class="faq-item"><strong>What if no compensation change is recommended?</strong><p>The manager confirms No Adjustment Recommended with a second confirmation. No CAF PDF or pay-rate change is created.</p></div>' +
     '<div class="faq-item"><strong>Can HR edit the evaluations?</strong><p>HR can view both for oversight but cannot change the manager’s or employee’s original submitted evaluation.</p></div>' +
     '<div class="faq-item"><strong>Why is there a calendar event and an email?</strong><p>The email gives role-specific instructions and direct links. The single shared calendar event keeps the meeting date visible to HR, the manager, and the employee.</p></div>' +
     '</section></div></div>';
@@ -1835,6 +1836,7 @@ function renderAdminView() {
   document.getElementById('adminView').innerHTML =
     '<div class="page-header"><div><h1>Administration</h1><p>Monitor system health, recover blocked work, and manage review automation.</p></div></div>' +
     '<div id="systemHealthPanel">' + renderSystemHealthPanel(health) + '</div>' +
+    '<div id="compensationQueuePanel"><div class="card"><div class="card-header"><div><h2>Compensation Queue</h2><p>Owner decisions and compensation packet status.</p></div><button class="button outline" onclick="refreshCompensationQueue()">Refresh Queue</button></div><div id="compensationQueueBody"><div class="field-help">Loading compensation queue…</div></div></div></div>' +
     renderAutomationPanel(automation) +
     '<div id="systemAlertsPanel">' + renderSystemAlertsPanel((state.v31 && state.v31.systemAlerts) || (health && health.alerts) || null) + '</div>' +
     '<div class="card"><div class="card-header"><div><h2>Create Review Cycle Manually</h2><p>This sends the full launch package: HR notice, manager instructions, employee instructions, and one shared calendar event.</p></div></div>' +
@@ -1860,6 +1862,73 @@ function renderAdminView() {
 
   populateAssignments();
   refreshSystemHealth(false);
+  refreshCompensationQueue();
+}
+
+async function refreshCompensationQueue() {
+  const target = document.getElementById('compensationQueueBody');
+  if (!target) return;
+  try {
+    const result = await server('getCompensationQueue');
+    const items = result.items || [];
+    if (!items.length) {
+      target.innerHTML =
+        '<div class="empty-state"><strong>No compensation records</strong>Recommendations will appear here as soon as managers submit them.</div>';
+      return;
+    }
+    target.innerHTML =
+      '<div class="table-wrap"><table class="preview-table"><thead><tr><th>Employee</th><th>Recommendation</th><th>Final</th><th>Status</th><th>Action</th></tr></thead><tbody>' +
+      items
+        .map(function (item) {
+          return (
+            '<tr><td><strong>' +
+            escapeHtml(item.employeeName) +
+            '</strong><br><span class="field-help">' +
+            escapeHtml(item.managerName) +
+            '</span></td><td>' +
+            escapeHtml(formatMoneyDisplay(item.managerRecommendedPayRate)) +
+            '<br><span class="field-help">' +
+            escapeHtml(String(item.managerRecommendedPercentDisplay)) +
+            '%</span></td><td>' +
+            (item.finalApprovedPayRate != null
+              ? escapeHtml(formatMoneyDisplay(item.finalApprovedPayRate)) +
+                '<br><span class="field-help">' +
+                escapeHtml(String(item.finalApprovedPercentDisplay)) +
+                '% · ' +
+                escapeHtml(item.compensationEffectiveDate || '') +
+                '</span>'
+              : '—') +
+            '</td><td>' +
+            escapeHtml(item.status) +
+            (item.cafPdfStatus
+              ? '<br><span class="field-help">CAF: ' +
+                escapeHtml(item.cafPdfStatus) +
+                '</span>'
+              : '') +
+            (item.rateUpdateStatus
+              ? '<br><span class="field-help">Rate: ' +
+                escapeHtml(item.rateUpdateStatus) +
+                '</span>'
+              : '') +
+            '</td><td>' +
+            (item.status === 'Awaiting Owner Decision'
+              ? '<button class="button primary" onclick="openOwnerDecisionModal(\'' +
+                escapeAttr(item.cycleId) +
+                '\')">Record Owner Decision</button>'
+              : '<button class="button outline" onclick="openCycleFromSummary(\'' +
+                escapeAttr(item.cycleId) +
+                '\',\'overview\')">Open Cycle</button>') +
+            '</td></tr>'
+          );
+        })
+        .join('') +
+      '</tbody></table></div>';
+  } catch (error) {
+    target.innerHTML =
+      '<div class="warning-banner">Could not load compensation queue: ' +
+      escapeHtml(errorMessage(error)) +
+      '</div>';
+  }
 }
 
 function healthLevelClass(level) {
@@ -2474,7 +2543,7 @@ function renderAutomationPanel(automation) {
   const triggerText = automation.triggerInstalled
     ? 'Daily trigger installed'
     : 'No daily trigger installed';
-  const compensationConfigured = !!automation.compensationAdjustmentUrl;
+  const compensationConfigured = !!automation.compensationFolderId;
   const automationOwner = automation.automationOwnerEmail || 'Not configured';
   const ownerMatches = !!automation.triggerOwnerMatches;
   const recoveryFolder = automation.signatureRecoveryFolder || {};
@@ -2527,8 +2596,10 @@ function renderAutomationPanel(automation) {
     '<br><span class="field-help">Daniel must verify no public/link, manager, or employee access.</span></span></div>' +
     '<div class="automation-check"><span>' +
     (compensationConfigured ? '✓' : '!') +
-    '</span><span><strong>Compensation app:</strong> ' +
-    (compensationConfigured ? 'Connected' : 'URL still needs to be added below') +
+    '</span><span><strong>Compensation folder:</strong> ' +
+    (compensationConfigured
+      ? 'COMPENSATION_FOLDER_ID configured'
+      : 'Set Compensation Drive folder ID below') +
     '</span></div></div>' +
     '<div class="button-row" style="margin-top:17px">' +
     (mode === 'Live'
@@ -2547,9 +2618,10 @@ function renderAutomationPanel(automation) {
     '<div><label for="autoCalendarId">Calendar ID</label><input id="autoCalendarId" value="' + escapeAttr(automation.calendarId || 'primary') + '"><div class="field-help">Use “primary” for the deployment owner’s calendar.</div></div>' +
     '<div><label for="autoEmailReminder">Calendar email reminder (days)</label><input id="autoEmailReminder" type="number" min="0" max="28" value="' + escapeAttr(automation.eventEmailReminderDays || 7) + '"></div>' +
     '<div><label for="autoPopupReminder">Calendar pop-up reminder (hours)</label><input id="autoPopupReminder" type="number" min="0" max="672" value="' + escapeAttr(automation.eventPopupReminderHours || 24) + '"></div>' +
-    '<div class="wide"><label for="compensationAdjustmentUrl">Compensation Adjustment app URL</label><input id="compensationAdjustmentUrl" type="url" placeholder="https://..." value="' + escapeAttr(automation.compensationAdjustmentUrl || '') + '"><div class="field-help">Managers see this link in their dashboard, cycle workspace, and launch email.</div></div>' +
+    '<div class="wide"><label for="compensationFolderId">Compensation Drive Folder ID</label><input id="compensationFolderId" placeholder="Google Drive folder ID" value="' + escapeAttr(automation.compensationFolderId || '') + '"><div class="field-help">HR-only folder for sealed CAF PDFs (COMPENSATION_FOLDER_ID).</div></div>' +
+    '<div class="wide"><label for="compensationAdjustmentUrl">Legacy standalone CAF URL (optional)</label><input id="compensationAdjustmentUrl" type="url" placeholder="https://..." value="' + escapeAttr(automation.compensationAdjustmentUrl || '') + '"><div class="field-help">Kept for unrelated standalone CAF use. Not shown to managers in the review workflow.</div></div>' +
     '<div><label class="modal-check"><input id="shiftWeekendMeetings" type="checkbox" ' + (automation.shiftWeekendMeetings ? 'checked' : '') + '><span>Shift Saturday/Sunday meetings to Monday</span></label></div>' +
-    '<div><label class="modal-check"><input id="compensationDecisionRequired" type="checkbox" ' + (automation.compensationDecisionRequired ? 'checked' : '') + '><span>Require a compensation decision before signatures</span></label></div>' +
+    '<div><label class="modal-check"><input id="compensationDecisionRequired" type="checkbox" ' + (automation.compensationDecisionRequired ? 'checked' : '') + '><span>Require a compensation decision before the meeting and signatures</span></label></div>' +
     '</div><div class="button-row" style="margin-top:18px"><button id="saveAutomationSettingsButton" class="button primary" type="submit">Save Automation Settings</button></div></form></div>';
 }
 
@@ -2579,6 +2651,7 @@ async function saveAutomationSettings(event) {
     eventEmailReminderDays: Number(valueOf('autoEmailReminder')),
     eventPopupReminderHours: Number(valueOf('autoPopupReminder')),
     compensationAdjustmentUrl: valueOf('compensationAdjustmentUrl'),
+    compensationFolderId: valueOf('compensationFolderId'),
     shiftWeekendMeetings: document.getElementById('shiftWeekendMeetings').checked,
     compensationDecisionRequired: document.getElementById('compensationDecisionRequired').checked
   };
@@ -2599,13 +2672,13 @@ async function saveAutomationSettings(event) {
 function confirmEnableAutomation() {
   openModal({
     title: 'Enable live review automation?',
-    body: '<p>Once enabled, the daily trigger can create review cycles, send three workflow emails, and create one Google Calendar event for each qualifying review.</p><p>Only enable this after the preview and Compensation Adjustment URL are correct.</p>',
+    body: '<p>Once enabled, the daily trigger can create review cycles, send three workflow emails, and create one Google Calendar event for each qualifying review.</p><p>Only enable this after the preview and compensation folder settings are correct.</p>',
     confirmLabel: 'Enable Live Automation',
     tone: 'success',
     checks: [
       'I reviewed the upcoming-review preview.',
       'The employee hire dates and manager assignments are accurate.',
-      'The Compensation Adjustment app URL is correct.'
+      'COMPENSATION_FOLDER_ID is configured for sealed CAF PDFs.'
     ],
     onConfirm: function() { changeAutomationMode('Live'); }
   });
@@ -3593,39 +3666,113 @@ function renderCompensationCard(cycle) {
   const complete = cycle.v31.compensationComplete;
   const statusClass = complete ? ' complete' : '';
   const decision = cycle.v31.compensationDecision || 'Pending';
+  const status = cycle.v31.compensationStatus || 'Pending';
+  const record = cycle.v31.compensationRecord;
 
-  return '<div class="card compensation-card"><div class="card-header"><div><h2>Compensation Decision</h2><p>Complete the compensation review alongside the manager performance review.</p></div><span class="compensation-status' +
+  let body =
+    '<p class="field-help">After the manager review, recommend an adjustment or confirm that no adjustment is recommended. Owner approval is required before the meeting when an adjustment is recommended.</p>';
+
+  if (cycle.v31.compensationDecisionNotes) {
+    body +=
+      '<div class="notice" style="margin-top:12px"><strong>Notes:</strong> ' +
+      escapeHtml(cycle.v31.compensationDecisionNotes) +
+      '</div>';
+  }
+
+  if (record) {
+    body +=
+      '<div class="notice" style="margin-top:12px">' +
+      '<div><strong>Current Pay Rate:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
+      ' · <strong>Annual:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalAnnualSalary)) +
+      '</div>' +
+      '<div><strong>Manager Recommendation:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
+      ' (' +
+      escapeHtml(String(record.managerRecommendedPercentDisplay)) +
+      '%)</div>' +
+      (record.finalApprovedPayRate != null
+        ? '<div><strong>Final Approved:</strong> ' +
+          escapeHtml(formatMoneyDisplay(record.finalApprovedPayRate)) +
+          ' (' +
+          escapeHtml(String(record.finalApprovedPercentDisplay)) +
+          '%) · Effective ' +
+          escapeHtml(record.compensationEffectiveDate || '') +
+          '</div>'
+        : '<div><strong>Status:</strong> Awaiting owner decision</div>') +
+      '</div>';
+  }
+
+  let actions = '';
+  if (cycle.v31.canManageCompensation && !complete) {
+    actions =
+      '<div class="button-row" style="margin-top:15px">' +
+      '<button class="button primary" onclick="openCompensationDecisionModal(\'' +
+      escapeAttr(cycle.cycleId) +
+      '\')">Complete Compensation Decision</button>' +
+      '</div>';
+  }
+
+  if (cycle.isHr && record && record.status === 'Awaiting Owner Decision') {
+    actions +=
+      '<div class="button-row" style="margin-top:10px">' +
+      '<button class="button primary" onclick="openOwnerDecisionModal(\'' +
+      escapeAttr(cycle.cycleId) +
+      '\')">Record Owner Decision</button>' +
+      '</div>';
+  }
+
+  if (
+    cycle.isHr &&
+    record &&
+    record.status === 'Awaiting Signatures' &&
+    record.canEditOwnerDecision
+  ) {
+    actions +=
+      '<div class="button-row" style="margin-top:10px">' +
+      '<button class="button outline" onclick="openOwnerDecisionModal(\'' +
+      escapeAttr(cycle.cycleId) +
+      '\', true)">Edit Owner Decision</button>' +
+      '</div>';
+  }
+
+  if (cycle.isHr && !complete && decision && decision !== 'Pending') {
+    actions +=
+      '<div class="button-row" style="margin-top:10px">' +
+      '<button class="button outline" onclick="confirmResetCompensation(\'' +
+      escapeAttr(cycle.cycleId) +
+      '\')">Reset Compensation Decision</button>' +
+      '</div>';
+  }
+
+  return (
+    '<div class="card compensation-card"><div class="card-header"><div><h2>Compensation Decision</h2><p>Manager recommendation and owner-approved final compensation.</p></div><span class="compensation-status' +
     statusClass +
     '">' +
     escapeHtml(decision) +
+    (status && status !== decision ? ' · ' + escapeHtml(status) : '') +
     '</span></div>' +
-    '<p class="field-help">Open the Compensation Adjustment workflow when a change is recommended. Then record the decision here so the review packet can move to signatures.</p>' +
-    (cycle.v31.compensationDecisionNotes
-      ? '<div class="notice" style="margin-top:12px"><strong>Recorded note:</strong> ' +
-        escapeHtml(cycle.v31.compensationDecisionNotes) +
-        '</div>'
-      : '') +
-    (cycle.v31.canManageCompensation
-      ? '<div class="button-row" style="margin-top:15px">' +
-        (cycle.v31.compensationAdjustmentUrl
-          ? '<button class="button primary" onclick="openCompensationWorkflow(\'' +
-            escapeAttr(cycle.cycleId) +
-            '\')">Open Compensation Adjustment</button>'
-          : '<button class="button outline" disabled>Compensation URL Not Configured</button>') +
-        '<button class="button outline" onclick="recordCompensationChoice(\'' +
-        escapeAttr(cycle.cycleId) +
-        '\',\'No Adjustment Recommended\')">No Adjustment Recommended</button>' +
-        '<button class="button outline" onclick="recordCompensationChoice(\'' +
-        escapeAttr(cycle.cycleId) +
-        '\',\'Adjustment Submitted\')">Mark Adjustment Submitted</button>' +
-        '</div>'
-      : '') +
-    '</div>';
+    body +
+    actions +
+    '</div>'
+  );
+}
+
+function formatMoneyDisplay(value) {
+  const amount = Number(value || 0);
+  return (
+    '$' +
+    amount.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })
+  );
 }
 
 function handleCycleAction(action) {
   if (action === 'compensation') {
-    openCompensationWorkflow(currentCycle.cycleId);
+    openCompensationDecisionModal(currentCycle.cycleId);
     return;
   }
 
@@ -3951,6 +4098,12 @@ async function submitReview(type) {
     localStorage.removeItem(draftStorageKey(type));
     showToast('success', 'Evaluation submitted', result.message);
     await refreshApplication(currentCycle.cycleId, 'overview');
+    if (
+      type === 'manager' &&
+      result.compensationDecisionRequired
+    ) {
+      openCompensationDecisionModal(currentCycle.cycleId);
+    }
   } catch (error) {
     setSaveIndicator('error', 'Submission failed');
     showToast('error', 'Could not submit evaluation', errorMessage(error));
@@ -4203,7 +4356,7 @@ function openReleaseModal() {
       'Both evaluations were discussed during the review meeting.',
       'The employee was given an opportunity to respond and add comments.',
       'Development goals and action steps were reviewed.',
-      'The compensation decision has been recorded.',
+      'The owner-approved compensation decision has been recorded (or no adjustment was recommended).',
       'The final packet is ready to be signed.'
     ],
     onConfirm: releaseSignatures
@@ -4234,14 +4387,82 @@ function renderSignaturesTab(target) {
   const statusRows = [
     ['Manager', stateSig.managerSigned ? 'Signed' : 'Pending'], ['Employee', stateSig.employeeSigned ? 'Signed' : 'Pending'], ['HR', stateSig.hrSigned ? 'Signed' : (stateSig.managerSigned && stateSig.employeeSigned ? 'Ready to sign' : 'Waiting for participants')]
   ];
+  const ack =
+    cycle.isEmployee &&
+    cycle.v31 &&
+    cycle.v31.employeeCompensationAcknowledgement
+      ? cycle.v31.employeeCompensationAcknowledgement
+      : null;
+  const ackHtml = ack
+    ? '<div class="card"><div class="card-header"><div><h2>Compensation Acknowledgement</h2><p>Review the approved compensation adjustment before signing.</p></div></div>' +
+      '<div class="summary-grid">' +
+      '<div class="summary-label">Current Pay Rate</div><div>' +
+      escapeHtml(formatMoneyDisplay(ack.currentPayRate)) +
+      '</div>' +
+      '<div class="summary-label">Current Annual Salary</div><div>' +
+      escapeHtml(formatMoneyDisplay(ack.currentAnnualSalary)) +
+      '</div>' +
+      '<div class="summary-label">Final Approved Pay Rate</div><div>' +
+      escapeHtml(formatMoneyDisplay(ack.finalApprovedPayRate)) +
+      '</div>' +
+      '<div class="summary-label">Final Approved Annual Salary</div><div>' +
+      escapeHtml(formatMoneyDisplay(ack.finalApprovedAnnualSalary)) +
+      '</div>' +
+      '<div class="summary-label">Approved Increase</div><div>' +
+      escapeHtml(String(ack.approvedIncreasePercent)) +
+      '%</div>' +
+      '<div class="summary-label">Effective Date</div><div>' +
+      escapeHtml(ack.effectiveDate || '') +
+      '</div></div>' +
+      '<div class="info-banner" style="margin-top:12px">By signing below, you acknowledge receipt of the approved compensation adjustment shown above.</div></div>'
+    : '';
   let taskHtml = '';
   if (tasks.length && !cycle.historicalPreviousReview) {
     const task = tasks[0];
-    taskHtml = '<div class="card"><div class="card-header"><div><h2>Sign Performance Review Packet</h2><p>Your single signature will be applied to both final review documents.</p></div>' + statusPill('Action required','amber') + '</div><div class="warning-banner">You are signing as <strong>' + escapeHtml(task.role) + '</strong>. Your signature acknowledges that both documents were reviewed and discussed; it does not necessarily indicate agreement with every rating.</div><div class="signature-wrap"><canvas id="packetSignature"></canvas><div class="signature-actions"><button class="button text" onclick="clearSignature(\'packetSignature\')">Clear signature</button></div></div><div class="button-row" style="margin-top:14px"><button id="signPacketButton" class="button primary" onclick="submitSignature()">Sign Both Review Documents</button></div></div>';
+    taskHtml =
+      '<div class="card"><div class="card-header"><div><h2>Sign Performance Review Packet</h2><p>Your single signature will be applied to both final review documents' +
+      (ack ? ' and the compensation agreement' : '') +
+      '.</p></div>' +
+      statusPill('Action required', 'amber') +
+      '</div><div class="warning-banner">You are signing as <strong>' +
+      escapeHtml(task.role) +
+      '</strong>. Your signature acknowledges that both documents were reviewed and discussed; it does not necessarily indicate agreement with every rating.</div><div class="signature-wrap"><canvas id="packetSignature"></canvas><div class="signature-actions"><button class="button text" onclick="clearSignature(\'packetSignature\')">Clear signature</button></div></div><div class="button-row" style="margin-top:14px"><button id="signPacketButton" class="button primary" onclick="submitSignature()">Sign Both Review Documents</button></div></div>';
   }
-  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Signature Status</h2><p>' + (cycle.historicalPreviousReview ? 'Historical signature status for the completed previous review.' : 'The manager and employee may sign in either order. HR signs last.') + '</p></div></div><div class="summary-grid">' + statusRows.map(function(row) { return '<div class="summary-label">' + row[0] + '</div><div>' + statusPill(row[1], row[1] === 'Signed' ? 'green' : row[1] === 'Ready to sign' ? 'amber' : '') + '</div>'; }).join('') + '</div></div>' + taskHtml +
-    (cycle.status === 'Complete' ? '<div class="card"><div class="success-banner"><strong>Review complete.</strong> The final signed documents are ready.</div><div class="button-row"><button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button><button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button></div></div>' : '');
-  if (tasks.length && !cycle.historicalPreviousReview) requestAnimationFrame(function() { initializeSignaturePad('packetSignature'); });
+  target.innerHTML =
+    '<div class="card"><div class="card-header"><div><h2>Signature Status</h2><p>' +
+    (cycle.historicalPreviousReview
+      ? 'Historical signature status for the completed previous review.'
+      : 'The manager and employee may sign in either order. HR signs last.') +
+    '</p></div></div><div class="summary-grid">' +
+    statusRows
+      .map(function (row) {
+        return (
+          '<div class="summary-label">' +
+          row[0] +
+          '</div><div>' +
+          statusPill(
+            row[1],
+            row[1] === 'Signed'
+              ? 'green'
+              : row[1] === 'Ready to sign'
+              ? 'amber'
+              : ''
+          ) +
+          '</div>'
+        );
+      })
+      .join('') +
+    '</div></div>' +
+    ackHtml +
+    taskHtml +
+    (cycle.status === 'Complete'
+      ? '<div class="card"><div class="success-banner"><strong>Review complete.</strong> The final signed documents are ready.</div><div class="button-row"><button class="button outline" onclick="downloadPdf(\'Manager Review\')">Download Manager Review</button><button class="button outline" onclick="downloadPdf(\'Self-Evaluation\')">Download Self-Evaluation</button></div></div>'
+      : '');
+  if (tasks.length && !cycle.historicalPreviousReview) {
+    requestAnimationFrame(function () {
+      initializeSignaturePad('packetSignature');
+    });
+  }
 }
 
 async function submitSignature() {
@@ -4457,42 +4678,21 @@ async function openFullPreviousReview() {
 
 
 function openCompensationWorkflow(cycleId) {
-  const cycle = currentCycle && currentCycle.cycleId === cycleId
-    ? currentCycle
-    : (state.cycles || []).find(function(item) {
-        return item.cycleId === cycleId;
-      });
-  const url =
-    (currentCycle &&
-      currentCycle.cycleId === cycleId &&
-      currentCycle.v31 &&
-      currentCycle.v31.compensationAdjustmentUrl) ||
-    (state.v31 && state.v31.compensationAdjustmentUrl) ||
-    '';
+  openCompensationDecisionModal(cycleId);
+}
 
-  if (!url) {
-    showToast(
-      'error',
-      'Compensation app not configured',
-      'HR must add the Compensation Adjustment app URL under Administration.'
-    );
-    return;
-  }
-
-  window.open(url, '_blank', 'noopener');
-
+function openCompensationDecisionModal(cycleId) {
   openModal({
-    title: 'Record the compensation decision',
+    title: 'Compensation Recommendation',
     body:
-      '<p>The Compensation Adjustment workflow opened in a new tab.</p>' +
-      '<p>After completing the review, record the outcome here so the performance review can move forward.</p>' +
+      '<p>Would you like to recommend a compensation adjustment?</p>' +
       '<div class="button-row" style="margin-top:16px">' +
-      '<button class="button primary" onclick="recordCompensationChoice(\'' +
+      '<button class="button primary" onclick="beginCompensationRecommendation(\'' +
       escapeAttr(cycleId) +
-      '\',\'Adjustment Submitted\')">Adjustment Submitted</button>' +
-      '<button class="button outline" onclick="recordCompensationChoice(\'' +
+      '\')">Recommend Adjustment</button>' +
+      '<button class="button outline" onclick="confirmNoCompensationAdjustment(\'' +
       escapeAttr(cycleId) +
-      '\',\'No Adjustment Recommended\')">No Adjustment Recommended</button>' +
+      '\')">No Adjustment Recommended</button>' +
       '</div>',
     confirmLabel: 'Close',
     tone: 'outline',
@@ -4500,70 +4700,283 @@ function openCompensationWorkflow(cycleId) {
   });
 }
 
-function recordCompensationChoice(cycleId, decision) {
-  const notesLabel =
-    decision === 'Adjustment Submitted'
-      ? 'Optional note, such as the request date or context'
-      : 'Optional note explaining why no adjustment is recommended';
-
+function confirmNoCompensationAdjustment(cycleId) {
   openModal({
-    title: decision,
+    title: 'Confirm No Compensation Adjustment',
     body:
-      '<p>This choice will be recorded in the performance review cycle.</p>' +
-      '<label for="compDecisionNotes">' +
-      escapeHtml(notesLabel) +
-      '</label>' +
-      '<textarea id="compDecisionNotes" placeholder="Optional"></textarea>',
-    confirmLabel: 'Record Decision',
-    tone:
-      decision === 'Adjustment Submitted'
-        ? 'primary'
-        : 'outline',
-    onConfirm: function() {
-      submitCompensationDecision(
-        cycleId,
-        decision,
-        valueOf('compDecisionNotes')
+      '<p>You are indicating that no compensation adjustment is recommended.</p>' +
+      '<p>Are you sure?</p>' +
+      '<label for="compDecisionNotes">Optional notes</label>' +
+      '<textarea id="compDecisionNotes" placeholder="Optional"></textarea>' +
+      '<div class="button-row" style="margin-top:16px">' +
+      '<button class="button outline" onclick="openCompensationDecisionModal(\'' +
+      escapeAttr(cycleId) +
+      '\')">Go Back</button>' +
+      '<button class="button primary" onclick="submitNoAdjustmentDecision(\'' +
+      escapeAttr(cycleId) +
+      '\')">Confirm No Adjustment</button>' +
+      '</div>',
+    confirmLabel: 'Close',
+    tone: 'outline',
+    onConfirm: closeModal
+  });
+}
+
+async function submitNoAdjustmentDecision(cycleId) {
+  const notes = valueOf('compDecisionNotes');
+  closeModal();
+  try {
+    const result = await server(
+      'submitNoCompensationAdjustment',
+      cycleId,
+      notes
+    );
+    showToast('success', 'Compensation decision recorded', result.message);
+    await loadCycle(cycleId, 'overview');
+  } catch (error) {
+    showToast('error', 'Could not record decision', errorMessage(error));
+  }
+}
+
+async function beginCompensationRecommendation(cycleId) {
+  closeModal();
+  try {
+    const context = await server('getCompensationContext', cycleId);
+    if (!context.currentPayRateConfigured) {
+      showToast(
+        'error',
+        'Current Pay Rate missing',
+        'Current Pay Rate has not been configured for this employee. HR must update the employee record before a compensation recommendation can be submitted.'
       );
+      return;
+    }
+
+    openModal({
+      title: 'Compensation Recommendation',
+      body:
+        '<p><strong>Employee current pay rate</strong> is read-only.</p>' +
+        '<div class="notice" style="margin-bottom:12px">' +
+        '<div>Current Pay Rate: <strong>' +
+        escapeHtml(formatMoneyDisplay(context.currentPayRate)) +
+        '</strong></div>' +
+        '<div>Current Annual Salary: <strong>' +
+        escapeHtml(formatMoneyDisplay(context.currentAnnualSalary)) +
+        '</strong> <span class="field-help">(rate × 2080)</span></div>' +
+        '</div>' +
+        '<div class="form-grid">' +
+        '<div><label for="recommendedPayRate">Recommended Pay Rate</label><input id="recommendedPayRate" type="number" min="0.01" step="0.01" oninput="syncRecommendationFields(\'rate\',' +
+        Number(context.currentPayRate) +
+        ')"></div>' +
+        '<div><label for="recommendedPercent">Recommended Increase (%)</label><input id="recommendedPercent" type="number" step="0.01" placeholder="e.g. 8" oninput="syncRecommendationFields(\'percent\',' +
+        Number(context.currentPayRate) +
+        ')"></div>' +
+        '<div><label>Recommended Annual Salary</label><input id="recommendedAnnual" readonly></div>' +
+        '<div><label for="proposedEffectiveDate">Proposed Effective Date *</label><input id="proposedEffectiveDate" type="date" required></div>' +
+        '<div class="wide"><label for="businessJustification">Business Justification *</label><textarea id="businessJustification" required></textarea></div>' +
+        '</div>',
+      confirmLabel: 'Submit Recommendation',
+      tone: 'primary',
+      onConfirm: function () {
+        submitCompensationRecommendationForm(cycleId);
+      }
+    });
+  } catch (error) {
+    showToast('error', 'Could not open recommendation', errorMessage(error));
+  }
+}
+
+function syncRecommendationFields(source, currentRate) {
+  const rateEl = document.getElementById('recommendedPayRate');
+  const percentEl = document.getElementById('recommendedPercent');
+  const annualEl = document.getElementById('recommendedAnnual');
+  if (!rateEl || !percentEl || !annualEl) return;
+
+  if (source === 'rate' && rateEl.value !== '') {
+    const rate = Number(rateEl.value);
+    if (Number.isFinite(rate) && currentRate > 0) {
+      percentEl.value = (((rate - currentRate) / currentRate) * 100).toFixed(2);
+      annualEl.value = formatMoneyDisplay(rate * 2080);
+    }
+  } else if (source === 'percent' && percentEl.value !== '') {
+    const percent = Number(percentEl.value);
+    if (Number.isFinite(percent) && currentRate > 0) {
+      const rate = Math.round(currentRate * (1 + percent / 100) * 100) / 100;
+      rateEl.value = rate.toFixed(2);
+      annualEl.value = formatMoneyDisplay(rate * 2080);
+    }
+  }
+}
+
+async function submitCompensationRecommendationForm(cycleId) {
+  const payload = {
+    recommendedPayRate: valueOf('recommendedPayRate'),
+    recommendedPercent: valueOf('recommendedPercent'),
+    proposedEffectiveDate: valueOf('proposedEffectiveDate'),
+    businessJustification: valueOf('businessJustification')
+  };
+  closeModal();
+  try {
+    const result = await server(
+      'submitCompensationRecommendation',
+      cycleId,
+      payload
+    );
+    showToast('success', 'Recommendation submitted', result.message);
+    await loadCycle(cycleId, 'overview');
+  } catch (error) {
+    showToast('error', 'Could not submit recommendation', errorMessage(error));
+  }
+}
+
+async function openOwnerDecisionModal(cycleId, isEdit) {
+  try {
+    const context = await server('getCompensationContext', cycleId);
+    const record = context.record;
+    if (!record) {
+      showToast('error', 'No recommendation', 'No compensation record found.');
+      return;
+    }
+
+    openModal({
+      title: isEdit ? 'Edit Owner Decision' : 'Record Owner Decision',
+      body:
+        '<div class="notice" style="margin-bottom:12px">' +
+        '<div>Current Pay Rate: <strong>' +
+        escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
+        '</strong></div>' +
+        '<div>Manager Recommended: <strong>' +
+        escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
+        '</strong> (' +
+        escapeHtml(String(record.managerRecommendedPercentDisplay)) +
+        '%)</div>' +
+        '<div>Manager Proposed Effective Date: <strong>' +
+        escapeHtml(record.managerProposedEffectiveDate || '') +
+        '</strong></div>' +
+        '</div>' +
+        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="approve" checked onchange="toggleOwnerOverrideFields()"> <span>Approve Manager Recommendation</span></label>' +
+        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="override" onchange="toggleOwnerOverrideFields()"> <span>Approve Different Amount</span></label>' +
+        '<div id="ownerOverrideFields" class="form-grid" style="display:none;margin-top:12px">' +
+        '<div><label for="finalApprovedPayRate">Final Approved Pay Rate</label><input id="finalApprovedPayRate" type="number" min="0.01" step="0.01"></div>' +
+        '<div><label for="finalApprovedPercent">Final Approved %</label><input id="finalApprovedPercent" type="number" step="0.01"></div>' +
+        '<div class="wide"><label for="ownerDecisionNotes">Owner Decision Notes *</label><textarea id="ownerDecisionNotes"></textarea></div>' +
+        '</div>' +
+        '<div class="form-grid" style="margin-top:12px">' +
+        '<div><label for="ownerName">Owner Name *</label><input id="ownerName" required value="' +
+        escapeAttr(record.ownerName || '') +
+        '"></div>' +
+        '<div><label for="compensationEffectiveDate">Effective Date *</label><input id="compensationEffectiveDate" type="date" required value="' +
+        escapeAttr(toDateInputValue(record.compensationEffectiveDate || record.managerProposedEffectiveDate)) +
+        '"></div>' +
+        (isEdit
+          ? '<div class="wide"><label for="ownerEditReason">Reason for correction *</label><textarea id="ownerEditReason" required></textarea></div>'
+          : '') +
+        '</div>',
+      confirmLabel: isEdit ? 'Save Correction' : 'Record Owner Decision',
+      tone: 'primary',
+      onConfirm: function () {
+        submitOwnerDecisionForm(cycleId, !!isEdit);
+      }
+    });
+  } catch (error) {
+    showToast('error', 'Could not open owner decision', errorMessage(error));
+  }
+}
+
+function toggleOwnerOverrideFields() {
+  const override = document.querySelector(
+    'input[name="ownerDecisionMode"][value="override"]'
+  );
+  const fields = document.getElementById('ownerOverrideFields');
+  if (fields && override) {
+    fields.style.display = override.checked ? 'grid' : 'none';
+  }
+}
+
+function toDateInputValue(value) {
+  if (!value) return '';
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const date = new Date(raw);
+  if (isNaN(date.getTime())) return '';
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return date.getFullYear() + '-' + month + '-' + day;
+}
+
+async function submitOwnerDecisionForm(cycleId, isEdit) {
+  const modeEl = document.querySelector(
+    'input[name="ownerDecisionMode"]:checked'
+  );
+  const payload = {
+    mode: modeEl ? modeEl.value : 'approve',
+    ownerName: valueOf('ownerName'),
+    compensationEffectiveDate: valueOf('compensationEffectiveDate'),
+    finalApprovedPayRate: valueOf('finalApprovedPayRate'),
+    finalApprovedPercent: valueOf('finalApprovedPercent'),
+    ownerDecisionNotes: valueOf('ownerDecisionNotes'),
+    reason: valueOf('ownerEditReason')
+  };
+  closeModal();
+  try {
+    const method = isEdit
+      ? 'editCompensationOwnerDecision'
+      : 'recordCompensationOwnerDecision';
+    const result = await server(method, cycleId, payload);
+    showToast('success', 'Owner decision saved', result.message);
+    await loadCycle(cycleId, 'overview');
+  } catch (error) {
+    showToast('error', 'Could not save owner decision', errorMessage(error));
+  }
+}
+
+function confirmResetCompensation(cycleId) {
+  openModal({
+    title: 'Reset compensation decision?',
+    body:
+      '<p>This returns the compensation decision to Pending.</p>' +
+      '<label for="compResetReason">Reason *</label>' +
+      '<textarea id="compResetReason" required></textarea>',
+    confirmLabel: 'Reset to Pending',
+    tone: 'warning',
+    onConfirm: async function () {
+      const reason = valueOf('compResetReason');
+      closeModal();
+      try {
+        const result = await server(
+          'resetCompensationDecision',
+          cycleId,
+          reason
+        );
+        showToast('success', 'Compensation reset', result.message);
+        await loadCycle(cycleId, 'overview');
+      } catch (error) {
+        showToast('error', 'Could not reset', errorMessage(error));
+      }
     }
   });
 }
 
-async function submitCompensationDecision(
-  cycleId,
-  decision,
-  notes
-) {
-  closeModal();
+function recordCompensationChoice(cycleId, decision) {
+  if (decision === 'No Adjustment Recommended') {
+    confirmNoCompensationAdjustment(cycleId);
+    return;
+  }
+  openCompensationDecisionModal(cycleId);
+}
 
-  try {
-    const result = await server(
-      'recordCompensationDecision',
-      cycleId,
-      decision,
-      notes || ''
-    );
-
-    showToast(
-      'success',
-      'Compensation decision recorded',
-      result.message
-    );
-
-    if (
-      currentCycle &&
-      currentCycle.cycleId === cycleId
-    ) {
+async function submitCompensationDecision(cycleId, decision, notes) {
+  if (decision === 'No Adjustment Recommended') {
+    try {
+      const result = await server(
+        'submitNoCompensationAdjustment',
+        cycleId,
+        notes || ''
+      );
+      showToast('success', 'Compensation decision recorded', result.message);
       await loadCycle(cycleId, 'overview');
-    } else {
-      await refreshApplication('', '');
+    } catch (error) {
+      showToast('error', 'Could not record decision', errorMessage(error));
     }
-  } catch (error) {
-    showToast(
-      'error',
-      'Could not record decision',
-      errorMessage(error)
-    );
   }
 }
 

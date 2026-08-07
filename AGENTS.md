@@ -13,7 +13,10 @@ precedence over the playbook.
 - Keep manager and employee evaluations private until the meeting opens.
 - Keep HR read-only for original participant responses unless an explicit audited override is requested.
 - Keep one signature per manager, employee, and HR across both final documents.
-- Never expose compensation details to employees.
+- Never expose compensation details to employees in dashboards, review PDFs,
+  previous-review context, or ordinary review emails. The only employee-facing
+  compensation disclosure is the read-only acknowledgement panel shown before
+  signing when an owner-approved adjustment exists, plus the sealed CAF PDF.
 - Keep Preview mode non-destructive.
 - Make migrations idempotent.
 - Use locks around workflow transitions.

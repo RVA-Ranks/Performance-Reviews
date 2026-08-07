@@ -447,11 +447,29 @@ Confirm exactly one workflow email is sent to each role:
 ## F. Manager experience
 
 - [ ] Manager dashboard shows Manager Review task
-- [ ] Manager dashboard shows Compensation Adjustment button
-- [ ] Compensation Adjustment opens in a new tab
-- [ ] Manager can record `Adjustment Submitted`
-- [ ] Manager can record `No Adjustment Recommended`
-- [ ] Compensation decision appears in the review Overview
+## Compensation integration
+
+- [ ] Current Pay Rate blank + Recommend Adjustment → blocked
+- [ ] Current Pay Rate blank + No Adjustment → allowed (double confirm)
+- [ ] Manager recommendation creates exactly one CompensationRecords row
+- [ ] Recommendation appears immediately in HR Compensation Queue
+- [ ] Owner approve recommendation works with one confirmation
+- [ ] Owner override requires notes + owner name; derives rate/% correctly
+- [ ] Blank effective date blocks owner approval
+- [ ] Meeting blocked until owner decision when adjustment recommended
+- [ ] Owner decision does not auto-open meeting or auto-release signatures
+- [ ] Employee acknowledgement panel shows final values only before sign
+- [ ] Employee never sees manager recommendation or owner notes in PR
+- [ ] HR can edit owner decision only before any role signature
+- [ ] HR cannot edit owner decision after any signature begins
+- [ ] CAF PDF not generated before all three signatures
+- [ ] CAF PDF generated exactly once after third signature into COMPENSATION_FOLDER_ID
+- [ ] CompensationHistory appended exactly once on CAF seal
+- [ ] Future effective date does not update Current Pay Rate early
+- [ ] Due effective date updates Current Pay Rate exactly once
+- [ ] Next review loads updated Current Pay Rate
+- [ ] Legacy in-flight standalone CAF packets remain unaffected
+- [ ] `runV31CompensationTests_()` passes
 - [ ] Manager can continue the manager review independently
 - [ ] Employee self-evaluation remains hidden before the meeting
 - [ ] Finalize & Release is blocked until compensation decision is recorded

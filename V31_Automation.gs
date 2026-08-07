@@ -29,6 +29,7 @@ const V31 = Object.freeze({
     EVENT_POPUP_REMINDER_HOURS: '24',
     COMPENSATION_ADJUSTMENT_URL: '',
     COMPENSATION_DECISION_REQUIRED: 'TRUE',
+    COMPENSATION_FOLDER_ID: '',
     HELP_CENTER_ENABLED: 'TRUE',
     AUTOMATION_LAST_RUN: '',
     AUTOMATION_LAST_SUCCESS: '',
@@ -201,6 +202,9 @@ const V31 = Object.freeze({
     'Compensation Decision Notes',
     'Compensation Decision At',
     'Compensation Decision By',
+    'Compensation Status',
+    'Compensation Record ID',
+    'CAF Final PDF ID',
   ],
 
   LOG_HEADERS: [
@@ -218,7 +222,7 @@ const V31 = Object.freeze({
 
   COMPENSATION: {
     PENDING: 'Pending',
-    ADJUSTMENT: 'Adjustment Submitted',
+    ADJUSTMENT: 'Adjustment Recommended',
     NONE: 'No Adjustment Recommended',
   },
 
@@ -388,6 +392,7 @@ function ensureV31DataModel_() {
   });
 
   ensureSystemAlertsDataModel_();
+  ensureCompensationDataModel_();
 
   const assignmentHeaders = getHeaders_(assignments);
   const automationColumn =
@@ -1189,17 +1194,13 @@ function getV31CycleData_(cycle, email, isHr) {
       settings.COMPENSATION_DECISION_REQUIRED,
       true
     );
-  const decision =
-    String(
-      cycle['Compensation Decision'] ||
-        V31.COMPENSATION.PENDING
-    );
-  const compensationComplete =
-    !compensationRequired ||
-    [
-      V31.COMPENSATION.ADJUSTMENT,
-      V31.COMPENSATION.NONE,
-    ].includes(decision);
+  const decision = normalizeCompensationDecision_(
+    cycle['Compensation Decision']
+  );
+  const compensationComplete = isV31CompensationComplete_(cycle);
+  const compensationRecord = findCompensationRecordByCycleOptional_(
+    cycle['Cycle ID']
+  );
 
   const meetingDate = v31Date_(
     cycle['Review Meeting Date']
@@ -1383,6 +1384,17 @@ function getV31CycleData_(cycle, email, isHr) {
       isManager || isHr
         ? decision
         : '',
+    compensationStatus:
+      isManager || isHr
+        ? String(
+            cycle['Compensation Status'] ||
+              V31_COMP.STATUS.PENDING
+          )
+        : '',
+    compensationRecordId:
+      isManager || isHr
+        ? String(cycle['Compensation Record ID'] || '')
+        : '',
     compensationDecisionNotes:
       isManager || isHr
         ? String(
@@ -1409,16 +1421,32 @@ function getV31CycleData_(cycle, email, isHr) {
       isManager &&
       compensationRequired &&
       !compensationComplete &&
+      decision === V31.COMPENSATION.PENDING &&
       String(cycle['Status']) !== PR.CYCLE.COMPLETE,
     canManageCompensation:
       (isManager || isHr) &&
       String(cycle['Status']) !== PR.CYCLE.COMPLETE,
-    compensationAdjustmentUrl:
-      isManager || isHr
-        ? String(
-            settings.COMPENSATION_ADJUSTMENT_URL || ''
-          )
-        : '',
+    compensationRecord:
+      (isManager || isHr) && compensationRecord
+        ? (function () {
+            const view = toCompensationRecordView_(
+              compensationRecord.object,
+              isHr
+            );
+            if (view && view.canEditOwnerDecision) {
+              const signatures = getCombinedSignatureState_(cycle);
+              view.canEditOwnerDecision =
+                !signatures.managerSigned &&
+                !signatures.employeeSigned &&
+                !signatures.hrSigned;
+            }
+            return view;
+          })()
+        : null,
+    employeeCompensationAcknowledgement: isEmployee
+      ? getEmployeeCompensationAcknowledgement_(cycle)
+      : null,
+    compensationAdjustmentUrl: '',
 
     guidance: buildV31Guidance_(
       cycle,
@@ -1431,27 +1459,42 @@ function getV31CycleData_(cycle, email, isHr) {
   };
 }
 
-function isV31CompensationComplete_(cycle) {
-  const settings = getSettings_();
-
-  if (
-    !v31Boolean_(
-      settings.COMPENSATION_DECISION_REQUIRED,
-      true
-    )
-  ) {
-    return true;
-  }
-
-  return [
-    V31.COMPENSATION.ADJUSTMENT,
-    V31.COMPENSATION.NONE,
-  ].includes(
-    String(
-      cycle['Compensation Decision'] ||
-        V31.COMPENSATION.PENDING
-    )
+function getEmployeeCompensationAcknowledgement_(cycle) {
+  const decision = normalizeCompensationDecision_(
+    cycle['Compensation Decision']
   );
+  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
+    return null;
+  }
+  const recordLoc = findCompensationRecordByCycleOptional_(
+    cycle['Cycle ID']
+  );
+  if (
+    !recordLoc ||
+    String(recordLoc.object['Status']) !==
+      V31_COMP.STATUS.AWAITING_SIGNATURES
+  ) {
+    return null;
+  }
+  const record = recordLoc.object;
+  return {
+    currentPayRate: Number(record['Original Pay Rate'] || 0),
+    currentAnnualSalary: Number(
+      record['Original Annual Salary'] || 0
+    ),
+    finalApprovedPayRate: Number(
+      record['Final Approved Pay Rate'] || 0
+    ),
+    finalApprovedAnnualSalary: Number(
+      record['Final Approved Annual Salary'] || 0
+    ),
+    approvedIncreasePercent: roundPercent_(
+      Number(record['Final Approved Percent'] || 0) * 100
+    ),
+    effectiveDate: formatDate_(
+      record['Compensation Effective Date']
+    ),
+  };
 }
 
 function buildV31Guidance_(
@@ -1504,14 +1547,37 @@ function buildV31Guidance_(
       });
     }
 
-    if (isManager && !compensationComplete) {
+    if (
+      isManager &&
+      !compensationComplete &&
+      normalizeCompensationDecision_(
+        cycle['Compensation Decision']
+      ) === V31.COMPENSATION.PENDING
+    ) {
       items.push({
         tone: 'warning',
         title: 'Compensation decision required',
         message:
-          'Open the Compensation Adjustment workflow and then record whether an adjustment was submitted or no adjustment is recommended.',
+          'Recommend a compensation adjustment or confirm that no adjustment is recommended.',
         action: 'compensation',
         actionLabel: 'Review Compensation',
+      });
+    }
+
+    if (
+      isHr &&
+      !compensationComplete &&
+      normalizeCompensationDecision_(
+        cycle['Compensation Decision']
+      ) === V31.COMPENSATION.ADJUSTMENT
+    ) {
+      items.push({
+        tone: 'warning',
+        title: 'Owner compensation decision required',
+        message:
+          'Record the owner-approved amount in the Compensation Queue before the meeting can open.',
+        action: 'overview',
+        actionLabel: 'Open Review Overview',
       });
     }
 
@@ -1553,7 +1619,7 @@ function buildV31Guidance_(
         tone: 'warning',
         title: 'Compensation decision is still pending',
         message:
-          'A compensation decision must be recorded before the review packet can be released for signature.',
+          'A compensation decision must be resolved before the review meeting can open and signatures can be released.',
         action: 'compensation',
         actionLabel: 'Complete Compensation Decision',
       });
@@ -1630,85 +1696,6 @@ function buildV31Guidance_(
   }
 
   return items;
-}
-
-/* =========================== COMPENSATION TASK =========================== */
-
-function recordCompensationDecision(
-  cycleId,
-  decision,
-  notes
-) {
-  return withLock_(function () {
-    const email = getCurrentUserEmail_();
-    const location = findCycle_(cycleId);
-    const cycle = location.object;
-    const isHr = isHrUser_(email);
-    const isManager =
-      normalizeEmail_(cycle['Manager Email']) === email;
-
-    if (!isHr && !isManager) {
-      throw new Error(
-        'Only the assigned manager or HR may record the compensation decision.'
-      );
-    }
-
-    const allowed = [
-      V31.COMPENSATION.ADJUSTMENT,
-      V31.COMPENSATION.NONE,
-    ];
-
-    if (
-      decision === V31.COMPENSATION.PENDING &&
-      isHr
-    ) {
-      // HR may reset a mistaken selection.
-    } else if (!allowed.includes(decision)) {
-      throw new Error(
-        'Choose Adjustment Submitted or No Adjustment Recommended.'
-      );
-    }
-
-    const previous = String(
-      cycle['Compensation Decision'] ||
-        V31.COMPENSATION.PENDING
-    );
-
-    cycle['Compensation Decision'] = decision;
-    cycle['Compensation Decision Notes'] =
-      cleanText_(notes);
-    cycle['Compensation Decision At'] =
-      decision === V31.COMPENSATION.PENDING
-        ? ''
-        : new Date();
-    cycle['Compensation Decision By'] =
-      decision === V31.COMPENSATION.PENDING
-        ? ''
-        : email;
-    cycle['Updated At'] = new Date();
-
-    writeCycle_(location.rowNumber, cycle);
-
-    audit_(
-      cycleId,
-      'Compensation decision recorded',
-      email,
-      previous,
-      decision,
-      cleanText_(notes)
-    );
-
-    return {
-      ok: true,
-      decision: decision,
-      message:
-        decision === V31.COMPENSATION.ADJUSTMENT
-          ? 'Compensation adjustment marked as submitted.'
-          : decision === V31.COMPENSATION.NONE
-          ? 'No compensation adjustment recommended.'
-          : 'Compensation decision reset.',
-    };
-  });
 }
 
 /* ============================ AUTOMATION ADMIN =========================== */
@@ -1788,6 +1775,9 @@ function getAutomationAdminData_() {
     ),
     compensationAdjustmentUrl: String(
       settings.COMPENSATION_ADJUSTMENT_URL || ''
+    ),
+    compensationFolderId: String(
+      settings.COMPENSATION_FOLDER_ID || ''
     ),
     compensationDecisionRequired:
       v31Boolean_(
@@ -1976,6 +1966,9 @@ function validateReviewAutomationSettings_(payload) {
       )
     ),
     COMPENSATION_ADJUSTMENT_URL: compensationUrl,
+    COMPENSATION_FOLDER_ID: cleanText_(
+      payload.compensationFolderId || ''
+    ),
     COMPENSATION_DECISION_REQUIRED:
       payload.compensationDecisionRequired ? 'TRUE' : 'FALSE',
   };
@@ -3827,6 +3820,17 @@ function runReviewAutomationCore_() {
 
   assertAutomationOwner_(settings);
   const outbox = dispatchPendingWorkflowNotificationsForAllCycles_();
+  let rateUpdates = { updated: 0, skipped: 0, failed: 0 };
+  try {
+    rateUpdates = processDueCompensationRateUpdates_();
+  } catch (rateUpdateError) {
+    rateUpdates = {
+      updated: 0,
+      skipped: 0,
+      failed: 1,
+      error: String(rateUpdateError.message || rateUpdateError),
+    };
+  }
   let systemAlerts;
   try {
     systemAlerts = drainSystemAlertsAutomatically_();
@@ -3978,6 +3982,7 @@ function runReviewAutomationCore_() {
     failed: failed,
     outbox: outbox,
     systemAlerts: systemAlerts,
+    compensationRateUpdates: rateUpdates,
     results: results,
     message:
       created +
@@ -4388,6 +4393,9 @@ function createAutomatedReviewCycle_(candidate) {
     'Compensation Decision Notes': '',
     'Compensation Decision At': '',
     'Compensation Decision By': '',
+    'Compensation Status': V31_COMP.STATUS.PENDING,
+    'Compensation Record ID': '',
+    'CAF Final PDF ID': '',
   };
 
   appendObject_(
@@ -4725,14 +4733,20 @@ function applyV31DefaultsToCycle_(
   ]);
 
   cycle['Compensation Decision'] =
-    cycle['Compensation Decision'] ||
-    V31.COMPENSATION.PENDING;
+    normalizeCompensationDecision_(
+      cycle['Compensation Decision']
+    );
   cycle['Compensation Decision Notes'] =
     cycle['Compensation Decision Notes'] || '';
   cycle['Compensation Decision At'] =
     cycle['Compensation Decision At'] || '';
   cycle['Compensation Decision By'] =
     cycle['Compensation Decision By'] || '';
+  cycle['Compensation Status'] =
+    cycle['Compensation Status'] || V31_COMP.STATUS.PENDING;
+  cycle['Compensation Record ID'] =
+    cycle['Compensation Record ID'] || '';
+  cycle['CAF Final PDF ID'] = cycle['CAF Final PDF ID'] || '';
 
   return backfillLegacyLaunchFields_(cycle);
 }
@@ -7975,17 +7989,10 @@ function buildV31LaunchEmailUrls_(cycle) {
 
 function sendV31ManagerLaunchEmail_(cycle) {
   const urls = buildV31LaunchEmailUrls_(cycle);
-  const managerButtons =
-    emailButton_(
-      urls.managerUrl,
-      'Start Manager Review'
-    ) +
-    (urls.compensationUrl
-      ? emailButton_(
-          urls.compensationUrl,
-          'Open Compensation Adjustment'
-        )
-      : '');
+  const managerButtons = emailButton_(
+    urls.managerUrl,
+    'Start Manager Review'
+  );
 
   sendHtmlEmail_(
     cycle['Manager Email'],
@@ -8008,7 +8015,7 @@ function sendV31ManagerLaunchEmail_(cycle) {
         formatDate_(cycle['Manager Due Date'])
       ) +
       '</strong>.</li>' +
-      '<li>Review compensation and either submit the Compensation Adjustment form or record that no adjustment is recommended.</li>' +
+      '<li>After submission, recommend a compensation adjustment or confirm that no adjustment is recommended.</li>' +
       '<li>Attend the calendar event and open the meeting workspace when the discussion begins.</li>' +
       '</ol>' +
       '<p>The employee self-evaluation remains private until both evaluations are submitted and the meeting is opened.</p>' +
