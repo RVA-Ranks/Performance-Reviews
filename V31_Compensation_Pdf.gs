@@ -121,29 +121,30 @@ function ensureCompensationCafPdf_(cycleId) {
   } catch (error) {
     // The failure may have left a durable CAF artifact in Drive. Reconcile:
     //   1 valid candidate  → self-heal by sealing it
-    //   0 candidates       → clean Failed (no side effect to reconcile)
-    //   >1 candidates      → Delivery Unknown + blocking ambiguity alert
+    //   0 valid candidates → clean Failed (no side effect to reconcile)
+    //   >1 valid candidates→ Delivery Unknown + blocking ambiguity alert
     let candidates = [];
-    let ambiguous = false;
+    let rejected = [];
     try {
       const record = findCompensationRecordByCycle_(cycleId).object;
-      candidates = listCompensationCafCandidates_(cycleId, record);
+      const artifacts = collectCompensationCafArtifacts_(cycleId, record);
+      candidates = artifacts.valid;
+      rejected = artifacts.rejected || [];
     } catch (reconcileError) {
-      if (reconcileError && reconcileError.code === 'AMBIGUOUS_CAF_ARTIFACTS') {
-        ambiguous = true;
-      }
+      Logger.log(
+        'CAF failure reconcile scan failed: ' +
+          String(reconcileError.message || reconcileError)
+      );
     }
 
-    if (!ambiguous && candidates.length === 1) {
+    if (candidates.length === 1) {
       return commitCompensationCafSealed_(cycleId, candidates[0].id, {
         expectedAttemptId: claimed.attemptId,
       });
     }
 
     const unresolvedStatus =
-      ambiguous || candidates.length > 1
-        ? V31_COMP.PDF.UNKNOWN
-        : V31_COMP.PDF.FAILED;
+      candidates.length > 1 ? V31_COMP.PDF.UNKNOWN : V31_COMP.PDF.FAILED;
 
     withLock_(function () {
       const recordLoc = findCompensationRecordByCycle_(cycleId);
@@ -164,7 +165,12 @@ function ensureCompensationCafPdf_(cycleId) {
 
     if (unresolvedStatus === V31_COMP.PDF.UNKNOWN) {
       const record = findCompensationRecordByCycle_(cycleId).object;
-      recordCompensationCafAmbiguityAlert_(cycleId, record, candidates);
+      recordCompensationCafAmbiguityAlert_(
+        cycleId,
+        record,
+        candidates,
+        rejected
+      );
     }
     throw error;
   }
@@ -339,8 +345,13 @@ function assertValidCompensationCafFile_(file, cycleId, record, folderId) {
   return fileId;
 }
 
-/** Return all deterministic-name CAF candidates that pass strict validation. */
-function listCompensationCafCandidates_(cycleId, record) {
+/**
+ * Scan deterministic-name CAF artifacts, separating valid from rejected.
+ * A rejected (e.g. no-provenance, manually uploaded) same-named file never
+ * aborts the scan and is never trashed; it is retained as evidence so a
+ * single valid candidate can still be reconciled.
+ */
+function collectCompensationCafArtifacts_(cycleId, record) {
   const settings = getSettings_();
   const folderId = String(settings.COMPENSATION_FOLDER_ID || '').trim();
   if (!folderId) {
@@ -351,20 +362,26 @@ function listCompensationCafCandidates_(cycleId, record) {
   const folder = DriveApp.getFolderById(folderId);
   const fileName = buildCompensationCafFileName_(cycleId);
   const files = folder.getFilesByName(fileName);
-  const matches = [];
+  const valid = [];
+  const rejected = [];
   const seen = {};
   while (files.hasNext()) {
     const file = files.next();
     if (file.isTrashed()) continue;
-    const id = assertValidCompensationCafFile_(
-      file,
-      cycleId,
-      record,
-      folderId
-    );
+    let id;
+    try {
+      id = assertValidCompensationCafFile_(file, cycleId, record, folderId);
+    } catch (error) {
+      rejected.push({
+        id: String(file.getId()),
+        name: String(file.getName() || ''),
+        reason: String(error.message || error),
+      });
+      continue;
+    }
     if (!seen[id]) {
       seen[id] = true;
-      matches.push({
+      valid.push({
         id: id,
         name: String(file.getName() || ''),
         updatedAt: file.getLastUpdated()
@@ -373,6 +390,25 @@ function listCompensationCafCandidates_(cycleId, record) {
       });
     }
   }
+  return { valid: valid, rejected: rejected };
+}
+
+/** Return only the deterministic-name CAF candidates that pass validation. */
+function listCompensationCafCandidates_(cycleId, record) {
+  const artifacts = collectCompensationCafArtifacts_(cycleId, record);
+  const matches = [];
+  const seen = {};
+  artifacts.valid.forEach(function (item) {
+    const id = String(item.id);
+    if (!seen[id]) {
+      seen[id] = true;
+      matches.push({
+        id: id,
+        name: String(item.name || ''),
+        updatedAt: item.updatedAt ? item.updatedAt : '',
+      });
+    }
+  });
   return matches;
 }
 
@@ -417,17 +453,17 @@ function generateCompensationCafPdf_(cycleId) {
     return existingId;
   }
 
-  const managerSignature = loadRequiredSignatureBlob_(
-    'Manager',
-    cycle['Manager Signature File ID']
+  const managerSignature = validateAuthoritativeRoleSignature_(
+    cycle,
+    PR.ROLE.MANAGER
   );
-  const employeeSignature = loadRequiredSignatureBlob_(
-    'Employee',
-    cycle['Employee Signature File ID']
+  const employeeSignature = validateAuthoritativeRoleSignature_(
+    cycle,
+    PR.ROLE.EMPLOYEE
   );
-  const hrSignature = loadRequiredSignatureBlob_(
-    'HR',
-    cycle['HR Signature File ID']
+  const hrSignature = validateAuthoritativeRoleSignature_(
+    cycle,
+    PR.ROLE.HR
   );
 
   const doc = DocumentApp.create(
@@ -598,41 +634,114 @@ function generateCompensationCafPdf_(cycleId) {
 }
 
 /**
- * Load and validate a required signature image blob.
- * Fails closed: a missing file ID or unreadable/non-image artifact throws so
- * the CAF cannot be sealed with a placeholder signature.
+ * Map a PR role to its combined authoritative-signature state flag.
  */
-function loadRequiredSignatureBlob_(role, fileId) {
-  const id = String(fileId || '').trim();
-  if (!id) {
+function isAuthoritativeRoleSigned_(cycle, role) {
+  const state = getCombinedSignatureState_(cycle);
+  if (role === PR.ROLE.MANAGER) return !!state.managerSigned;
+  if (role === PR.ROLE.EMPLOYEE) return !!state.employeeSigned;
+  if (role === PR.ROLE.HR) return !!state.hrSigned;
+  throw new Error('Unknown signature role: ' + String(role));
+}
+
+/**
+ * Validate and load the authoritative role signature image for the CAF.
+ *
+ * Fails closed. Proves, before returning the blob, that the artifact is:
+ *   - the authoritative winning signature for this role (same file ID recorded
+ *     across both the Manager Review and Self-Evaluation signature columns),
+ *   - signed (role signature state is true),
+ *   - stored in an approved signature folder (Review Records or Signature
+ *     Recovery),
+ *   - named deterministically for THIS cycle + role (canonical or legacy), and
+ *   - a readable PNG whose provenance marker (when present) matches the exact
+ *     cycle + role.
+ *
+ * This blocks a mislinked File ID (e.g. pointing to another role's or another
+ * cycle's valid PNG) from sealing a compensation agreement.
+ */
+function validateAuthoritativeRoleSignature_(cycle, role) {
+  const cycleId = String(cycle['Cycle ID'] || '');
+
+  if (!isAuthoritativeRoleSigned_(cycle, role)) {
+    throw new Error(
+      role +
+        ' signature is not the authoritative winner for this cycle; CAF cannot be sealed.'
+    );
+  }
+
+  const fileId = String(cycle[role + ' Signature File ID'] || '').trim();
+  if (!fileId) {
     throw new Error(
       role + ' signature file ID is missing; CAF cannot be sealed.'
     );
   }
-  let blob;
+
+  let file;
   try {
-    blob = DriveApp.getFileById(id).getBlob();
+    file = DriveApp.getFileById(fileId);
   } catch (error) {
     throw new Error(
       role +
         ' signature image could not be read (' +
-        id +
+        fileId +
         '): ' +
         String(error.message || error)
     );
   }
-  const contentType = String((blob && blob.getContentType()) || '');
-  if (contentType.indexOf('image/') !== 0) {
+
+  const settings = getSettings_();
+  const allowedFolders = [
+    String(settings.REVIEW_FOLDER_ID || ''),
+    String(settings.SIGNATURE_RECOVERY_FOLDER_ID || ''),
+  ].filter(Boolean);
+  const inApprovedFolder = allowedFolders.some(function (folderId) {
+    return isDriveFileInFolder_(file, folderId);
+  });
+  if (!inApprovedFolder) {
     throw new Error(
       role +
-        ' signature artifact is not a valid image (' +
-        id +
-        ', type=' +
-        contentType +
+        ' signature artifact is not in an approved signature folder (' +
+        fileId +
         ').'
     );
   }
-  return blob;
+
+  const mime = String(file.getMimeType() || '');
+  if (mime !== MimeType.PNG && mime !== 'image/png') {
+    throw new Error(
+      role + ' signature artifact must be image/png (' + fileId + ').'
+    );
+  }
+
+  const name = String(file.getName() || '');
+  const canonical = buildCanonicalSignatureFileName_(cycleId, role);
+  const legacy = buildLegacySignatureFileName_(cycleId, role);
+  const provenance = parseSignatureProvenance_(
+    String(file.getDescription() || '')
+  );
+  const cycleRoleProof =
+    name === legacy ||
+    (name === canonical &&
+      (!provenance ||
+        (provenance.cycleId === cycleId &&
+          provenance.role === signatureRoleToken_(role)))) ||
+    (provenance &&
+      provenance.cycleId === cycleId &&
+      provenance.role === signatureRoleToken_(role));
+
+  if (!cycleRoleProof) {
+    throw new Error(
+      role +
+        ' signature artifact does not prove role + cycle provenance (' +
+        fileId +
+        ', name="' +
+        name +
+        '").'
+    );
+  }
+
+  return file.getBlob();
 }
 
 function appendCompensationSignatureBlock_(body, role, name, signatureBlob, signedAt) {
@@ -693,22 +802,15 @@ function recoverCompensationCafPdf_(cycleId) {
     };
   }
 
-  let candidates;
-  try {
-    candidates = listCompensationCafCandidates_(cycleId, record);
-  } catch (error) {
-    if (error && error.code === 'AMBIGUOUS_CAF_ARTIFACTS') {
-      recordCompensationCafAmbiguityAlert_(
-        cycleId,
-        record,
-        error.candidates
-      );
-    }
-    throw error;
-  }
+  // Separate valid from rejected artifacts. A rejected (no-provenance/foreign)
+  // same-named file never blocks reconciling a single valid candidate and is
+  // retained as evidence — never trashed.
+  const artifacts = collectCompensationCafArtifacts_(cycleId, record);
+  const candidates = artifacts.valid;
+  const rejected = artifacts.rejected || [];
 
   if (candidates.length > 1) {
-    recordCompensationCafAmbiguityAlert_(cycleId, record, candidates);
+    recordCompensationCafAmbiguityAlert_(cycleId, record, candidates, rejected);
     const error = new Error(
       'Multiple deterministic CAF PDF artifacts exist for ' +
         cycleId +
@@ -720,26 +822,44 @@ function recoverCompensationCafPdf_(cycleId) {
   }
 
   if (candidates.length === 1) {
-    const sealed = commitCompensationCafSealed_(cycleId, candidates[0].id, {});
+    commitCompensationCafSealed_(cycleId, candidates[0].id, {});
     audit_(
       cycleId,
       'Compensation CAF PDF reconciled from Drive',
       email,
       V31_COMP.PDF.UNKNOWN,
       V31_COMP.PDF.COMPLETE,
-      JSON.stringify({ pdfId: candidates[0].id })
+      JSON.stringify({ pdfId: candidates[0].id, rejected: rejected })
     );
-    return { ok: true, reconciled: true, pdfId: candidates[0].id };
+    return {
+      ok: true,
+      reconciled: true,
+      pdfId: candidates[0].id,
+      rejected: rejected,
+    };
   }
 
-  // Zero candidates: it is safe to clear the Unknown claim and regenerate.
+  // Zero valid candidates: clear the Unknown claim and regenerate. Preserve any
+  // rejected-artifact evidence in the record's last error for HR visibility.
+  const rejectionNote = rejected.length
+    ? ' Rejected same-named artifacts retained (not trashed): ' +
+      rejected
+        .map(function (item) {
+          return item.id + ' (' + item.reason + ')';
+        })
+        .join('; ')
+    : '';
   withLock_(function () {
     const loc = findCompensationRecordByCycle_(cycleId);
     const rec = loc.object;
-    if (String(rec['CAF PDF Status']) === V31_COMP.PDF.UNKNOWN) {
+    if (
+      String(rec['CAF PDF Status']) === V31_COMP.PDF.UNKNOWN ||
+      String(rec['CAF PDF Status']) === V31_COMP.PDF.FAILED
+    ) {
       rec['CAF PDF Status'] = V31_COMP.PDF.PENDING;
       rec['CAF PDF Last Error'] =
-        'HR recovery: no durable CAF artifact found; regenerating.';
+        'HR recovery: no durable valid CAF artifact found; regenerating.' +
+        rejectionNote;
       rec['CAF PDF Attempt ID'] = '';
       rec['CAF PDF Started At'] = '';
       rec['Updated At'] = new Date();
@@ -756,7 +876,12 @@ function recoverCompensationCafPdf(cycleId) {
   return recoverCompensationCafPdf_(String(cycleId || ''));
 }
 
-function recordCompensationCafAmbiguityAlert_(cycleId, record, candidates) {
+function recordCompensationCafAmbiguityAlert_(
+  cycleId,
+  record,
+  candidates,
+  rejected
+) {
   try {
     upsertSystemAlert_({
       alertKey: buildSystemAlertKey_(
@@ -774,6 +899,13 @@ function recordCompensationCafAmbiguityAlert_(cycleId, record, candidates) {
         ),
         candidates: (candidates || []).map(function (item) {
           return { id: String(item.id || ''), name: String(item.name || '') };
+        }),
+        rejected: (rejected || []).map(function (item) {
+          return {
+            id: String(item.id || ''),
+            name: String(item.name || ''),
+            reason: String(item.reason || ''),
+          };
         }),
       },
       lastError:

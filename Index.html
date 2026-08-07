@@ -1930,11 +1930,29 @@ async function refreshCompensationQueue() {
                 escapeAttr(item.cycleId) +
                 '\')">Recover CAF PDF</button>'
               : '') +
-            (item.rateUpdateStatus === 'Delivery Unknown' ||
-            item.rateUpdateStatus === 'Conflict'
+            (item.rateUpdateStatus === 'Delivery Unknown'
               ? '<br><button class="button outline" onclick="recoverCompensationRate(\'' +
                 escapeAttr(item.cycleId) +
                 '\')">Resolve Rate Update</button>'
+              : '') +
+            (item.rateUpdateStatus === 'Conflict'
+              ? '<div class="field-help" style="margin-top:6px">' +
+                'Rate conflict — the system will not overwrite automatically.<br>' +
+                'Expected predecessor: ' +
+                escapeHtml(
+                  formatMoneyDisplay(item.expectedPredecessorPayRate)
+                ) +
+                '<br>Approved new rate: ' +
+                (item.finalApprovedPayRate != null
+                  ? escapeHtml(formatMoneyDisplay(item.finalApprovedPayRate))
+                  : '—') +
+                (item.rateUpdateLastError
+                  ? '<br>' + escapeHtml(item.rateUpdateLastError)
+                  : '') +
+                '</div>' +
+                '<button class="button outline" onclick="recoverCompensationRate(\'' +
+                escapeAttr(item.cycleId) +
+                '\')">Recheck Rate Update</button>'
               : '') +
             '</td></tr>'
           );

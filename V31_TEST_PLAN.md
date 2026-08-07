@@ -492,6 +492,19 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] HR owner-decision-required alert fires once when all three are submitted
 - [ ] Owner-decision alert auto-resolves when the decision is recorded
 - [ ] Adjustment-bearing review cannot reach Complete until CAF is sealed
+
+### Compensation edges (signature provenance / finalization gate)
+
+- [ ] Manager Signature File ID points to Employee's valid image → CAF refuses to seal
+- [ ] Manager Signature File ID points to another cycle's Manager image → CAF refuses to seal
+- [ ] Arbitrary valid PNG (no provenance, wrong name) → CAF refuses to seal
+- [ ] Compensation Decision = Pending + all three signatures → review cannot Complete
+- [ ] Compensation Decision blank/unexpected legacy value → finalization gate fails closed
+- [ ] No Adjustment Recommended → finalization gate skips (no CAF required)
+- [ ] Same deterministic CAF name: 1 valid + 1 no-provenance file → valid still reconciled, rejected retained (not trashed)
+- [ ] Two valid provenance-matching CAFs → ambiguity remains Blocking
+- [ ] Rate Conflict + Recheck without underlying change → stays Conflict, no overwrite
+- [ ] Rate Conflict + HR corrects predecessor + Recheck → approved rate applied safely
 - [ ] Manager can continue the manager review independently
 - [ ] Employee self-evaluation remains hidden before the meeting
 - [ ] Finalize & Release is blocked until compensation decision is recorded

@@ -287,18 +287,92 @@ function runV31CompensationTests_() {
     );
   });
 
-  check('Signature blob loader fails closed on missing ID', function () {
-    let threw = false;
-    try {
-      loadRequiredSignatureBlob_('Manager', '');
-    } catch (error) {
-      threw = true;
-      assert_(
-        String(error.message).indexOf('missing') >= 0,
-        'Missing signature ID must fail closed'
-      );
-    }
-    assert_(threw, 'Empty signature file ID must throw');
+  check('Finalization disposition: not required → skip', function () {
+    assert_(
+      compensationFinalizationDisposition_(
+        V31.COMPENSATION.PENDING,
+        false
+      ) === 'skip',
+      'Compensation not required must skip'
+    );
+  });
+
+  check('Finalization disposition: No Adjustment → skip', function () {
+    assert_(
+      compensationFinalizationDisposition_(V31.COMPENSATION.NONE, true) ===
+        'skip',
+      'No Adjustment must skip'
+    );
+  });
+
+  check('Finalization disposition: Adjustment → require', function () {
+    assert_(
+      compensationFinalizationDisposition_(
+        V31.COMPENSATION.ADJUSTMENT,
+        true
+      ) === 'require',
+      'Adjustment must require a sealed CAF'
+    );
+  });
+
+  check('Finalization disposition: Pending → block (fail closed)', function () {
+    assert_(
+      compensationFinalizationDisposition_(
+        V31.COMPENSATION.PENDING,
+        true
+      ) === 'block',
+      'Pending must fail closed'
+    );
+  });
+
+  check('Finalization disposition: blank/unexpected → block', function () {
+    assert_(
+      compensationFinalizationDisposition_('', true) === 'block',
+      'Blank decision must fail closed'
+    );
+    assert_(
+      compensationFinalizationDisposition_('Weird Legacy Value', true) ===
+        'block',
+      'Unexpected legacy value must fail closed'
+    );
+  });
+
+  check('Authoritative signature requires MGR+SELF+field agreement', function () {
+    const signed = {
+      'Manager Signature File ID': 'sig-A',
+      'MGR Manager Signature ID': 'sig-A',
+      'SELF Manager Signature ID': 'sig-A',
+    };
+    assert_(
+      isAuthoritativeRoleSigned_(signed, PR.ROLE.MANAGER) === true,
+      'Matching winner across both documents must be authoritative'
+    );
+  });
+
+  check('Mislinked signature File ID is not authoritative', function () {
+    // Manager field points to a foreign/other artifact that never won the PR
+    // signature race → must NOT be treated as the authoritative signature.
+    const mislinked = {
+      'Manager Signature File ID': 'foreign-image',
+      'MGR Manager Signature ID': 'sig-A',
+      'SELF Manager Signature ID': 'sig-A',
+    };
+    assert_(
+      isAuthoritativeRoleSigned_(mislinked, PR.ROLE.MANAGER) === false,
+      'A mislinked signature File ID must fail the authoritative check'
+    );
+  });
+
+  check('Split signature (MGR only) is not authoritative', function () {
+    const split = {
+      'Manager Signature File ID': 'sig-A',
+      'MGR Manager Signature ID': 'sig-A',
+      'SELF Manager Signature ID': '',
+    };
+    assert_(
+      isAuthoritativeRoleSigned_(split, PR.ROLE.MANAGER) === false,
+      'Signature must win across both documents to be authoritative'
+    );
   });
 
   const failed = results.filter(function (item) {

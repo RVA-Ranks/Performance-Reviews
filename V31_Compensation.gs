@@ -433,16 +433,38 @@ function ensureCompensationHistory_(cycleId) {
  * completion: either no adjustment was recommended, or an adjustment exists
  * and its CAF PDF has been sealed (Status = Complete with a Final PDF ID).
  */
+/**
+ * Pure classification of the compensation finalization requirement.
+ *   'skip'    → compensation not required, or explicit No Adjustment
+ *   'require' → an adjustment was recommended; a sealed CAF is required
+ *   'block'   → Pending, blank, or unexpected value; completion must be blocked
+ */
+function compensationFinalizationDisposition_(decisionRaw, compensationRequired) {
+  if (!compensationRequired) {
+    return 'skip';
+  }
+  const decision = normalizeCompensationDecision_(decisionRaw);
+  if (decision === V31.COMPENSATION.NONE) {
+    return 'skip';
+  }
+  if (decision === V31.COMPENSATION.ADJUSTMENT) {
+    return 'require';
+  }
+  return 'block';
+}
+
 function isCompensationSealedForFinalization_(cycle) {
   const settings = getSettings_();
-  if (!v31Boolean_(settings.COMPENSATION_DECISION_REQUIRED, true)) {
+  const disposition = compensationFinalizationDisposition_(
+    cycle['Compensation Decision'],
+    v31Boolean_(settings.COMPENSATION_DECISION_REQUIRED, true)
+  );
+  // Fail closed: only 'skip' passes without a sealed CAF; 'block' never passes.
+  if (disposition === 'skip') {
     return true;
   }
-  const decision = normalizeCompensationDecision_(
-    cycle['Compensation Decision']
-  );
-  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
-    return true;
+  if (disposition === 'block') {
+    return false;
   }
   const recordLoc = findCompensationRecordByCycleOptional_(cycle['Cycle ID']);
   if (!recordLoc) {
@@ -460,13 +482,26 @@ function isCompensationSealedForFinalization_(cycle) {
  * is gated (option A: no falsely-healthy completion).
  */
 function ensureCompensationSealedForFinalization_(cycleId) {
+  const settings = getSettings_();
   const cycle = findCycle_(cycleId).object;
-  const decision = normalizeCompensationDecision_(
-    cycle['Compensation Decision']
+  const disposition = compensationFinalizationDisposition_(
+    cycle['Compensation Decision'],
+    v31Boolean_(settings.COMPENSATION_DECISION_REQUIRED, true)
   );
-  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
-    return { skipped: true, reason: 'no-adjustment' };
+
+  if (disposition === 'skip') {
+    return { skipped: true, reason: 'no-adjustment-or-not-required' };
   }
+
+  // Pending, blank, or unexpected values are not a valid completion state.
+  if (disposition === 'block') {
+    throw new Error(
+      'Review completion is blocked: the compensation decision is "' +
+        String(cycle['Compensation Decision'] || '(blank)') +
+        '" and must be resolved (No Adjustment or a sealed adjustment) first.'
+    );
+  }
+
   const result = maybeGenerateCompensationPdfAfterSignatures_(cycleId);
   const refreshed = findCycle_(cycleId).object;
   if (!isCompensationSealedForFinalization_(refreshed)) {
@@ -1292,6 +1327,8 @@ function getCompensationQueue() {
           ),
           cafPdfStatus: String(record['CAF PDF Status'] || ''),
           rateUpdateStatus: String(record['Rate Update Status'] || ''),
+          rateUpdateLastError: String(record['Rate Update Last Error'] || ''),
+          expectedPredecessorPayRate: Number(record['Original Pay Rate'] || 0),
           submittedAt: formatDateTime_(
             record['Manager Recommendation Submitted At']
           ),

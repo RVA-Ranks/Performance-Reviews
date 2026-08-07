@@ -1,5 +1,26 @@
 # V3.1 Changelog
 
+## Compensation edges — signature provenance & finalization gate (`feat/compensation-integration`)
+
+- CAF signatures now validate authoritative **role + cycle provenance**, not
+  just image MIME. `validateAuthoritativeRoleSignature_` proves the artifact is
+  the winning signature for that role (same File ID across the Manager Review
+  and Self-Evaluation columns), is signed, lives in an approved signature
+  folder, uses the deterministic canonical/legacy name, and (when present)
+  carries a matching signature provenance marker. A mislinked File ID pointing
+  to another role's or another cycle's PNG can no longer seal a CAF.
+- Finalization compensation gate now fails closed via a pure
+  `compensationFinalizationDisposition_`: only explicit **No Adjustment** (or
+  compensation not required) passes without a sealed CAF; **Pending**, blank,
+  or unexpected legacy values block completion.
+- `listCompensationCafCandidates_` no longer aborts on the first invalid
+  same-named file. `collectCompensationCafArtifacts_` returns valid + rejected;
+  a single valid candidate still reconciles, rejected artifacts are retained as
+  evidence (never trashed) and reported in alerts / last-error.
+- Compensation Queue Conflict action renamed to **Recheck Rate Update** and now
+  shows the expected predecessor, approved new rate, and the conflict reason;
+  no force-overwrite is offered.
+
 ## Compensation hardening — CAF recovery, history, rate integrity (`feat/compensation-integration`)
 
 - CAF signature embedding now fails closed: all three PR signature artifacts
