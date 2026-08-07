@@ -726,6 +726,17 @@ function saveIndependentReview_(
     dispatchPendingWorkflowNotifications_(cycleId);
   }
 
+  if (submit) {
+    try {
+      maybeRaiseCompensationOwnerAlert_(findCycle_(cycleId).object);
+    } catch (compAlertError) {
+      Logger.log(
+        'Compensation owner alert (submit) failed: ' +
+          String(compAlertError.message || compAlertError)
+      );
+    }
+  }
+
   return {
     ok: saved.ok,
     status: saved.status,

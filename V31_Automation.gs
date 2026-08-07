@@ -3820,6 +3820,17 @@ function runReviewAutomationCore_() {
 
   assertAutomationOwner_(settings);
   const outbox = dispatchPendingWorkflowNotificationsForAllCycles_();
+  let historyRepairs = { repaired: 0, skipped: 0, failed: 0 };
+  try {
+    historyRepairs = processDueCompensationHistoryRepairs_();
+  } catch (historyRepairError) {
+    historyRepairs = {
+      repaired: 0,
+      skipped: 0,
+      failed: 1,
+      error: String(historyRepairError.message || historyRepairError),
+    };
+  }
   let rateUpdates = { updated: 0, skipped: 0, failed: 0 };
   try {
     rateUpdates = processDueCompensationRateUpdates_();
@@ -3983,6 +3994,7 @@ function runReviewAutomationCore_() {
     outbox: outbox,
     systemAlerts: systemAlerts,
     compensationRateUpdates: rateUpdates,
+    compensationHistoryRepairs: historyRepairs,
     results: results,
     message:
       created +

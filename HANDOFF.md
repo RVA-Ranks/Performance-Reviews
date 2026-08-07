@@ -965,6 +965,34 @@ V3.1 fields:
 - Compensation Decision At
 - Compensation Decision By
 
+> Compensation summary/gate mirrors also live on `ReviewCycles`
+> (`Compensation Status`, `Compensation Record ID`, `CAF Final PDF ID`). The
+> authoritative detailed workflow record is `CompensationRecords`.
+
+## `CompensationRecords` (authoritative compensation workflow)
+
+Key durability columns beyond identity/rate fields:
+
+- `Manager Business Justification` — required reason; surfaced in Queue, CAF, history.
+- `CAF PDF Status` / `CAF PDF Attempt ID` / `CAF PDF Started At` /
+  `CAF Final PDF ID` / `CAF PDF Last Error` — crash-safe PDF lifecycle
+  (`Pending → Generating → Complete`, with `Delivery Unknown`). CAF files carry
+  a provenance marker on the file description for candidate validation.
+- `Compensation History Status` / `Compensation History Attempt ID` /
+  `Compensation History Written At` / `Compensation History Last Error` —
+  independent, idempotent history lifecycle so a sealed CAF can repair missing
+  history later.
+- `Rate Update Status` / `Rate Update Attempt ID` / `Rate Update Started At` /
+  `Rate Updated At` / `Rate Update Last Error` — conflict-aware roster update
+  (`Pending → Updating → Complete`, plus `Pending Effective Date`,
+  `Delivery Unknown`, `Conflict`). The approved rate is written only when the
+  live `Current Pay Rate` still equals the expected predecessor.
+
+HR recovery entry points (any active HR user): `recoverCompensationCafPdf`,
+`recoverCompensationRateUpdate`. Blocking conditions raise durable system
+alerts (`caf:ambiguous`, `rate-update-conflict`, `owner-decision-required`).
+Review completion is gated on the CAF being sealed when an adjustment exists.
+
 ## `ReviewAuditLog`
 
 Columns:

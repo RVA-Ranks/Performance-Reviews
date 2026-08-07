@@ -25,10 +25,12 @@ const V31_COMP = Object.freeze({
 
   RATE_UPDATE: {
     PENDING: 'Pending',
+    UPDATING: 'Updating',
     PENDING_EFFECTIVE: 'Pending Effective Date',
     COMPLETE: 'Complete',
     FAILED: 'Failed',
     UNKNOWN: 'Delivery Unknown',
+    CONFLICT: 'Conflict',
   },
 
   PDF: {
@@ -37,6 +39,13 @@ const V31_COMP = Object.freeze({
     COMPLETE: 'Complete',
     FAILED: 'Failed',
     UNKNOWN: 'Delivery Unknown',
+  },
+
+  HISTORY: {
+    PENDING: 'Pending',
+    WRITING: 'Writing',
+    COMPLETE: 'Complete',
+    FAILED: 'Failed',
   },
 
   RECORD_HEADERS: [
@@ -51,6 +60,7 @@ const V31_COMP = Object.freeze({
     'Manager Recommended Pay Rate',
     'Manager Recommended Annual Salary',
     'Manager Recommended Percent',
+    'Manager Business Justification',
     'Manager Proposed Effective Date',
     'Manager Recommendation Submitted At',
     'Manager Recommendation Submitted By',
@@ -71,8 +81,13 @@ const V31_COMP = Object.freeze({
     'CAF Final PDF Created At',
     'CAF PDF Last Error',
     'CAF PDF Recovery Details JSON',
+    'Compensation History Status',
+    'Compensation History Attempt ID',
+    'Compensation History Written At',
+    'Compensation History Last Error',
     'Rate Update Status',
     'Rate Update Attempt ID',
+    'Rate Update Started At',
     'Rate Updated At',
     'Rate Update Last Error',
     'Created At',
@@ -96,6 +111,7 @@ const V31_COMP = Object.freeze({
     'Manager Recommended Pay Rate',
     'Manager Recommended Annual Salary',
     'Manager Recommended Percent',
+    'Manager Business Justification',
     'Recommendation Accepted',
     'Owner Name',
     'Owner Decision At',
@@ -320,6 +336,9 @@ function appendCompensationHistoryOnce_(record, finalizedBy) {
     'Manager Recommended Percent': Number(
       record['Manager Recommended Percent'] || 0
     ),
+    'Manager Business Justification': String(
+      record['Manager Business Justification'] || ''
+    ),
     'Recommendation Accepted': String(
       record['Recommendation Accepted'] || ''
     ),
@@ -336,7 +355,128 @@ function appendCompensationHistoryOnce_(record, finalizedBy) {
   return { appended: true, historyId: historyId };
 }
 
+/**
+ * Idempotently ensure a CompensationHistory row exists for a sealed CAF.
+ *
+ * A sealed CAF (Status=Complete with a Final PDF ID) must always yield exactly
+ * one immutable history row. This can be called again after a partial failure
+ * (even when the CAF itself is already Complete) to repair missing history.
+ * Progress is tracked in a dedicated durable "Compensation History Status".
+ */
+function ensureCompensationHistory_(cycleId) {
+  ensureCompensationDataModel_();
+  return withLock_(function () {
+    const recordLoc = findCompensationRecordByCycle_(cycleId);
+    const record = recordLoc.object;
+    const recordId = String(record['Compensation Record ID'] || '');
+
+    // History only exists for a sealed final compensation agreement.
+    if (
+      String(record['Status']) !== V31_COMP.STATUS.COMPLETE ||
+      !String(record['CAF Final PDF ID'] || '')
+    ) {
+      return { ok: false, reason: 'not-sealed' };
+    }
+
+    if (
+      String(record['Compensation History Status'] || '') ===
+        V31_COMP.HISTORY.COMPLETE &&
+      historyExistsForRecord_(recordId)
+    ) {
+      return { ok: true, alreadyComplete: true };
+    }
+
+    const attemptId = Utilities.getUuid();
+    record['Compensation History Status'] = V31_COMP.HISTORY.WRITING;
+    record['Compensation History Attempt ID'] = attemptId;
+    record['Updated At'] = new Date();
+    writeCompensationRecord_(recordLoc.rowNumber, record);
+    SpreadsheetApp.flush();
+
+    try {
+      const appendResult = appendCompensationHistoryOnce_(
+        record,
+        Session.getEffectiveUser().getEmail()
+      );
+      record['Compensation History Status'] = V31_COMP.HISTORY.COMPLETE;
+      record['Compensation History Attempt ID'] = '';
+      record['Compensation History Written At'] = new Date();
+      record['Compensation History Last Error'] = '';
+      record['Updated At'] = new Date();
+      writeCompensationRecord_(recordLoc.rowNumber, record);
+      SpreadsheetApp.flush();
+      return {
+        ok: true,
+        appended: !!appendResult.appended,
+        historyId: appendResult.historyId,
+      };
+    } catch (error) {
+      const failLoc = findCompensationRecordByCycle_(cycleId);
+      const failRecord = failLoc.object;
+      failRecord['Compensation History Status'] = V31_COMP.HISTORY.FAILED;
+      failRecord['Compensation History Attempt ID'] = '';
+      failRecord['Compensation History Last Error'] = String(
+        error.message || error
+      );
+      failRecord['Updated At'] = new Date();
+      writeCompensationRecord_(failLoc.rowNumber, failRecord);
+      SpreadsheetApp.flush();
+      throw error;
+    }
+  });
+}
+
 /* ============================ GATE ============================ */
+
+/**
+ * True when the cycle's compensation obligation is fully sealed for review
+ * completion: either no adjustment was recommended, or an adjustment exists
+ * and its CAF PDF has been sealed (Status = Complete with a Final PDF ID).
+ */
+function isCompensationSealedForFinalization_(cycle) {
+  const settings = getSettings_();
+  if (!v31Boolean_(settings.COMPENSATION_DECISION_REQUIRED, true)) {
+    return true;
+  }
+  const decision = normalizeCompensationDecision_(
+    cycle['Compensation Decision']
+  );
+  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
+    return true;
+  }
+  const recordLoc = findCompensationRecordByCycleOptional_(cycle['Cycle ID']);
+  if (!recordLoc) {
+    return false;
+  }
+  return (
+    String(recordLoc.object['Status']) === V31_COMP.STATUS.COMPLETE &&
+    !!String(recordLoc.object['CAF Final PDF ID'] || '')
+  );
+}
+
+/**
+ * Ensure the CAF is generated/sealed as part of finalization for an
+ * adjustment-bearing cycle. Throws if it cannot be sealed so review Complete
+ * is gated (option A: no falsely-healthy completion).
+ */
+function ensureCompensationSealedForFinalization_(cycleId) {
+  const cycle = findCycle_(cycleId).object;
+  const decision = normalizeCompensationDecision_(
+    cycle['Compensation Decision']
+  );
+  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
+    return { skipped: true, reason: 'no-adjustment' };
+  }
+  const result = maybeGenerateCompensationPdfAfterSignatures_(cycleId);
+  const refreshed = findCycle_(cycleId).object;
+  if (!isCompensationSealedForFinalization_(refreshed)) {
+    throw new Error(
+      'Compensation CAF PDF is not sealed yet; review completion is blocked until it is generated. ' +
+        'If this persists, HR must run compensation recovery.'
+    );
+  }
+  return result;
+}
 
 function isV31CompensationComplete_(cycle) {
   const settings = getSettings_();
@@ -473,6 +613,9 @@ function toCompensationRecordView_(record, isHr) {
     managerRecommendedPercentDisplay: roundPercent_(
       Number(record['Manager Recommended Percent'] || 0) * 100
     ),
+    managerBusinessJustification: String(
+      record['Manager Business Justification'] || ''
+    ),
     managerProposedEffectiveDate: formatDate_(
       record['Manager Proposed Effective Date']
     ),
@@ -567,7 +710,7 @@ function submitNoCompensationAdjustment(cycleId, notes) {
 }
 
 function submitCompensationRecommendation(cycleId, payload) {
-  return withLock_(function () {
+  const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
@@ -631,6 +774,7 @@ function submitCompensationRecommendation(cycleId, payload) {
       'Manager Recommended Pay Rate': clean.recommendedRate,
       'Manager Recommended Annual Salary': clean.recommendedAnnual,
       'Manager Recommended Percent': clean.recommendedPercent,
+      'Manager Business Justification': clean.businessJustification,
       'Manager Proposed Effective Date': clean.proposedEffectiveDate,
       'Manager Recommendation Submitted At': now,
       'Manager Recommendation Submitted By': email,
@@ -651,8 +795,13 @@ function submitCompensationRecommendation(cycleId, payload) {
       'CAF Final PDF Created At': '',
       'CAF PDF Last Error': '',
       'CAF PDF Recovery Details JSON': '',
+      'Compensation History Status': V31_COMP.HISTORY.PENDING,
+      'Compensation History Attempt ID': '',
+      'Compensation History Written At': '',
+      'Compensation History Last Error': '',
       'Rate Update Status': V31_COMP.RATE_UPDATE.PENDING,
       'Rate Update Attempt ID': '',
+      'Rate Update Started At': '',
       'Rate Updated At': '',
       'Rate Update Last Error': '',
       'Created At': now,
@@ -690,6 +839,18 @@ function submitCompensationRecommendation(cycleId, payload) {
       message: 'Compensation recommendation submitted.',
     };
   });
+
+  // Raised outside the lock: upsertSystemAlert_ acquires its own lock.
+  try {
+    maybeRaiseCompensationOwnerAlert_(findCycle_(cycleId).object);
+  } catch (alertError) {
+    Logger.log(
+      'Owner alert after recommendation failed: ' +
+        String(alertError.message || alertError)
+    );
+  }
+
+  return result;
 }
 
 function validateCompensationRecommendation_(payload, currentRate) {
@@ -746,7 +907,7 @@ function validateCompensationRecommendation_(payload, currentRate) {
 }
 
 function recordCompensationOwnerDecision(cycleId, payload) {
-  return withLock_(function () {
+  const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
     if (!isHrUser_(email)) {
@@ -801,16 +962,20 @@ function recordCompensationOwnerDecision(cycleId, payload) {
       })
     );
 
-    maybeSendCompensationReadyNotification_(cycle);
-
     return {
       ok: true,
       status: V31_COMP.STATUS.AWAITING_SIGNATURES,
       compensationComplete: true,
       cycleStatus: String(cycle['Status']),
       message: 'Owner compensation decision recorded.',
+      actorEmail: email,
     };
   });
+
+  // Resolved outside the lock: resolveSystemAlertCore_ acquires its own lock.
+  resolveCompensationOwnerAlert_(cycleId, result.actorEmail);
+
+  return result;
 }
 
 function validateOwnerDecisionPayload_(payload, record) {
@@ -1110,6 +1275,9 @@ function getCompensationQueue() {
           managerRecommendedPercentDisplay: roundPercent_(
             Number(record['Manager Recommended Percent'] || 0) * 100
           ),
+          managerBusinessJustification: String(
+            record['Manager Business Justification'] || ''
+          ),
           finalApprovedPayRate: record['Final Approved Pay Rate']
             ? Number(record['Final Approved Pay Rate'])
             : null,
@@ -1135,22 +1303,168 @@ function getCompensationQueue() {
   };
 }
 
-function maybeSendCompensationReadyNotification_(cycle) {
+function compensationOwnerAlertKey_(cycleId) {
+  return buildSystemAlertKey_(
+    cycleId,
+    'Compensation',
+    'owner-decision-required'
+  );
+}
+
+/**
+ * Durable "owner decision required" HR notification.
+ *
+ * Fires once (deduplicated by alert key) when the manager review, employee
+ * self-evaluation, and compensation recommendation are all submitted and the
+ * record is still awaiting the owner decision. Uses the durable SystemAlerts
+ * ledger so it is not a fire-and-forget email.
+ */
+function maybeRaiseCompensationOwnerAlert_(cycle) {
   try {
-    if (
+    const ready =
       String(cycle['Manager Review Status']) === PR.DOC.SUBMITTED &&
       String(cycle['Self Evaluation Status']) === PR.DOC.SUBMITTED &&
       normalizeCompensationDecision_(cycle['Compensation Decision']) ===
-        V31.COMPENSATION.ADJUSTMENT &&
-      String(cycle['Compensation Status']) ===
-        V31_COMP.STATUS.AWAITING_SIGNATURES
-    ) {
-      // Ready-for-meeting path already notifies; owner decision unlocks READY via updateCycleReadiness_.
+        V31.COMPENSATION.ADJUSTMENT;
+    if (!ready) {
+      return { raised: false };
     }
-  } catch (error) {}
+
+    const recordLoc = findCompensationRecordByCycleOptional_(
+      cycle['Cycle ID']
+    );
+    if (
+      !recordLoc ||
+      String(recordLoc.object['Status']) !== V31_COMP.STATUS.AWAITING_OWNER
+    ) {
+      return { raised: false };
+    }
+
+    upsertSystemAlert_({
+      alertKey: compensationOwnerAlertKey_(cycle['Cycle ID']),
+      cycleId: String(cycle['Cycle ID']),
+      severity: 'Warning',
+      component: 'Compensation',
+      subject:
+        'Owner compensation decision required for ' +
+        String(cycle['Employee Name'] || ''),
+      details: {
+        employeeName: String(cycle['Employee Name'] || ''),
+        managerName: String(cycle['Manager Name'] || ''),
+        compensationRecordId: String(
+          recordLoc.object['Compensation Record ID'] || ''
+        ),
+        managerRecommendedPercent: Number(
+          recordLoc.object['Manager Recommended Percent'] || 0
+        ),
+        managerBusinessJustification: String(
+          recordLoc.object['Manager Business Justification'] || ''
+        ),
+      },
+      lastError:
+        'Review preparation complete. Record the owner-approved compensation amount in the Compensation Queue.',
+    });
+    return { raised: true };
+  } catch (error) {
+    Logger.log(
+      'Compensation owner alert failed: ' + String(error.message || error)
+    );
+    return { raised: false, error: String(error.message || error) };
+  }
+}
+
+/** Resolve the owner-decision-required alert once HR records the decision. */
+function resolveCompensationOwnerAlert_(cycleId, actorEmail) {
+  try {
+    const alert = findUnresolvedSystemAlertByKey_(
+      compensationOwnerAlertKey_(cycleId)
+    );
+    if (alert) {
+      resolveSystemAlertCore_(
+        alert['Alert ID'],
+        actorEmail || getCurrentUserEmail_(),
+        'Owner compensation decision recorded.'
+      );
+    }
+  } catch (error) {
+    Logger.log(
+      'Compensation owner alert resolve failed: ' +
+        String(error.message || error)
+    );
+  }
+}
+
+/* ====================== HISTORY REPAIR SWEEP ====================== */
+
+/**
+ * Repair sweep: guarantee every sealed CAF has exactly one history row.
+ * Handles the partial-failure case where the CAF is Complete but the history
+ * append did not land. Safe to run repeatedly (idempotent).
+ */
+function processDueCompensationHistoryRepairs_() {
+  ensureCompensationDataModel_();
+  const records = getAllObjects_(V31_COMP.RECORDS_SHEET);
+  let repaired = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  records.forEach(function (record) {
+    if (
+      String(record['Status']) !== V31_COMP.STATUS.COMPLETE ||
+      !String(record['CAF Final PDF ID'] || '')
+    ) {
+      skipped += 1;
+      return;
+    }
+    const historyStatus = String(
+      record['Compensation History Status'] || ''
+    );
+    const recordId = String(record['Compensation Record ID'] || '');
+    if (
+      historyStatus === V31_COMP.HISTORY.COMPLETE &&
+      historyExistsForRecord_(recordId)
+    ) {
+      skipped += 1;
+      return;
+    }
+    try {
+      ensureCompensationHistory_(record['Review Cycle ID']);
+      repaired += 1;
+    } catch (error) {
+      failed += 1;
+      Logger.log(
+        'Compensation history repair failed for ' +
+          recordId +
+          ': ' +
+          String(error.message || error)
+      );
+    }
+  });
+
+  return { repaired: repaired, skipped: skipped, failed: failed };
 }
 
 /* ============================ RATE UPDATE ============================ */
+
+/**
+ * Pure decision for a due rate update given rounded currency inputs.
+ *  - 'complete': roster already equals the approved rate (nothing to do)
+ *  - 'conflict': roster does not match the expected predecessor (do NOT write)
+ *  - 'apply': safe to overwrite the predecessor with the approved rate
+ */
+function classifyCompensationRateUpdate_(
+  actualCurrent,
+  expectedPredecessor,
+  finalRate
+) {
+  if (roundCurrency_(actualCurrent) === roundCurrency_(finalRate)) {
+    return 'complete';
+  }
+  if (roundCurrency_(actualCurrent) !== roundCurrency_(expectedPredecessor)) {
+    return 'conflict';
+  }
+  return 'apply';
+}
 
 function processDueCompensationRateUpdates_() {
   ensureCompensationDataModel_();
@@ -1168,7 +1482,12 @@ function processDueCompensationRateUpdates_() {
     const rateStatus = String(
       record['Rate Update Status'] || V31_COMP.RATE_UPDATE.PENDING
     );
-    if (rateStatus === V31_COMP.RATE_UPDATE.COMPLETE) {
+    if (
+      rateStatus === V31_COMP.RATE_UPDATE.COMPLETE ||
+      rateStatus === V31_COMP.RATE_UPDATE.CONFLICT ||
+      rateStatus === V31_COMP.RATE_UPDATE.UNKNOWN
+    ) {
+      // Complete needs nothing; Conflict/Unknown require explicit HR recovery.
       skipped += 1;
       return;
     }
@@ -1209,17 +1528,45 @@ function processDueCompensationRateUpdates_() {
 }
 
 function applyCompensationRateUpdateOnce_(cycleId) {
-  return withLock_(function () {
+  let conflictAlert = null;
+  try {
+    return withLock_(function () {
     const recordLoc = findCompensationRecordByCycle_(cycleId);
     const record = recordLoc.object;
     if (String(record['Status']) !== V31_COMP.STATUS.COMPLETE) {
       throw new Error('Compensation record is not complete.');
     }
-    if (
-      String(record['Rate Update Status']) ===
-      V31_COMP.RATE_UPDATE.COMPLETE
-    ) {
+    const currentStatus = String(record['Rate Update Status'] || '');
+    if (currentStatus === V31_COMP.RATE_UPDATE.COMPLETE) {
       return { alreadyComplete: true };
+    }
+    if (currentStatus === V31_COMP.RATE_UPDATE.CONFLICT) {
+      throw new Error(
+        'Compensation rate update is in Conflict and requires HR resolution.'
+      );
+    }
+
+    // Reclaim a stale in-flight write (process died mid-update).
+    if (currentStatus === V31_COMP.RATE_UPDATE.UPDATING) {
+      if (isDeliveryClaimStale_(record['Rate Update Started At'])) {
+        record['Rate Update Status'] = V31_COMP.RATE_UPDATE.UNKNOWN;
+        record['Rate Update Last Error'] =
+          'Rate update claim went stale before completion confirmation.';
+        record['Rate Update Attempt ID'] = '';
+        record['Rate Update Started At'] = '';
+        record['Updated At'] = new Date();
+        writeCompensationRecord_(recordLoc.rowNumber, record);
+        SpreadsheetApp.flush();
+        throw new Error(
+          'Compensation rate update is Delivery Unknown and requires HR recovery.'
+        );
+      }
+      throw new Error('Compensation rate update is already in progress.');
+    }
+    if (currentStatus === V31_COMP.RATE_UPDATE.UNKNOWN) {
+      throw new Error(
+        'Compensation rate update is Delivery Unknown and requires HR recovery.'
+      );
     }
 
     const effective = v31Date_(record['Compensation Effective Date']);
@@ -1231,11 +1578,6 @@ function applyCompensationRateUpdateOnce_(cycleId) {
       writeCompensationRecord_(recordLoc.rowNumber, record);
       return { pendingEffective: true };
     }
-
-    const attemptId = Utilities.getUuid();
-    record['Rate Update Attempt ID'] = attemptId;
-    record['Updated At'] = new Date();
-    writeCompensationRecord_(recordLoc.rowNumber, record);
 
     const employeeEmail = normalizeEmail_(record['Employee Email']);
     const assignments = getSpreadsheet_().getSheetByName(
@@ -1249,26 +1591,120 @@ function applyCompensationRateUpdateOnce_(cycleId) {
       throw new Error('Current Pay Rate column is missing.');
     }
 
-    let updatedRow = false;
+    let targetRow = -1;
     for (let row = 1; row < values.length; row++) {
-      if (normalizeEmail_(values[row][emailIndex]) !== employeeEmail) {
-        continue;
+      if (normalizeEmail_(values[row][emailIndex]) === employeeEmail) {
+        targetRow = row;
+        break;
       }
-      assignments
-        .getRange(row + 1, rateIndex + 1)
-        .setValue(Number(record['Final Approved Pay Rate']));
-      updatedRow = true;
-      break;
     }
-    if (!updatedRow) {
+    if (targetRow < 0) {
       throw new Error('Employee assignment row not found for rate update.');
+    }
+
+    // Conflict guard: only overwrite when the live rate still equals the
+    // expected predecessor (this record's Original Pay Rate). If someone or
+    // something else changed it, do not clobber payroll data.
+    const expectedPredecessor = roundCurrency_(
+      Number(record['Original Pay Rate'] || 0)
+    );
+    const actualCurrent = roundCurrency_(
+      Number(values[targetRow][rateIndex] || 0)
+    );
+    const finalRate = roundCurrency_(
+      Number(record['Final Approved Pay Rate'] || 0)
+    );
+
+    const classification = classifyCompensationRateUpdate_(
+      actualCurrent,
+      expectedPredecessor,
+      finalRate
+    );
+
+    if (classification === 'complete') {
+      // Already at the approved value (e.g. a prior partial run applied it).
+      record['Rate Update Status'] = V31_COMP.RATE_UPDATE.COMPLETE;
+      record['Rate Updated At'] = record['Rate Updated At'] || new Date();
+      record['Rate Update Last Error'] = '';
+      record['Rate Update Attempt ID'] = '';
+      record['Rate Update Started At'] = '';
+      record['Updated At'] = new Date();
+      writeCompensationRecord_(recordLoc.rowNumber, record);
+      SpreadsheetApp.flush();
+      return { ok: true, reconciled: true };
+    }
+
+    if (classification === 'conflict') {
+      record['Rate Update Status'] = V31_COMP.RATE_UPDATE.CONFLICT;
+      record['Rate Update Last Error'] =
+        'Current Pay Rate (' +
+        actualCurrent +
+        ') does not match the expected predecessor rate (' +
+        expectedPredecessor +
+        '). Rate not overwritten.';
+      record['Rate Update Attempt ID'] = '';
+      record['Rate Update Started At'] = '';
+      record['Updated At'] = new Date();
+      writeCompensationRecord_(recordLoc.rowNumber, record);
+      SpreadsheetApp.flush();
+      // Defer the alert until the lock is released (it locks internally).
+      conflictAlert = {
+        record: record,
+        actualCurrent: actualCurrent,
+        finalRate: finalRate,
+      };
+      throw new Error(
+        'Compensation rate update conflict for ' + cycleId + '.'
+      );
+    }
+
+    // Durable claim: persist Updating BEFORE mutating the roster.
+    const attemptId = Utilities.getUuid();
+    record['Rate Update Status'] = V31_COMP.RATE_UPDATE.UPDATING;
+    record['Rate Update Attempt ID'] = attemptId;
+    record['Rate Update Started At'] = new Date();
+    record['Rate Update Last Error'] = '';
+    record['Updated At'] = new Date();
+    writeCompensationRecord_(recordLoc.rowNumber, record);
+    SpreadsheetApp.flush();
+
+    assignments
+      .getRange(targetRow + 1, rateIndex + 1)
+      .setValue(finalRate);
+    SpreadsheetApp.flush();
+
+    // Reread to confirm the write actually landed.
+    const confirmed = roundCurrency_(
+      Number(
+        assignments.getRange(targetRow + 1, rateIndex + 1).getValue() || 0
+      )
+    );
+    if (confirmed !== finalRate) {
+      record['Rate Update Status'] = V31_COMP.RATE_UPDATE.UNKNOWN;
+      record['Rate Update Last Error'] =
+        'Post-write verification failed (read ' +
+        confirmed +
+        ', expected ' +
+        finalRate +
+        ').';
+      record['Rate Update Attempt ID'] = '';
+      record['Rate Update Started At'] = '';
+      record['Updated At'] = new Date();
+      writeCompensationRecord_(recordLoc.rowNumber, record);
+      SpreadsheetApp.flush();
+      throw new Error(
+        'Compensation rate update could not be verified for ' + cycleId + '.'
+      );
     }
 
     record['Rate Update Status'] = V31_COMP.RATE_UPDATE.COMPLETE;
     record['Rate Updated At'] = new Date();
     record['Rate Update Last Error'] = '';
+    record['Rate Update Attempt ID'] = '';
+    record['Rate Update Started At'] = '';
     record['Updated At'] = new Date();
     writeCompensationRecord_(recordLoc.rowNumber, record);
+    SpreadsheetApp.flush();
 
     audit_(
       cycleId,
@@ -1283,5 +1719,90 @@ function applyCompensationRateUpdateOnce_(cycleId) {
     );
 
     return { ok: true, attemptId: attemptId };
+    });
+  } finally {
+    if (conflictAlert) {
+      raiseCompensationRateConflictAlert_(
+        conflictAlert.record,
+        conflictAlert.actualCurrent,
+        conflictAlert.finalRate
+      );
+    }
+  }
+}
+
+function raiseCompensationRateConflictAlert_(record, actualCurrent, finalRate) {
+  try {
+    upsertSystemAlert_({
+      alertKey: buildSystemAlertKey_(
+        record['Review Cycle ID'],
+        'Compensation',
+        'rate-update-conflict'
+      ),
+      cycleId: String(record['Review Cycle ID'] || ''),
+      severity: 'Blocking',
+      component: 'Compensation',
+      subject:
+        'Compensation rate update conflict for ' +
+        String(record['Employee Name'] || ''),
+      details: {
+        compensationRecordId: String(record['Compensation Record ID'] || ''),
+        expectedPredecessor: Number(record['Original Pay Rate'] || 0),
+        actualCurrent: actualCurrent,
+        finalApprovedPayRate: finalRate,
+      },
+      lastError:
+        'EmployeeAssignments.Current Pay Rate did not match the expected predecessor; the approved rate was not applied.',
+    });
+  } catch (alertError) {
+    Logger.log(
+      'Rate conflict alert persistence failed: ' +
+        String(alertError.message || alertError)
+    );
+  }
+}
+
+/**
+ * HR recovery for a rate update stuck in Delivery Unknown.
+ * Rereads the live roster and reconciles: if it already equals the approved
+ * rate, mark Complete; otherwise reset to a retryable state under conflict
+ * guarding.
+ */
+/** Public HR-callable wrapper for compensation rate-update recovery. */
+function recoverCompensationRateUpdate(cycleId) {
+  return recoverCompensationRateUpdate_(String(cycleId || ''));
+}
+
+function recoverCompensationRateUpdate_(cycleId) {
+  const email = getCurrentUserEmail_();
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may recover compensation rate updates.');
+  }
+  ensureCompensationDataModel_();
+
+  const reset = withLock_(function () {
+    const loc = findCompensationRecordByCycle_(cycleId);
+    const rec = loc.object;
+    const status = String(rec['Rate Update Status'] || '');
+    if (
+      status !== V31_COMP.RATE_UPDATE.UNKNOWN &&
+      status !== V31_COMP.RATE_UPDATE.CONFLICT
+    ) {
+      return { skip: true, status: status };
+    }
+    rec['Rate Update Status'] = V31_COMP.RATE_UPDATE.PENDING;
+    rec['Rate Update Attempt ID'] = '';
+    rec['Rate Update Started At'] = '';
+    rec['Rate Update Last Error'] =
+      'HR recovery: retrying rate update under conflict guarding.';
+    rec['Updated At'] = new Date();
+    writeCompensationRecord_(loc.rowNumber, rec);
+    SpreadsheetApp.flush();
+    return { skip: false };
   });
+
+  if (reset.skip) {
+    return { ok: true, skipped: true, status: reset.status };
+  }
+  return applyCompensationRateUpdateOnce_(cycleId);
 }

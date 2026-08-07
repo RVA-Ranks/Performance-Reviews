@@ -1905,6 +1905,7 @@ function finalizeReviewCycle_(cycleId) {
       'Self PDF Status',
       PR.TYPE.SELF
     );
+    ensureCompensationSealedForFinalization_(cycleId);
     ensureFinalDistribution_(cycleId);
     ensureFinalizationAudit_(cycleId);
     const completed = withLock_(function () {
@@ -1917,6 +1918,11 @@ function finalizeReviewCycle_(cycleId) {
       ) {
         throw new Error(
           'Complete is blocked until PDFs, distribution, and finalization audit are durably complete.'
+        );
+      }
+      if (!isCompensationSealedForFinalization_(cycle)) {
+        throw new Error(
+          'Complete is blocked until the approved compensation CAF PDF is sealed.'
         );
       }
       cycle.Status = PR.CYCLE.COMPLETE;

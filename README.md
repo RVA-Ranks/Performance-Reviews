@@ -172,6 +172,14 @@ rates only on the signature acknowledgement panel and in that CAF PDF.
 On the effective date, automation updates `Current Pay Rate` automatically and
 preserves an append-only `CompensationHistory` row (written when the CAF seals).
 
+The compensation workflow is crash-safe end to end. The CAF only seals after all
+three PR signature images are validated (fail closed), and each CAF PDF carries a
+provenance marker so recovery can safely reconcile a `Delivery Unknown` state.
+History is independently repairable, and the effective-date rate update refuses
+to overwrite `Current Pay Rate` unless it still matches the expected predecessor
+(otherwise it raises a `Conflict` for HR). HR can reconcile from the Compensation
+Queue via `recoverCompensationCafPdf` and `recoverCompensationRateUpdate`.
+
 ### Guided help
 
 V3.1 includes:

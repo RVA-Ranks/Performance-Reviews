@@ -183,6 +183,124 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Rate update classifier applies when predecessor matches', function () {
+    assert_(
+      classifyCompensationRateUpdate_(46.4, 46.4, 50.0) === 'apply',
+      'Matching predecessor must allow apply'
+    );
+  });
+
+  check('Rate update classifier is complete when already at target', function () {
+    assert_(
+      classifyCompensationRateUpdate_(50.0, 46.4, 50.0) === 'complete',
+      'Already-approved rate must be complete'
+    );
+  });
+
+  check('Rate update classifier flags conflict on unexpected rate', function () {
+    assert_(
+      classifyCompensationRateUpdate_(48.0, 46.4, 50.0) === 'conflict',
+      'Unexpected current rate must be a conflict, never overwritten'
+    );
+  });
+
+  check('Rate update lifecycle exposes Updating and Conflict', function () {
+    assert_(
+      V31_COMP.RATE_UPDATE.UPDATING === 'Updating',
+      'Updating state must exist'
+    );
+    assert_(
+      V31_COMP.RATE_UPDATE.CONFLICT === 'Conflict',
+      'Conflict state must exist'
+    );
+    assert_(
+      V31_COMP.RATE_UPDATE.UNKNOWN === 'Delivery Unknown',
+      'Delivery Unknown state must exist'
+    );
+  });
+
+  check('History durable status vocabulary exists', function () {
+    assert_(
+      V31_COMP.HISTORY.PENDING === 'Pending' &&
+        V31_COMP.HISTORY.WRITING === 'Writing' &&
+        V31_COMP.HISTORY.COMPLETE === 'Complete' &&
+        V31_COMP.HISTORY.FAILED === 'Failed',
+      'History status states must be defined'
+    );
+  });
+
+  check('CompensationRecords stores Manager Business Justification', function () {
+    assert_(
+      V31_COMP.RECORD_HEADERS.indexOf('Manager Business Justification') >= 0,
+      'Record schema must persist the manager business justification'
+    );
+    assert_(
+      V31_COMP.HISTORY_HEADERS.indexOf('Manager Business Justification') >= 0,
+      'History snapshot must include the manager business justification'
+    );
+  });
+
+  check('CompensationRecords carries durable history + rate columns', function () {
+    [
+      'Compensation History Status',
+      'Compensation History Attempt ID',
+      'Compensation History Written At',
+      'Compensation History Last Error',
+      'Rate Update Started At',
+    ].forEach(function (header) {
+      assert_(
+        V31_COMP.RECORD_HEADERS.indexOf(header) >= 0,
+        'Record schema must include ' + header
+      );
+    });
+  });
+
+  check('CAF provenance marker round-trips', function () {
+    const record = {
+      'Compensation Record ID': 'rec-9',
+      'Final Approved Pay Rate': 50,
+      'Compensation Effective Date': '2026-09-01',
+    };
+    const marker = buildCompensationCafProvenance_('RV-2026-004', record);
+    const parsed = parseCompensationCafProvenance_(
+      'prefix noise ' + marker
+    );
+    assert_(parsed, 'Provenance must parse from a description');
+    assert_(
+      String(parsed.cycleId) === 'RV-2026-004',
+      'Provenance must carry cycle ID'
+    );
+    assert_(
+      String(parsed.recordId) === 'rec-9',
+      'Provenance must carry record ID'
+    );
+    assert_(
+      Number(parsed.finalApprovedPayRate) === 50,
+      'Provenance must carry the approved amount'
+    );
+  });
+
+  check('CAF provenance parse returns null when marker absent', function () {
+    assert_(
+      parseCompensationCafProvenance_('no marker here') === null,
+      'Missing provenance must return null (fail closed on validation)'
+    );
+  });
+
+  check('Signature blob loader fails closed on missing ID', function () {
+    let threw = false;
+    try {
+      loadRequiredSignatureBlob_('Manager', '');
+    } catch (error) {
+      threw = true;
+      assert_(
+        String(error.message).indexOf('missing') >= 0,
+        'Missing signature ID must fail closed'
+      );
+    }
+    assert_(threw, 'Empty signature file ID must throw');
+  });
+
   const failed = results.filter(function (item) {
     return !item.ok;
   });

@@ -470,6 +470,28 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] Next review loads updated Current Pay Rate
 - [ ] Legacy in-flight standalone CAF packets remain unaffected
 - [ ] `runV31CompensationTests_()` passes
+
+### Compensation hardening (durability / recovery)
+
+- [ ] Signature file ID exists but Drive file missing → CAF does NOT seal
+- [ ] Signature artifact is not an image → CAF does NOT seal
+- [ ] CAF created but persistence fails → status becomes Delivery Unknown
+- [ ] HR recovery with exactly one valid candidate → reconciled/sealed
+- [ ] HR recovery with zero candidates → regenerates under a fresh claim
+- [ ] Two CAF candidates → blocking `caf:ambiguous` alert; no auto-winner
+- [ ] Stale/uploaded same-named file without provenance → rejected
+- [ ] `Status=Complete` but history missing → `ensureCompensationHistory_` recreates once
+- [ ] Duplicate history retry does not append a second row
+- [ ] History repair sweep repairs sealed CAFs missing history
+- [ ] Current Pay Rate == Original Pay Rate → due update succeeds
+- [ ] Current Pay Rate != expected predecessor → Conflict; no overwrite; HR alert
+- [ ] Current Pay Rate already == approved rate → marked Complete (reconciled)
+- [ ] Rate write succeeds but persistence dies → stale Updating → Delivery Unknown → recover
+- [ ] `recoverCompensationRateUpdate` retries safely under conflict guarding
+- [ ] Business justification survives recommendation → queue → owner view → CAF PDF → history
+- [ ] HR owner-decision-required alert fires once when all three are submitted
+- [ ] Owner-decision alert auto-resolves when the decision is recorded
+- [ ] Adjustment-bearing review cannot reach Complete until CAF is sealed
 - [ ] Manager can continue the manager review independently
 - [ ] Employee self-evaluation remains hidden before the meeting
 - [ ] Finalize & Release is blocked until compensation decision is recorded

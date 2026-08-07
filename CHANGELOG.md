@@ -1,5 +1,38 @@
 # V3.1 Changelog
 
+## Compensation hardening — CAF recovery, history, rate integrity (`feat/compensation-integration`)
+
+- CAF signature embedding now fails closed: all three PR signature artifacts
+  are validated as readable images before the PDF is built. A missing or
+  unreadable signature blocks sealing instead of writing placeholder text.
+- CAF PDFs carry a deterministic provenance marker (cycle + record + approved
+  amount) on the file description. Candidate reuse/recovery validates folder,
+  MIME, name, and provenance — a stale or manually uploaded same-named file is
+  rejected.
+- Real `Delivery Unknown` CAF reconciliation: exactly one valid candidate is
+  reconciled/sealed, zero regenerates under a fresh claim, multiple raises a
+  blocking `caf:ambiguous` system alert for HR selection. Generation failure
+  now records `Delivery Unknown` (not `Failed`) so recovery can search Drive.
+- `CompensationHistory` is independently repairable: durable
+  `Compensation History Status` plus idempotent `ensureCompensationHistory_`
+  and a daily repair sweep guarantee exactly one history row for a sealed CAF
+  even after a partial failure.
+- Effective-date rate update is conflict-aware: the approved rate is only
+  written when the live `Current Pay Rate` still equals the expected
+  predecessor. A mismatch raises a blocking `rate-update-conflict` alert and
+  never overwrites payroll data. Durable lifecycle:
+  `Pending → Updating → Complete`, with `Pending Effective Date`,
+  `Delivery Unknown`, `Conflict`, and post-write verification.
+- `Manager Business Justification` is now stored on `CompensationRecords` and
+  `CompensationHistory`, and surfaced in the HR Compensation Queue and CAF PDF.
+- Durable HR "owner decision required" notification via the SystemAlerts ledger
+  when manager review, self-evaluation, and recommendation are all submitted;
+  auto-resolved when the owner decision is recorded.
+- Review completion is gated on CAF sealing when an adjustment exists
+  (`ensureCompensationSealedForFinalization_`).
+- HR-callable recovery: `recoverCompensationCafPdf`,
+  `recoverCompensationRateUpdate` with Compensation Queue buttons.
+
 ## Compensation integration — recommendation / owner decision / CAF (`feat/compensation-integration`)
 
 - Manager recommendation is in-app (not standalone CAF dashboard): recommend

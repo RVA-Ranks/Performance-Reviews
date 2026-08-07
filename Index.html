@@ -1889,7 +1889,13 @@ async function refreshCompensationQueue() {
             escapeHtml(formatMoneyDisplay(item.managerRecommendedPayRate)) +
             '<br><span class="field-help">' +
             escapeHtml(String(item.managerRecommendedPercentDisplay)) +
-            '%</span></td><td>' +
+            '%</span>' +
+            (item.managerBusinessJustification
+              ? '<br><span class="field-help"><em>' +
+                escapeHtml(item.managerBusinessJustification) +
+                '</em></span>'
+              : '') +
+            '</td><td>' +
             (item.finalApprovedPayRate != null
               ? escapeHtml(formatMoneyDisplay(item.finalApprovedPayRate)) +
                 '<br><span class="field-help">' +
@@ -1918,6 +1924,18 @@ async function refreshCompensationQueue() {
               : '<button class="button outline" onclick="openCycleFromSummary(\'' +
                 escapeAttr(item.cycleId) +
                 '\',\'overview\')">Open Cycle</button>') +
+            (item.cafPdfStatus === 'Delivery Unknown' ||
+            item.cafPdfStatus === 'Failed'
+              ? '<br><button class="button outline" onclick="recoverCompensationCaf(\'' +
+                escapeAttr(item.cycleId) +
+                '\')">Recover CAF PDF</button>'
+              : '') +
+            (item.rateUpdateStatus === 'Delivery Unknown' ||
+            item.rateUpdateStatus === 'Conflict'
+              ? '<br><button class="button outline" onclick="recoverCompensationRate(\'' +
+                escapeAttr(item.cycleId) +
+                '\')">Resolve Rate Update</button>'
+              : '') +
             '</td></tr>'
           );
         })
@@ -1928,6 +1946,50 @@ async function refreshCompensationQueue() {
       '<div class="warning-banner">Could not load compensation queue: ' +
       escapeHtml(errorMessage(error)) +
       '</div>';
+  }
+}
+
+async function recoverCompensationCaf(cycleId) {
+  if (
+    !confirm(
+      'Reconcile the compensation CAF PDF for this cycle? HR will be alerted if multiple conflicting files are found.'
+    )
+  ) {
+    return;
+  }
+  try {
+    const result = await server('recoverCompensationCafPdf', cycleId);
+    showToast(
+      'success',
+      'Compensation CAF',
+      result && result.reconciled
+        ? 'CAF PDF reconciled from Drive.'
+        : 'CAF PDF recovery completed.'
+    );
+    refreshCompensationQueue();
+  } catch (error) {
+    showToast('error', 'Compensation CAF', errorMessage(error));
+  }
+}
+
+async function recoverCompensationRate(cycleId) {
+  if (
+    !confirm(
+      'Retry the compensation rate update? The approved rate is only applied when the current rate still matches the expected predecessor.'
+    )
+  ) {
+    return;
+  }
+  try {
+    await server('recoverCompensationRateUpdate', cycleId);
+    showToast(
+      'success',
+      'Compensation rate update',
+      'Compensation rate update reprocessed.'
+    );
+    refreshCompensationQueue();
+  } catch (error) {
+    showToast('error', 'Compensation rate update', errorMessage(error));
   }
 }
 
