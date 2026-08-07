@@ -3748,44 +3748,62 @@ function renderCompensationCard(cycle) {
   const decision = cycle.v31.compensationDecision || 'Pending';
   const status = cycle.v31.compensationStatus || 'Pending';
   const record = cycle.v31.compensationRecord;
+  const ownerDecision = record && record.ownerDecision
+    ? record.ownerDecision
+    : '';
+  const denied = ownerDecision === 'Denied' || status === 'Denied';
 
   let body =
-    '<p class="field-help">After the manager review, recommend an adjustment or confirm that no adjustment is recommended. Owner approval is required before the meeting when an adjustment is recommended.</p>';
+    '<p class="field-help">Managers enter a percentage increase only. HR records the owner decision (approve, modify, or decline) before the meeting when an adjustment was recommended.</p>';
 
-  if (cycle.v31.compensationDecisionNotes) {
+  if (record) {
+    body +=
+      '<details class="compensation-details" style="margin-top:12px">' +
+      '<summary><strong>Compensation Decision</strong> — Show Details</summary>' +
+      '<div class="notice" style="margin-top:10px">' +
+      '<div><strong>Current Pay Rate:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
+      ' · <strong>Annual:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalAnnualSalary)) +
+      '</div>' +
+      '<div><strong>Recommended Increase:</strong> ' +
+      escapeHtml(String(record.managerRecommendedPercentDisplay)) +
+      '% → ' +
+      escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
+      ' / ' +
+      escapeHtml(formatMoneyDisplay(record.managerRecommendedAnnualSalary)) +
+      ' annual</div>' +
+      (record.managerBusinessJustification
+        ? '<div><strong>Justification:</strong> ' +
+          escapeHtml(record.managerBusinessJustification) +
+          '</div>'
+        : '') +
+      (denied
+        ? '<div><strong>Final Decision:</strong> No Compensation Adjustment (owner declined)</div>'
+        : record.finalApprovedPayRate != null
+        ? '<div><strong>Final Approved:</strong> ' +
+          escapeHtml(String(record.finalApprovedPercentDisplay)) +
+          '% → ' +
+          escapeHtml(formatMoneyDisplay(record.finalApprovedPayRate)) +
+          ' / ' +
+          escapeHtml(formatMoneyDisplay(record.finalApprovedAnnualSalary)) +
+          ' · Effective ' +
+          escapeHtml(record.compensationEffectiveDate || '') +
+          (ownerDecision
+            ? ' · ' + escapeHtml(ownerDecision)
+            : '') +
+          '</div>'
+        : '<div><strong>Status:</strong> Awaiting owner decision</div>') +
+      '</div></details>';
+  } else if (cycle.v31.compensationDecisionNotes) {
     body +=
       '<div class="notice" style="margin-top:12px"><strong>Notes:</strong> ' +
       escapeHtml(cycle.v31.compensationDecisionNotes) +
       '</div>';
   }
 
-  if (record) {
-    body +=
-      '<div class="notice" style="margin-top:12px">' +
-      '<div><strong>Current Pay Rate:</strong> ' +
-      escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
-      ' · <strong>Annual:</strong> ' +
-      escapeHtml(formatMoneyDisplay(record.originalAnnualSalary)) +
-      '</div>' +
-      '<div><strong>Manager Recommendation:</strong> ' +
-      escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
-      ' (' +
-      escapeHtml(String(record.managerRecommendedPercentDisplay)) +
-      '%)</div>' +
-      (record.finalApprovedPayRate != null
-        ? '<div><strong>Final Approved:</strong> ' +
-          escapeHtml(formatMoneyDisplay(record.finalApprovedPayRate)) +
-          ' (' +
-          escapeHtml(String(record.finalApprovedPercentDisplay)) +
-          '%) · Effective ' +
-          escapeHtml(record.compensationEffectiveDate || '') +
-          '</div>'
-        : '<div><strong>Status:</strong> Awaiting owner decision</div>') +
-      '</div>';
-  }
-
   let actions = '';
-  if (cycle.v31.canManageCompensation && !complete) {
+  if (cycle.v31.canManageCompensation && !complete && !record) {
     actions =
       '<div class="button-row" style="margin-top:15px">' +
       '<button class="button primary" onclick="openCompensationDecisionModal(\'' +
@@ -3806,8 +3824,8 @@ function renderCompensationCard(cycle) {
   if (
     cycle.isHr &&
     record &&
-    record.status === 'Awaiting Signatures' &&
-    record.canEditOwnerDecision
+    (record.status === 'Awaiting Signatures' || record.status === 'Denied') &&
+    (record.canEditOwnerDecision || record.status === 'Denied')
   ) {
     actions +=
       '<div class="button-row" style="margin-top:10px">' +
@@ -3830,8 +3848,10 @@ function renderCompensationCard(cycle) {
     '<div class="card compensation-card"><div class="card-header"><div><h2>Compensation Decision</h2><p>Manager recommendation and owner-approved final compensation.</p></div><span class="compensation-status' +
     statusClass +
     '">' +
-    escapeHtml(decision) +
-    (status && status !== decision ? ' · ' + escapeHtml(status) : '') +
+    escapeHtml(denied ? 'Denied' : decision) +
+    (status && status !== decision && !denied
+      ? ' · ' + escapeHtml(status)
+      : '') +
     '</span></div>' +
     body +
     actions +
@@ -4834,23 +4854,24 @@ async function beginCompensationRecommendation(cycleId) {
     openModal({
       title: 'Compensation Recommendation',
       body:
-        '<p><strong>Employee current pay rate</strong> is read-only.</p>' +
+        '<p>Enter only the recommended increase percentage. All rates and salaries are calculated automatically from the current HR roster rate.</p>' +
         '<div class="notice" style="margin-bottom:12px">' +
         '<div>Current Pay Rate: <strong>' +
         escapeHtml(formatMoneyDisplay(context.currentPayRate)) +
-        '</strong></div>' +
+        '</strong> <span class="field-help">(read-only)</span></div>' +
         '<div>Current Annual Salary: <strong>' +
         escapeHtml(formatMoneyDisplay(context.currentAnnualSalary)) +
         '</strong> <span class="field-help">(rate × 2080)</span></div>' +
         '</div>' +
         '<div class="form-grid">' +
-        '<div><label for="recommendedPayRate">Recommended Pay Rate</label><input id="recommendedPayRate" type="number" min="0.01" step="0.01" oninput="syncRecommendationFields(\'rate\',' +
+        '<div><label for="recommendedPercent">Recommended Increase % *</label><input id="recommendedPercent" type="number" min="0.01" step="0.01" placeholder="e.g. 6" required oninput="syncRecommendationPercentFields(' +
         Number(context.currentPayRate) +
+        ',' +
+        Number(context.currentAnnualSalary) +
         ')"></div>' +
-        '<div><label for="recommendedPercent">Recommended Increase (%)</label><input id="recommendedPercent" type="number" step="0.01" placeholder="e.g. 8" oninput="syncRecommendationFields(\'percent\',' +
-        Number(context.currentPayRate) +
-        ')"></div>' +
+        '<div><label>Recommended Pay Rate</label><input id="recommendedPayRateDisplay" readonly></div>' +
         '<div><label>Recommended Annual Salary</label><input id="recommendedAnnual" readonly></div>' +
+        '<div><label>Annual Salary Increase</label><input id="recommendedAnnualIncrease" readonly></div>' +
         '<div><label for="proposedEffectiveDate">Proposed Effective Date *</label><input id="proposedEffectiveDate" type="date" required></div>' +
         '<div class="wide"><label for="businessJustification">Business Justification *</label><textarea id="businessJustification" required></textarea></div>' +
         '</div>',
@@ -4865,31 +4886,28 @@ async function beginCompensationRecommendation(cycleId) {
   }
 }
 
-function syncRecommendationFields(source, currentRate) {
-  const rateEl = document.getElementById('recommendedPayRate');
+function syncRecommendationPercentFields(currentRate, currentAnnual) {
   const percentEl = document.getElementById('recommendedPercent');
+  const rateEl = document.getElementById('recommendedPayRateDisplay');
   const annualEl = document.getElementById('recommendedAnnual');
-  if (!rateEl || !percentEl || !annualEl) return;
-
-  if (source === 'rate' && rateEl.value !== '') {
-    const rate = Number(rateEl.value);
-    if (Number.isFinite(rate) && currentRate > 0) {
-      percentEl.value = (((rate - currentRate) / currentRate) * 100).toFixed(2);
-      annualEl.value = formatMoneyDisplay(rate * 2080);
-    }
-  } else if (source === 'percent' && percentEl.value !== '') {
-    const percent = Number(percentEl.value);
-    if (Number.isFinite(percent) && currentRate > 0) {
-      const rate = Math.round(currentRate * (1 + percent / 100) * 100) / 100;
-      rateEl.value = rate.toFixed(2);
-      annualEl.value = formatMoneyDisplay(rate * 2080);
-    }
+  const increaseEl = document.getElementById('recommendedAnnualIncrease');
+  if (!percentEl || !rateEl || !annualEl || !increaseEl) return;
+  const percent = Number(percentEl.value);
+  if (!Number.isFinite(percent) || percentEl.value === '') {
+    rateEl.value = '';
+    annualEl.value = '';
+    increaseEl.value = '';
+    return;
   }
+  const rate = Math.round(currentRate * (1 + percent / 100) * 100) / 100;
+  const annual = Math.round(rate * 2080 * 100) / 100;
+  rateEl.value = formatMoneyDisplay(rate);
+  annualEl.value = formatMoneyDisplay(annual);
+  increaseEl.value = formatMoneyDisplay(annual - currentAnnual);
 }
 
 async function submitCompensationRecommendationForm(cycleId) {
   const payload = {
-    recommendedPayRate: valueOf('recommendedPayRate'),
     recommendedPercent: valueOf('recommendedPercent'),
     proposedEffectiveDate: valueOf('proposedEffectiveDate'),
     businessJustification: valueOf('businessJustification')
@@ -4923,28 +4941,45 @@ async function openOwnerDecisionModal(cycleId, isEdit) {
         '<div class="notice" style="margin-bottom:12px">' +
         '<div>Current Pay Rate: <strong>' +
         escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
+        '</strong> · Annual <strong>' +
+        escapeHtml(formatMoneyDisplay(record.originalAnnualSalary)) +
         '</strong></div>' +
         '<div>Manager Recommended: <strong>' +
-        escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
-        '</strong> (' +
         escapeHtml(String(record.managerRecommendedPercentDisplay)) +
-        '%)</div>' +
+        '%</strong> → ' +
+        escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
+        ' / ' +
+        escapeHtml(formatMoneyDisplay(record.managerRecommendedAnnualSalary)) +
+        '</div>' +
+        (record.managerBusinessJustification
+          ? '<div>Justification: ' +
+            escapeHtml(record.managerBusinessJustification) +
+            '</div>'
+          : '') +
         '<div>Manager Proposed Effective Date: <strong>' +
         escapeHtml(record.managerProposedEffectiveDate || '') +
         '</strong></div>' +
         '</div>' +
-        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="approve" checked onchange="toggleOwnerOverrideFields()"> <span>Approve Manager Recommendation</span></label>' +
-        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="override" onchange="toggleOwnerOverrideFields()"> <span>Approve Different Amount</span></label>' +
+        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="approve" checked onchange="toggleOwnerDecisionFields()"> <span>Approve Recommendation</span></label>' +
+        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="override" onchange="toggleOwnerDecisionFields()"> <span>Approve Different Amount</span></label>' +
+        '<label class="modal-check"><input type="radio" name="ownerDecisionMode" value="deny" onchange="toggleOwnerDecisionFields()"> <span>Decline Adjustment</span></label>' +
         '<div id="ownerOverrideFields" class="form-grid" style="display:none;margin-top:12px">' +
-        '<div><label for="finalApprovedPayRate">Final Approved Pay Rate</label><input id="finalApprovedPayRate" type="number" min="0.01" step="0.01"></div>' +
-        '<div><label for="finalApprovedPercent">Final Approved %</label><input id="finalApprovedPercent" type="number" step="0.01"></div>' +
+        '<div><label for="finalApprovedPercent">Final Approved % *</label><input id="finalApprovedPercent" type="number" min="0.01" step="0.01" placeholder="e.g. 8" oninput="syncOwnerOverridePreview(' +
+        Number(record.originalPayRate) +
+        ',' +
+        Number(record.originalAnnualSalary) +
+        ')"></div>' +
+        '<div><label>Final Pay Rate</label><input id="finalApprovedPayRateDisplay" readonly></div>' +
+        '<div><label>Final Annual Salary</label><input id="finalApprovedAnnualDisplay" readonly></div>' +
+        '</div>' +
+        '<div id="ownerNotesFields" class="form-grid" style="display:none;margin-top:12px">' +
         '<div class="wide"><label for="ownerDecisionNotes">Owner Decision Notes *</label><textarea id="ownerDecisionNotes"></textarea></div>' +
         '</div>' +
-        '<div class="form-grid" style="margin-top:12px">' +
+        '<div id="ownerApproveFields" class="form-grid" style="margin-top:12px">' +
         '<div><label for="ownerName">Owner Name *</label><input id="ownerName" required value="' +
         escapeAttr(record.ownerName || '') +
         '"></div>' +
-        '<div><label for="compensationEffectiveDate">Effective Date *</label><input id="compensationEffectiveDate" type="date" required value="' +
+        '<div id="ownerEffectiveDateWrap"><label for="compensationEffectiveDate">Effective Date *</label><input id="compensationEffectiveDate" type="date" required value="' +
         escapeAttr(toDateInputValue(record.compensationEffectiveDate || record.managerProposedEffectiveDate)) +
         '"></div>' +
         (isEdit
@@ -4957,19 +4992,47 @@ async function openOwnerDecisionModal(cycleId, isEdit) {
         submitOwnerDecisionForm(cycleId, !!isEdit);
       }
     });
+    toggleOwnerDecisionFields();
   } catch (error) {
     showToast('error', 'Could not open owner decision', errorMessage(error));
   }
 }
 
-function toggleOwnerOverrideFields() {
-  const override = document.querySelector(
-    'input[name="ownerDecisionMode"][value="override"]'
+function toggleOwnerDecisionFields() {
+  const modeEl = document.querySelector(
+    'input[name="ownerDecisionMode"]:checked'
   );
-  const fields = document.getElementById('ownerOverrideFields');
-  if (fields && override) {
-    fields.style.display = override.checked ? 'grid' : 'none';
+  const mode = modeEl ? modeEl.value : 'approve';
+  const override = document.getElementById('ownerOverrideFields');
+  const notes = document.getElementById('ownerNotesFields');
+  const effectiveWrap = document.getElementById('ownerEffectiveDateWrap');
+  if (override) {
+    override.style.display = mode === 'override' ? 'grid' : 'none';
   }
+  if (notes) {
+    notes.style.display =
+      mode === 'override' || mode === 'deny' ? 'grid' : 'none';
+  }
+  if (effectiveWrap) {
+    effectiveWrap.style.display = mode === 'deny' ? 'none' : 'block';
+  }
+}
+
+function syncOwnerOverridePreview(currentRate, currentAnnual) {
+  const percentEl = document.getElementById('finalApprovedPercent');
+  const rateEl = document.getElementById('finalApprovedPayRateDisplay');
+  const annualEl = document.getElementById('finalApprovedAnnualDisplay');
+  if (!percentEl || !rateEl || !annualEl) return;
+  const percent = Number(percentEl.value);
+  if (!Number.isFinite(percent) || percentEl.value === '') {
+    rateEl.value = '';
+    annualEl.value = '';
+    return;
+  }
+  const rate = Math.round(currentRate * (1 + percent / 100) * 100) / 100;
+  const annual = Math.round(rate * 2080 * 100) / 100;
+  rateEl.value = formatMoneyDisplay(rate);
+  annualEl.value = formatMoneyDisplay(annual);
 }
 
 function toDateInputValue(value) {
@@ -4987,11 +5050,20 @@ async function submitOwnerDecisionForm(cycleId, isEdit) {
   const modeEl = document.querySelector(
     'input[name="ownerDecisionMode"]:checked'
   );
+  const mode = modeEl ? modeEl.value : 'approve';
+  if (mode === 'deny') {
+    if (
+      !confirm(
+        'Confirm Decline Adjustment?\n\nThe manager recommendation will be preserved for HR/manager audit, but the employee will never see that a recommendation existed. No CAF, history row, or pay-rate update will be created.'
+      )
+    ) {
+      return;
+    }
+  }
   const payload = {
-    mode: modeEl ? modeEl.value : 'approve',
+    mode: mode,
     ownerName: valueOf('ownerName'),
     compensationEffectiveDate: valueOf('compensationEffectiveDate'),
-    finalApprovedPayRate: valueOf('finalApprovedPayRate'),
     finalApprovedPercent: valueOf('finalApprovedPercent'),
     ownerDecisionNotes: valueOf('ownerDecisionNotes'),
     reason: valueOf('ownerEditReason')

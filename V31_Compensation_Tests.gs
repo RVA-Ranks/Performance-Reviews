@@ -93,12 +93,13 @@ function runV31CompensationTests_() {
     assert_(threw, 'Missing effective date must throw');
   });
 
-  check('Recommendation derives rate from percent', function () {
+  check('Recommendation derives rate from percent only', function () {
     const clean = validateCompensationRecommendation_(
       {
         recommendedPercent: 12,
         proposedEffectiveDate: '2026-09-01',
         businessJustification: 'Market adjustment',
+        recommendedPayRate: 999, // must be ignored
       },
       46.4
     );
@@ -111,6 +112,59 @@ function runV31CompensationTests_() {
         annualSalaryFromRate_(clean.recommendedRate),
       'Recommended annual must derive from rate × 2080'
     );
+  });
+
+  check('Recommendation rejects client rate-only payloads', function () {
+    let threw = false;
+    try {
+      validateCompensationRecommendation_(
+        {
+          recommendedPayRate: 50,
+          proposedEffectiveDate: '2026-09-01',
+          businessJustification: 'Merit',
+        },
+        46.4
+      );
+    } catch (error) {
+      threw = true;
+      assert_(
+        String(error.message).indexOf('percent') >= 0,
+        'Must require percent when rate-only is sent'
+      );
+    }
+    assert_(threw, 'Rate-only recommendation must throw');
+  });
+
+  check('Recommendation rejects negative and zero percent', function () {
+    let negativeThrew = false;
+    try {
+      validateCompensationRecommendation_(
+        {
+          recommendedPercent: -1,
+          proposedEffectiveDate: '2026-09-01',
+          businessJustification: 'Merit',
+        },
+        46.4
+      );
+    } catch (error) {
+      negativeThrew = true;
+    }
+    assert_(negativeThrew, 'Negative percent must throw');
+
+    let zeroThrew = false;
+    try {
+      validateCompensationRecommendation_(
+        {
+          recommendedPercent: 0,
+          proposedEffectiveDate: '2026-09-01',
+          businessJustification: 'Merit',
+        },
+        46.4
+      );
+    } catch (error) {
+      zeroThrew = true;
+    }
+    assert_(zeroThrew, 'Zero percent must throw');
   });
 
   check('Owner override requires notes and owner name', function () {
@@ -149,9 +203,60 @@ function runV31CompensationTests_() {
     );
     assert_(approved.accepted === true, 'Approve mode must accept');
     assert_(
+      approved.ownerDecision === V31_COMP.OWNER_DECISION.APPROVED,
+      'Approve mode must set Owner Decision = Approved'
+    );
+    assert_(
       approved.finalRate === 51.97,
       'Approve mode must keep manager recommendation'
     );
+  });
+
+  check('Owner override is percentage-only and ignores client rates', function () {
+    const record = {
+      'Original Pay Rate': 46.4,
+      'Manager Recommended Pay Rate': 51.97,
+      'Manager Recommended Percent': 0.12,
+    };
+    const modified = validateOwnerDecisionPayload_(
+      {
+        mode: 'override',
+        ownerName: 'Jane Partner',
+        finalApprovedPercent: 8,
+        finalApprovedPayRate: 999,
+        ownerDecisionNotes: 'Calibration',
+        compensationEffectiveDate: '2026-09-01',
+      },
+      record
+    );
+    assert_(
+      modified.ownerDecision === V31_COMP.OWNER_DECISION.MODIFIED,
+      'Override must set Modified'
+    );
+    assert_(
+      modified.finalRate === roundCurrency_(46.4 * 1.08),
+      'Override must derive rate from percent, ignoring client rate'
+    );
+  });
+
+  check('Owner deny preserves no final rates', function () {
+    const denied = validateOwnerDecisionPayload_(
+      {
+        mode: 'deny',
+        ownerName: 'Jane Partner',
+        ownerDecisionNotes: 'Budget freeze',
+      },
+      {
+        'Original Pay Rate': 46.4,
+        'Manager Recommended Pay Rate': 50,
+        'Manager Recommended Percent': 0.08,
+      }
+    );
+    assert_(
+      denied.ownerDecision === V31_COMP.OWNER_DECISION.DENIED,
+      'Deny mode must set Denied'
+    );
+    assert_(denied.finalRate === null, 'Deny must not set a final rate');
   });
 
   check('Blank effective date blocks owner decision', function () {
@@ -172,6 +277,48 @@ function runV31CompensationTests_() {
       threw = true;
     }
     assert_(threw, 'Blank effective date must block approval');
+  });
+
+  check('Denied status completes the compensation gate', function () {
+    assert_(
+      isV31CompensationComplete_({
+        'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+        'Compensation Status': V31_COMP.STATUS.DENIED,
+      }) === true,
+      'Denied must satisfy the meeting/signature gate'
+    );
+  });
+
+  check('Approved adjustment helper rejects Denied', function () {
+    assert_(
+      isApprovedCompensationAdjustment_({
+        'Owner Decision': V31_COMP.OWNER_DECISION.DENIED,
+        Status: V31_COMP.STATUS.DENIED,
+      }) === false,
+      'Denied must not be treated as an approved adjustment'
+    );
+    assert_(
+      isApprovedCompensationAdjustment_({
+        'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+        Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+      }) === true,
+      'Approved awaiting signatures must be an approved adjustment'
+    );
+  });
+
+  check('Human-readable review PDF filename helpers exist', function () {
+    assert_(
+      typeof buildReviewPdfFileName_ === 'function',
+      'buildReviewPdfFileName_ must exist'
+    );
+    assert_(
+      typeof sanitizeFileNamePart_ === 'function',
+      'sanitizeFileNamePart_ must exist'
+    );
+    assert_(
+      sanitizeFileNamePart_('Jane/Doe').indexOf('/') < 0,
+      'Filename sanitizer must strip path characters'
+    );
   });
 
   check('History identity is deterministic', function () {

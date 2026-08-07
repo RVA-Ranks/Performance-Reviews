@@ -342,21 +342,86 @@ function getFinalPdfFields_(documentType) {
   throw new Error('Unsupported PDF document type.');
 }
 
+function sanitizeFileNamePart_(value) {
+  return String(value || '')
+    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+|\.+$/g, '') || 'Unknown';
+}
+
+function formatFileNameDate_(value) {
+  const date = value ? new Date(value) : new Date();
+  if (isNaN(date.getTime())) {
+    const today = new Date();
+    return (
+      today.getFullYear() +
+      '-' +
+      String(today.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(today.getDate()).padStart(2, '0')
+    );
+  }
+  return (
+    date.getFullYear() +
+    '-' +
+    String(date.getMonth() + 1).padStart(2, '0') +
+    '-' +
+    String(date.getDate()).padStart(2, '0')
+  );
+}
+
+/**
+ * Human-readable final PDF name:
+ *   Jane Doe - 2026-08-07 - Annual Review - Manager Review.pdf
+ * Recovery still recognizes legacy AITHERAS_<cycleId>_ names.
+ */
 function buildReviewPdfFileName_(cycleId, documentType) {
+  let cycle;
+  try {
+    cycle = findCycle_(cycleId).object;
+  } catch (error) {
+    cycle = { 'Cycle ID': cycleId };
+  }
+  const employee = sanitizeFileNamePart_(
+    cycle['Employee Name'] || 'Employee'
+  );
+  const datePart = formatFileNameDate_(
+    cycle['Review Date'] || cycle['Completed At'] || new Date()
+  );
+  const reviewType = sanitizeFileNamePart_(
+    cycle['Review Type'] || 'Review'
+  );
+  const docLabel =
+    documentType === PR.TYPE.MANAGER
+      ? 'Manager Review'
+      : documentType === PR.TYPE.SELF
+      ? 'Employee Self Evaluation'
+      : '';
+  if (!docLabel) throw new Error('Unsupported PDF document type.');
+  return (
+    employee +
+    ' - ' +
+    datePart +
+    ' - ' +
+    reviewType +
+    ' - ' +
+    docLabel +
+    '.pdf'
+  );
+}
+
+function buildLegacyReviewPdfFileNames_(cycleId, documentType) {
   const suffix =
     documentType === PR.TYPE.MANAGER
       ? 'Manager_Review_FINAL.pdf'
       : documentType === PR.TYPE.SELF
       ? 'Self_Evaluation_FINAL.pdf'
       : '';
-  if (!suffix) throw new Error('Unsupported PDF document type.');
-  return 'AITHERAS_' + String(cycleId) + '_' + suffix;
-}
-
-function buildLegacyReviewPdfFileNames_(cycleId, documentType) {
   return [
+    'AITHERAS_' + String(cycleId) + '_' + suffix,
     String(documentType) + ' - ' + String(cycleId) + '.pdf',
-  ];
+  ].filter(Boolean);
 }
 
 function getRecognizedReviewPdfNames_(cycleId, documentType) {

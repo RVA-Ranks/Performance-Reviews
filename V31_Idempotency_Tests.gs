@@ -1126,15 +1126,24 @@ function testCalendarConfigWarningSurvivesEmailSuccess_() {
 }
 
 function testDeterministicArtifactFileNames_() {
-  assertIdem_(
-    buildReviewPdfFileName_('C-100', 'Manager Review') ===
-      'AITHERAS_C-100_Manager_Review_FINAL.pdf',
-    'PDF filename must include cycle ID for orphan recovery'
+  const legacy = buildLegacyReviewPdfFileNames_(
+    'C-100',
+    PR.TYPE.MANAGER
   );
   assertIdem_(
-    buildSignatureFileName_('C-100', 'MGR Employee') ===
-      'C-100 - MGR_Employee.png',
-    'Signature filename must include cycle ID and sanitized label'
+    legacy.indexOf('AITHERAS_C-100_Manager_Review_FINAL.pdf') >= 0,
+    'Legacy PDF filename must include cycle ID for orphan recovery'
+  );
+  const human = buildReviewPdfFileName_('C-100', PR.TYPE.MANAGER);
+  assertIdem_(
+    /\.pdf$/i.test(human) && human.indexOf('Manager Review') >= 0,
+    'Canonical PDF filename must be human-readable Manager Review.pdf'
+  );
+  assertIdem_(
+    buildCanonicalSignatureFileName_('C-100', PR.ROLE.EMPLOYEE).indexOf(
+      'C-100'
+    ) >= 0,
+    'Signature filename must include cycle ID'
   );
 }
 

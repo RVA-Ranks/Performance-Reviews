@@ -1,5 +1,29 @@
 # V3.1 Changelog
 
+## Compensation UX polish — percentage-only, deny, privacy, roster (`feat/compensation-integration`)
+
+- Manager recommendation is **percentage-only**. Recommended rate/salary are
+  read-only derived values. The server ignores any client-supplied rate and
+  recalculates from `EmployeeAssignments.Current Pay Rate`.
+- HR owner decisions are now: Approve Recommendation, Approve Different Amount
+  (percentage-only), or Decline Adjustment. Denied recommendations preserve the
+  manager recommendation for audit but create no CAF, history, or rate update.
+- Durable manager outcome emails (approved / modified / denied) with claim →
+  send → confirm on `CompensationRecords`.
+- Hard employee privacy for denials: no acknowledgement, no CAF, no compensation
+  wording in the final packet, no recommendation disclosure.
+- Approved final distribution attaches the sealed CAF; denied/no-adjustment
+  packets attach only the two review PDFs.
+- Human-readable PDF filenames:
+  `[Employee] - [YYYY-MM-DD] - [Review Type] - [Document].pdf`
+  Legacy `AITHERAS_<cycleId>_…` names remain recoverable via provenance/legacy
+  name lists.
+- After CAF seal → history write, due roster updates apply to
+  `EmployeeAssignments.Current Pay Rate` before Complete; conflict-aware
+  optimistic concurrency unchanged. Future effective dates stay
+  `Pending Effective Date`.
+- Manager/HR collapsed Compensation Details section on the cycle overview.
+
 ## Compensation edges — signature provenance & finalization gate (`feat/compensation-integration`)
 
 - CAF signatures now validate authoritative **role + cycle provenance**, not

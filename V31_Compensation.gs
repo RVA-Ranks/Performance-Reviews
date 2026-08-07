@@ -19,8 +19,15 @@ const V31_COMP = Object.freeze({
     AWAITING_OWNER: 'Awaiting Owner Decision',
     AWAITING_SIGNATURES: 'Awaiting Signatures',
     COMPLETE: 'Complete',
+    DENIED: 'Denied',
     FAILED: 'Failed',
     UNKNOWN: 'Delivery Unknown',
+  },
+
+  OWNER_DECISION: {
+    APPROVED: 'Approved',
+    MODIFIED: 'Modified',
+    DENIED: 'Denied',
   },
 
   RATE_UPDATE: {
@@ -70,10 +77,16 @@ const V31_COMP = Object.freeze({
     'Recommendation Accepted',
     'Compensation Effective Date',
     'Owner Name',
+    'Owner Decision',
     'Owner Decision At',
     'Owner Decision Recorded By',
     'Owner Decision Notes',
     'Status',
+    'Manager Outcome Email Status',
+    'Manager Outcome Email Attempt ID',
+    'Manager Outcome Email Started At',
+    'Manager Outcome Email Sent At',
+    'Manager Outcome Email Last Error',
     'CAF PDF Status',
     'CAF PDF Attempt ID',
     'CAF PDF Started At',
@@ -466,13 +479,42 @@ function isCompensationSealedForFinalization_(cycle) {
   if (disposition === 'block') {
     return false;
   }
+
+  // Denied recommendations may still have a CompensationRecords row; treat them
+  // as resolved without a CAF when the record says Denied.
   const recordLoc = findCompensationRecordByCycleOptional_(cycle['Cycle ID']);
+  if (
+    recordLoc &&
+    (String(recordLoc.object['Owner Decision'] || '') ===
+      V31_COMP.OWNER_DECISION.DENIED ||
+      String(recordLoc.object['Status'] || '') === V31_COMP.STATUS.DENIED)
+  ) {
+    return true;
+  }
+
   if (!recordLoc) {
     return false;
   }
+  const record = recordLoc.object;
+  if (
+    String(record['Status']) !== V31_COMP.STATUS.COMPLETE ||
+    !String(record['CAF Final PDF ID'] || '')
+  ) {
+    return false;
+  }
+  // History must exist for a sealed CAF.
+  if (
+    String(record['Compensation History Status'] || '') !==
+      V31_COMP.HISTORY.COMPLETE &&
+    !historyExistsForRecord_(String(record['Compensation Record ID'] || ''))
+  ) {
+    return false;
+  }
+  // Roster update must be Complete or safely deferred to the effective date.
+  const rateStatus = String(record['Rate Update Status'] || '');
   return (
-    String(recordLoc.object['Status']) === V31_COMP.STATUS.COMPLETE &&
-    !!String(recordLoc.object['CAF Final PDF ID'] || '')
+    rateStatus === V31_COMP.RATE_UPDATE.COMPLETE ||
+    rateStatus === V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE
   );
 }
 
@@ -503,10 +545,21 @@ function ensureCompensationSealedForFinalization_(cycleId) {
   }
 
   const result = maybeGenerateCompensationPdfAfterSignatures_(cycleId);
+  // Ensure history + due roster update before Complete is allowed.
+  ensureCompensationHistory_(cycleId);
+  try {
+    applyCompensationRateUpdateOnce_(cycleId);
+  } catch (rateError) {
+    // Conflict / Unknown / future date are reflected in Rate Update Status;
+    // the seal gate below decides whether Complete may proceed.
+    Logger.log(
+      'Finalization roster update: ' + String(rateError.message || rateError)
+    );
+  }
   const refreshed = findCycle_(cycleId).object;
   if (!isCompensationSealedForFinalization_(refreshed)) {
     throw new Error(
-      'Compensation CAF PDF is not sealed yet; review completion is blocked until it is generated. ' +
+      'Compensation is not fully sealed yet; review completion is blocked until the CAF, history, and (when due) EmployeeAssignments Current Pay Rate update are complete. ' +
         'If this persists, HR must run compensation recovery.'
     );
   }
@@ -534,14 +587,23 @@ function isV31CompensationComplete_(cycle) {
   const status = String(
     cycle['Compensation Status'] || V31_COMP.STATUS.PENDING
   );
+  // Denied recommendations resolve the compensation obligation without a CAF.
   return (
     status === V31_COMP.STATUS.AWAITING_SIGNATURES ||
-    status === V31_COMP.STATUS.COMPLETE
+    status === V31_COMP.STATUS.COMPLETE ||
+    status === V31_COMP.STATUS.DENIED
   );
 }
 
 function syncCycleCompensationSummary_(cycle, record) {
-  cycle['Compensation Decision'] = V31.COMPENSATION.ADJUSTMENT;
+  const ownerDecision = String(record['Owner Decision'] || '');
+  // Denied recommendations remain auditably linked, but the cycle gate treats
+  // them like a resolved no-adjustment for CAF / employee disclosure.
+  if (ownerDecision === V31_COMP.OWNER_DECISION.DENIED) {
+    cycle['Compensation Decision'] = V31.COMPENSATION.NONE;
+  } else {
+    cycle['Compensation Decision'] = V31.COMPENSATION.ADJUSTMENT;
+  }
   cycle['Compensation Status'] = String(
     record['Status'] || V31_COMP.STATUS.AWAITING_OWNER
   );
@@ -558,6 +620,18 @@ function syncCycleCompensationSummary_(cycle, record) {
       record['Manager Recommendation Submitted By'] || ''
     );
   }
+}
+
+/** True when an approved (not denied) adjustment exists and needs a CAF. */
+function isApprovedCompensationAdjustment_(record) {
+  if (!record) return false;
+  const ownerDecision = String(record['Owner Decision'] || '');
+  if (ownerDecision === V31_COMP.OWNER_DECISION.DENIED) return false;
+  const status = String(record['Status'] || '');
+  return (
+    status === V31_COMP.STATUS.AWAITING_SIGNATURES ||
+    status === V31_COMP.STATUS.COMPLETE
+  );
 }
 
 /* ============================ PUBLIC APIS ============================ */
@@ -600,10 +674,12 @@ function getCompensationContext(cycleId) {
   };
 
   if (isEmployee) {
+    // Hard privacy: denied / pending / no-adjustment → employee sees nothing.
     if (
-      decision === V31.COMPENSATION.ADJUSTMENT &&
       record &&
-      String(record['Status']) === V31_COMP.STATUS.AWAITING_SIGNATURES
+      isApprovedCompensationAdjustment_(record) &&
+      record['Final Approved Pay Rate'] !== '' &&
+      record['Final Approved Pay Rate'] != null
     ) {
       return Object.assign(base, {
         acknowledgement: {
@@ -631,23 +707,32 @@ function getCompensationContext(cycleId) {
 }
 
 function toCompensationRecordView_(record, isHr) {
+  const currentAnnual = Number(record['Original Annual Salary'] || 0);
+  const recommendedAnnual = Number(
+    record['Manager Recommended Annual Salary'] || 0
+  );
+  const finalAnnual =
+    record['Final Approved Annual Salary'] !== '' &&
+    record['Final Approved Annual Salary'] != null
+      ? Number(record['Final Approved Annual Salary'])
+      : null;
   return {
     compensationRecordId: String(record['Compensation Record ID'] || ''),
     status: String(record['Status'] || ''),
+    ownerDecision: String(record['Owner Decision'] || ''),
     originalPayRate: Number(record['Original Pay Rate'] || 0),
-    originalAnnualSalary: Number(record['Original Annual Salary'] || 0),
+    originalAnnualSalary: currentAnnual,
     managerRecommendedPayRate: Number(
       record['Manager Recommended Pay Rate'] || 0
     ),
-    managerRecommendedAnnualSalary: Number(
-      record['Manager Recommended Annual Salary'] || 0
-    ),
+    managerRecommendedAnnualSalary: recommendedAnnual,
     managerRecommendedPercent: Number(
       record['Manager Recommended Percent'] || 0
     ),
     managerRecommendedPercentDisplay: roundPercent_(
       Number(record['Manager Recommended Percent'] || 0) * 100
     ),
+    managerAnnualIncrease: roundCurrency_(recommendedAnnual - currentAnnual),
     managerBusinessJustification: String(
       record['Manager Business Justification'] || ''
     ),
@@ -657,15 +742,17 @@ function toCompensationRecordView_(record, isHr) {
     finalApprovedPayRate: record['Final Approved Pay Rate']
       ? Number(record['Final Approved Pay Rate'])
       : null,
-    finalApprovedAnnualSalary: record['Final Approved Annual Salary']
-      ? Number(record['Final Approved Annual Salary'])
-      : null,
+    finalApprovedAnnualSalary: finalAnnual,
     finalApprovedPercent: record['Final Approved Percent'] !== ''
       ? Number(record['Final Approved Percent'])
       : null,
     finalApprovedPercentDisplay:
       record['Final Approved Percent'] !== ''
         ? roundPercent_(Number(record['Final Approved Percent'] || 0) * 100)
+        : null,
+    finalAnnualIncrease:
+      finalAnnual != null
+        ? roundCurrency_(finalAnnual - currentAnnual)
         : null,
     recommendationAccepted: String(record['Recommendation Accepted'] || ''),
     compensationEffectiveDate: formatDate_(
@@ -683,7 +770,8 @@ function toCompensationRecordView_(record, isHr) {
     rateUpdateStatus: String(record['Rate Update Status'] || ''),
     canEditOwnerDecision:
       isHr &&
-      String(record['Status']) === V31_COMP.STATUS.AWAITING_SIGNATURES,
+      (String(record['Status']) === V31_COMP.STATUS.AWAITING_SIGNATURES ||
+        String(record['Status']) === V31_COMP.STATUS.DENIED),
   };
 }
 
@@ -819,10 +907,16 @@ function submitCompensationRecommendation(cycleId, payload) {
       'Recommendation Accepted': '',
       'Compensation Effective Date': '',
       'Owner Name': '',
+      'Owner Decision': '',
       'Owner Decision At': '',
       'Owner Decision Recorded By': '',
       'Owner Decision Notes': '',
       Status: V31_COMP.STATUS.AWAITING_OWNER,
+      'Manager Outcome Email Status': V31.DELIVERY.PENDING,
+      'Manager Outcome Email Attempt ID': '',
+      'Manager Outcome Email Started At': '',
+      'Manager Outcome Email Sent At': '',
+      'Manager Outcome Email Last Error': '',
       'CAF PDF Status': V31_COMP.PDF.PENDING,
       'CAF PDF Attempt ID': '',
       'CAF PDF Started At': '',
@@ -904,38 +998,37 @@ function validateCompensationRecommendation_(payload, currentRate) {
     throw new Error('Proposed effective date is invalid.');
   }
 
-  let recommendedRate = null;
-  let recommendedPercent = null;
-  const rateInput = data.recommendedPayRate;
+  // Percentage-only: ignore any client-supplied rate/salary. Server derives all
+  // amounts from EmployeeAssignments.Current Pay Rate.
   const percentInput = data.recommendedPercent;
-
-  if (rateInput !== '' && rateInput != null) {
-    recommendedRate = roundCurrency_(Number(rateInput));
-    if (!Number.isFinite(recommendedRate) || recommendedRate <= 0) {
-      throw new Error('Recommended pay rate must be a positive number.');
-    }
-    recommendedPercent = roundPercent_(
-      (recommendedRate - currentRate) / currentRate
-    );
-  } else if (percentInput !== '' && percentInput != null) {
-    const enteredPercent = Number(percentInput);
-    if (!Number.isFinite(enteredPercent)) {
-      throw new Error('Recommended percent must be a valid number.');
-    }
-    recommendedPercent = roundPercent_(enteredPercent / 100);
-    recommendedRate = roundCurrency_(
-      currentRate * (1 + recommendedPercent)
-    );
-  } else {
+  if (percentInput === '' || percentInput == null) {
+    throw new Error('Recommended increase percent is required.');
+  }
+  const enteredPercent = Number(percentInput);
+  if (!Number.isFinite(enteredPercent)) {
+    throw new Error('Recommended percent must be a valid number.');
+  }
+  if (enteredPercent < 0) {
+    throw new Error('Recommended percent cannot be negative.');
+  }
+  if (enteredPercent === 0) {
     throw new Error(
-      'Enter either a recommended pay rate or a recommended percent.'
+      'Use No Adjustment Recommended instead of submitting a 0% recommendation.'
     );
   }
+
+  const recommendedPercent = roundPercent_(enteredPercent / 100);
+  const recommendedRate = roundCurrency_(
+    currentRate * (1 + recommendedPercent)
+  );
+  const recommendedAnnual = annualSalaryFromRate_(recommendedRate);
+  const currentAnnual = annualSalaryFromRate_(currentRate);
 
   return {
     recommendedRate: recommendedRate,
     recommendedPercent: recommendedPercent,
-    recommendedAnnual: annualSalaryFromRate_(recommendedRate),
+    recommendedAnnual: recommendedAnnual,
+    annualIncrease: roundCurrency_(recommendedAnnual - currentAnnual),
     proposedEffectiveDate: proposedEffectiveDate,
     businessJustification: justification,
   };
@@ -964,17 +1057,32 @@ function recordCompensationOwnerDecision(cycleId, payload) {
     const clean = validateOwnerDecisionPayload_(payload, record);
     const now = new Date();
 
-    record['Final Approved Pay Rate'] = clean.finalRate;
-    record['Final Approved Annual Salary'] = clean.finalAnnual;
-    record['Final Approved Percent'] = clean.finalPercent;
-    record['Recommendation Accepted'] = clean.accepted ? 'Yes' : 'No';
-    record['Compensation Effective Date'] = clean.effectiveDate;
     record['Owner Name'] = clean.ownerName;
+    record['Owner Decision'] = clean.ownerDecision;
     record['Owner Decision At'] = now;
     record['Owner Decision Recorded By'] = email;
     record['Owner Decision Notes'] = clean.notes;
-    record['Status'] = V31_COMP.STATUS.AWAITING_SIGNATURES;
     record['Updated At'] = now;
+
+    if (clean.ownerDecision === V31_COMP.OWNER_DECISION.DENIED) {
+      // Preserve manager recommendation forever; no CAF / history / rate update.
+      record['Final Approved Pay Rate'] = '';
+      record['Final Approved Annual Salary'] = '';
+      record['Final Approved Percent'] = '';
+      record['Recommendation Accepted'] = 'No';
+      record['Compensation Effective Date'] = '';
+      record['Status'] = V31_COMP.STATUS.DENIED;
+      record['Rate Update Status'] = '';
+      record['CAF PDF Status'] = '';
+    } else {
+      record['Final Approved Pay Rate'] = clean.finalRate;
+      record['Final Approved Annual Salary'] = clean.finalAnnual;
+      record['Final Approved Percent'] = clean.finalPercent;
+      record['Recommendation Accepted'] = clean.accepted ? 'Yes' : 'No';
+      record['Compensation Effective Date'] = clean.effectiveDate;
+      record['Status'] = V31_COMP.STATUS.AWAITING_SIGNATURES;
+    }
+
     writeCompensationRecord_(recordLoc.rowNumber, record);
 
     syncCycleCompensationSummary_(cycle, record);
@@ -987,28 +1095,43 @@ function recordCompensationOwnerDecision(cycleId, payload) {
       'Compensation owner decision recorded',
       email,
       V31_COMP.STATUS.AWAITING_OWNER,
-      V31_COMP.STATUS.AWAITING_SIGNATURES,
+      String(record['Status']),
       JSON.stringify({
         ownerName: clean.ownerName,
-        finalRate: clean.finalRate,
-        finalPercent: clean.finalPercent,
+        ownerDecision: clean.ownerDecision,
+        finalRate: clean.finalRate || '',
+        finalPercent: clean.finalPercent || '',
         accepted: clean.accepted,
-        effectiveDate: formatDate_(clean.effectiveDate),
+        effectiveDate: clean.effectiveDate
+          ? formatDate_(clean.effectiveDate)
+          : '',
       })
     );
 
     return {
       ok: true,
-      status: V31_COMP.STATUS.AWAITING_SIGNATURES,
-      compensationComplete: true,
+      status: String(record['Status']),
+      ownerDecision: clean.ownerDecision,
+      compensationComplete: isV31CompensationComplete_(cycle),
       cycleStatus: String(cycle['Status']),
-      message: 'Owner compensation decision recorded.',
+      message:
+        clean.ownerDecision === V31_COMP.OWNER_DECISION.DENIED
+          ? 'Owner declined the compensation recommendation.'
+          : 'Owner compensation decision recorded.',
       actorEmail: email,
     };
   });
 
-  // Resolved outside the lock: resolveSystemAlertCore_ acquires its own lock.
   resolveCompensationOwnerAlert_(cycleId, result.actorEmail);
+
+  try {
+    ensureCompensationManagerOutcomeEmail_(cycleId);
+  } catch (notifyError) {
+    Logger.log(
+      'Manager outcome notification failed: ' +
+        String(notifyError.message || notifyError)
+    );
+  }
 
   return result;
 }
@@ -1027,53 +1150,73 @@ function validateOwnerDecisionPayload_(payload, record) {
     record['Manager Recommended Percent']
   );
 
+  if (mode === 'deny') {
+    const notes = cleanText_(data.ownerDecisionNotes || '');
+    if (!notes) {
+      throw new Error(
+        'Owner Decision Notes are required when declining an adjustment.'
+      );
+    }
+    return {
+      ownerName: ownerName,
+      notes: notes,
+      ownerDecision: V31_COMP.OWNER_DECISION.DENIED,
+      accepted: false,
+      finalRate: null,
+      finalPercent: null,
+      finalAnnual: null,
+      effectiveDate: null,
+    };
+  }
+
   let finalRate;
   let finalPercent;
   let accepted;
+  let ownerDecision;
 
   if (mode === 'approve') {
     finalRate = recommendedRate;
     finalPercent = recommendedPercent;
     accepted = true;
+    ownerDecision = V31_COMP.OWNER_DECISION.APPROVED;
   } else if (mode === 'override') {
     accepted = false;
+    ownerDecision = V31_COMP.OWNER_DECISION.MODIFIED;
     const notes = cleanText_(data.ownerDecisionNotes || '');
     if (!notes) {
       throw new Error(
         'Owner Decision Notes are required when approving a different amount.'
       );
     }
-    if (data.finalApprovedPayRate !== '' && data.finalApprovedPayRate != null) {
-      finalRate = roundCurrency_(Number(data.finalApprovedPayRate));
-      if (!Number.isFinite(finalRate) || finalRate <= 0) {
-        throw new Error('Final approved pay rate must be a positive number.');
-      }
-      finalPercent = roundPercent_((finalRate - currentRate) / currentRate);
-    } else if (
-      data.finalApprovedPercent !== '' &&
-      data.finalApprovedPercent != null
+    // Percentage-only override: ignore any client-supplied final rate.
+    if (
+      data.finalApprovedPercent === '' ||
+      data.finalApprovedPercent == null
     ) {
-      const entered = Number(data.finalApprovedPercent);
-      if (!Number.isFinite(entered)) {
-        throw new Error('Final approved percent must be a valid number.');
-      }
-      finalPercent = roundPercent_(entered / 100);
-      finalRate = roundCurrency_(currentRate * (1 + finalPercent));
-    } else {
+      throw new Error('Final approved percent is required.');
+    }
+    const entered = Number(data.finalApprovedPercent);
+    if (!Number.isFinite(entered)) {
+      throw new Error('Final approved percent must be a valid number.');
+    }
+    if (entered < 0) {
+      throw new Error('Final approved percent cannot be negative.');
+    }
+    if (entered === 0) {
       throw new Error(
-        'Enter either a final approved pay rate or a final approved percent.'
+        'Use Decline Adjustment instead of approving a 0% adjustment.'
       );
     }
+    finalPercent = roundPercent_(entered / 100);
+    finalRate = roundCurrency_(currentRate * (1 + finalPercent));
   } else {
     throw new Error(
-      'Choose Approve Manager Recommendation or Approve Different Amount.'
+      'Choose Approve Recommendation, Approve Different Amount, or Decline Adjustment.'
     );
   }
 
   const effectiveRaw = String(
-    data.compensationEffectiveDate ||
-      data.effectiveDate ||
-      ''
+    data.compensationEffectiveDate || data.effectiveDate || ''
   ).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveRaw)) {
     throw new Error(
@@ -1087,20 +1230,18 @@ function validateOwnerDecisionPayload_(payload, record) {
 
   return {
     ownerName: ownerName,
-    notes:
-      mode === 'override'
-        ? cleanText_(data.ownerDecisionNotes || '')
-        : cleanText_(data.ownerDecisionNotes || ''),
+    notes: cleanText_(data.ownerDecisionNotes || ''),
+    ownerDecision: ownerDecision,
+    accepted: accepted,
     finalRate: finalRate,
     finalPercent: finalPercent,
     finalAnnual: annualSalaryFromRate_(finalRate),
-    accepted: accepted,
     effectiveDate: effectiveDate,
   };
 }
 
 function editCompensationOwnerDecision(cycleId, payload) {
-  return withLock_(function () {
+  const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
     if (!isHrUser_(email)) {
@@ -1122,9 +1263,12 @@ function editCompensationOwnerDecision(cycleId, payload) {
 
     const recordLoc = findCompensationRecordByCycle_(cycleId);
     const record = recordLoc.object;
-    if (String(record['Status']) !== V31_COMP.STATUS.AWAITING_SIGNATURES) {
+    const editableStatuses = {};
+    editableStatuses[V31_COMP.STATUS.AWAITING_SIGNATURES] = true;
+    editableStatuses[V31_COMP.STATUS.DENIED] = true;
+    if (!editableStatuses[String(record['Status'])]) {
       throw new Error(
-        'Owner decision can only be edited while awaiting signatures and before any signature exists.'
+        'Owner decision can only be edited while awaiting signatures (or after a deny) and before any signature exists.'
       );
     }
 
@@ -1145,20 +1289,43 @@ function editCompensationOwnerDecision(cycleId, payload) {
     const clean = validateOwnerDecisionPayload_(payload, record);
     const now = new Date();
 
-    record['Final Approved Pay Rate'] = clean.finalRate;
-    record['Final Approved Annual Salary'] = clean.finalAnnual;
-    record['Final Approved Percent'] = clean.finalPercent;
-    record['Recommendation Accepted'] = clean.accepted ? 'Yes' : 'No';
-    record['Compensation Effective Date'] = clean.effectiveDate;
     record['Owner Name'] = clean.ownerName;
+    record['Owner Decision'] = clean.ownerDecision;
     record['Owner Decision At'] = now;
     record['Owner Decision Recorded By'] = email;
     record['Owner Decision Notes'] = clean.notes;
     record['Updated At'] = now;
+
+    if (clean.ownerDecision === V31_COMP.OWNER_DECISION.DENIED) {
+      record['Final Approved Pay Rate'] = '';
+      record['Final Approved Annual Salary'] = '';
+      record['Final Approved Percent'] = '';
+      record['Recommendation Accepted'] = 'No';
+      record['Compensation Effective Date'] = '';
+      record['Status'] = V31_COMP.STATUS.DENIED;
+      record['Rate Update Status'] = '';
+      record['CAF PDF Status'] = '';
+    } else {
+      record['Final Approved Pay Rate'] = clean.finalRate;
+      record['Final Approved Annual Salary'] = clean.finalAnnual;
+      record['Final Approved Percent'] = clean.finalPercent;
+      record['Recommendation Accepted'] = clean.accepted ? 'Yes' : 'No';
+      record['Compensation Effective Date'] = clean.effectiveDate;
+      record['Status'] = V31_COMP.STATUS.AWAITING_SIGNATURES;
+    }
+
+    // Reset outcome email so the manager is re-notified of the correction.
+    record['Manager Outcome Email Status'] = V31.DELIVERY.PENDING;
+    record['Manager Outcome Email Attempt ID'] = '';
+    record['Manager Outcome Email Started At'] = '';
+    record['Manager Outcome Email Sent At'] = '';
+    record['Manager Outcome Email Last Error'] = '';
+
     writeCompensationRecord_(recordLoc.rowNumber, record);
 
     syncCycleCompensationSummary_(cycle, record);
     cycle['Updated At'] = now;
+    updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
 
     audit_(
@@ -1166,14 +1333,17 @@ function editCompensationOwnerDecision(cycleId, payload) {
       'Compensation owner decision corrected',
       email,
       V31_COMP.STATUS.AWAITING_SIGNATURES,
-      V31_COMP.STATUS.AWAITING_SIGNATURES,
+      String(record['Status']),
       JSON.stringify({
         reason: reason,
         previous: previous,
         next: {
-          finalRate: clean.finalRate,
-          finalPercent: clean.finalPercent,
-          effectiveDate: formatDate_(clean.effectiveDate),
+          ownerDecision: clean.ownerDecision,
+          finalRate: clean.finalRate || '',
+          finalPercent: clean.finalPercent || '',
+          effectiveDate: clean.effectiveDate
+            ? formatDate_(clean.effectiveDate)
+            : '',
           ownerName: clean.ownerName,
           accepted: clean.accepted,
         },
@@ -1183,9 +1353,21 @@ function editCompensationOwnerDecision(cycleId, payload) {
     return {
       ok: true,
       message: 'Owner compensation decision updated.',
-      status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+      status: String(record['Status']),
+      ownerDecision: clean.ownerDecision,
     };
   });
+
+  try {
+    ensureCompensationManagerOutcomeEmail_(cycleId);
+  } catch (notifyError) {
+    Logger.log(
+      'Manager outcome notification (edit) failed: ' +
+        String(notifyError.message || notifyError)
+    );
+  }
+
+  return result;
 }
 
 function resetCompensationDecision(cycleId, reason) {
@@ -1217,7 +1399,8 @@ function resetCompensationDecision(cycleId, reason) {
       const status = String(recordLoc.object['Status'] || '');
       if (
         status !== V31_COMP.STATUS.AWAITING_OWNER &&
-        status !== V31_COMP.STATUS.AWAITING_SIGNATURES
+        status !== V31_COMP.STATUS.AWAITING_SIGNATURES &&
+        status !== V31_COMP.STATUS.DENIED
       ) {
         throw new Error(
           'Completed compensation records cannot be reset through ordinary reset.'
@@ -1313,6 +1496,7 @@ function getCompensationQueue() {
           managerBusinessJustification: String(
             record['Manager Business Justification'] || ''
           ),
+          ownerDecision: String(record['Owner Decision'] || ''),
           finalApprovedPayRate: record['Final Approved Pay Rate']
             ? Number(record['Final Approved Pay Rate'])
             : null,
@@ -1429,6 +1613,231 @@ function resolveCompensationOwnerAlert_(cycleId, actorEmail) {
         String(error.message || error)
     );
   }
+}
+
+/* ================== MANAGER OUTCOME NOTIFICATION ================== */
+
+/**
+ * Durable manager notification after an owner decision.
+ * Uses claim → send → confirm on CompensationRecords so retries never
+ * duplicate the email.
+ */
+function ensureCompensationManagerOutcomeEmail_(cycleId) {
+  ensureCompensationDataModel_();
+  const claimed = withLock_(function () {
+    const recordLoc = findCompensationRecordByCycle_(cycleId);
+    const record = recordLoc.object;
+    const ownerDecision = String(record['Owner Decision'] || '');
+    if (
+      ownerDecision !== V31_COMP.OWNER_DECISION.APPROVED &&
+      ownerDecision !== V31_COMP.OWNER_DECISION.MODIFIED &&
+      ownerDecision !== V31_COMP.OWNER_DECISION.DENIED
+    ) {
+      return { skip: true, reason: 'no-decision' };
+    }
+
+    const status = String(
+      record['Manager Outcome Email Status'] || V31.DELIVERY.PENDING
+    );
+    if (status === V31.DELIVERY.SENT && record['Manager Outcome Email Sent At']) {
+      return { skip: true, reason: 'already-sent' };
+    }
+    if (status === V31.DELIVERY.SENDING) {
+      if (
+        !isDeliveryClaimStale_(record['Manager Outcome Email Started At'])
+      ) {
+        return { skip: true, reason: 'in-progress' };
+      }
+      record['Manager Outcome Email Status'] = V31.DELIVERY.UNKNOWN;
+      record['Manager Outcome Email Last Error'] =
+        'Manager outcome email claim went stale before confirmation.';
+      record['Manager Outcome Email Attempt ID'] = '';
+      record['Manager Outcome Email Started At'] = '';
+      record['Updated At'] = new Date();
+      writeCompensationRecord_(recordLoc.rowNumber, record);
+      throw new Error(
+        'Manager compensation outcome email is Delivery Unknown and requires recovery.'
+      );
+    }
+    if (status === V31.DELIVERY.UNKNOWN) {
+      throw new Error(
+        'Manager compensation outcome email is Delivery Unknown. HR must reconcile before retry.'
+      );
+    }
+
+    const attemptId = Utilities.getUuid();
+    record['Manager Outcome Email Status'] = V31.DELIVERY.SENDING;
+    record['Manager Outcome Email Attempt ID'] = attemptId;
+    record['Manager Outcome Email Started At'] = new Date();
+    record['Manager Outcome Email Last Error'] = '';
+    record['Updated At'] = new Date();
+    writeCompensationRecord_(recordLoc.rowNumber, record);
+    SpreadsheetApp.flush();
+
+    const cycle = findCycle_(cycleId).object;
+    return {
+      skip: false,
+      attemptId: attemptId,
+      managerEmail: normalizeEmail_(cycle['Manager Email']),
+      cycle: cycle,
+      record: record,
+      ownerDecision: ownerDecision,
+    };
+  });
+
+  if (claimed.skip) {
+    return { ok: true, skipped: true, reason: claimed.reason };
+  }
+
+  try {
+    sendCompensationManagerOutcomeEmailBody_(
+      claimed.cycle,
+      claimed.record,
+      claimed.ownerDecision
+    );
+    withLock_(function () {
+      const loc = findCompensationRecordByCycle_(cycleId);
+      const rec = loc.object;
+      if (
+        String(rec['Manager Outcome Email Attempt ID'] || '') !==
+        String(claimed.attemptId)
+      ) {
+        return;
+      }
+      rec['Manager Outcome Email Status'] = V31.DELIVERY.SENT;
+      rec['Manager Outcome Email Sent At'] = new Date();
+      rec['Manager Outcome Email Attempt ID'] = '';
+      rec['Manager Outcome Email Started At'] = '';
+      rec['Manager Outcome Email Last Error'] = '';
+      rec['Updated At'] = new Date();
+      writeCompensationRecord_(loc.rowNumber, rec);
+      SpreadsheetApp.flush();
+    });
+    return { ok: true, sent: true };
+  } catch (error) {
+    withLock_(function () {
+      const loc = findCompensationRecordByCycle_(cycleId);
+      const rec = loc.object;
+      if (
+        String(rec['Manager Outcome Email Attempt ID'] || '') !==
+        String(claimed.attemptId)
+      ) {
+        return;
+      }
+      rec['Manager Outcome Email Status'] = V31.DELIVERY.UNKNOWN;
+      rec['Manager Outcome Email Last Error'] = String(error.message || error);
+      rec['Manager Outcome Email Attempt ID'] = '';
+      rec['Manager Outcome Email Started At'] = '';
+      rec['Updated At'] = new Date();
+      writeCompensationRecord_(loc.rowNumber, rec);
+      SpreadsheetApp.flush();
+    });
+    throw error;
+  }
+}
+
+function formatCompensationMoney_(value) {
+  const amount = Number(value || 0);
+  return (
+    '$' +
+    amount.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
+}
+
+function sendCompensationManagerOutcomeEmailBody_(cycle, record, ownerDecision) {
+  const managerEmail = normalizeEmail_(cycle['Manager Email']);
+  if (!managerEmail) {
+    throw new Error('Manager email is missing for compensation outcome notice.');
+  }
+
+  const recommendedPct = roundPercent_(
+    Number(record['Manager Recommended Percent'] || 0) * 100
+  );
+  let subject;
+  let htmlBody;
+
+  if (ownerDecision === V31_COMP.OWNER_DECISION.APPROVED) {
+    subject =
+      'Compensation recommendation approved: ' + cycle['Employee Name'];
+    htmlBody =
+      '<p>Your compensation recommendation for <strong>' +
+      htmlEscape_(cycle['Employee Name']) +
+      '</strong> was approved.</p>' +
+      '<ul>' +
+      '<li>Final increase: <strong>' +
+      htmlEscape_(String(recommendedPct)) +
+      '%</strong></li>' +
+      '<li>Final pay rate: <strong>' +
+      htmlEscape_(formatCompensationMoney_(record['Final Approved Pay Rate'])) +
+      '</strong></li>' +
+      '<li>Final annual salary: <strong>' +
+      htmlEscape_(
+        formatCompensationMoney_(record['Final Approved Annual Salary'])
+      ) +
+      '</strong></li>' +
+      '<li>Effective date: <strong>' +
+      htmlEscape_(formatDate_(record['Compensation Effective Date']) || '') +
+      '</strong></li>' +
+      '</ul>' +
+      '<p>Please use these final values in the review meeting.</p>';
+  } else if (ownerDecision === V31_COMP.OWNER_DECISION.MODIFIED) {
+    const finalPct = roundPercent_(
+      Number(record['Final Approved Percent'] || 0) * 100
+    );
+    subject =
+      'Compensation recommendation modified: ' + cycle['Employee Name'];
+    htmlBody =
+      '<p>The owner approved a different amount for <strong>' +
+      htmlEscape_(cycle['Employee Name']) +
+      '</strong>.</p>' +
+      '<ul>' +
+      '<li>Your recommendation: <strong>' +
+      htmlEscape_(String(recommendedPct)) +
+      '%</strong></li>' +
+      '<li>Final approved: <strong>' +
+      htmlEscape_(String(finalPct)) +
+      '%</strong></li>' +
+      '<li>Final pay rate: <strong>' +
+      htmlEscape_(formatCompensationMoney_(record['Final Approved Pay Rate'])) +
+      '</strong></li>' +
+      '<li>Final annual salary: <strong>' +
+      htmlEscape_(
+        formatCompensationMoney_(record['Final Approved Annual Salary'])
+      ) +
+      '</strong></li>' +
+      '<li>Effective date: <strong>' +
+      htmlEscape_(formatDate_(record['Compensation Effective Date']) || '') +
+      '</strong></li>' +
+      '</ul>' +
+      '<p>Please use the <em>final approved</em> values in the review meeting.</p>';
+  } else {
+    subject =
+      'Compensation recommendation declined: ' + cycle['Employee Name'];
+    htmlBody =
+      '<p>Your compensation recommendation for <strong>' +
+      htmlEscape_(cycle['Employee Name']) +
+      '</strong> was declined.</p>' +
+      '<ul>' +
+      '<li>Your recommendation: <strong>' +
+      htmlEscape_(String(recommendedPct)) +
+      '%</strong></li>' +
+      '<li>Final decision: <strong>No Compensation Adjustment</strong></li>' +
+      '</ul>' +
+      '<p>The employee will not be shown this recommendation or the denial.</p>';
+  }
+
+  sendHtmlEmail_(managerEmail, subject, htmlBody);
+  audit_(
+    cycle['Cycle ID'],
+    'Compensation manager outcome email sent',
+    Session.getEffectiveUser().getEmail(),
+    '',
+    ownerDecision,
+    managerEmail
+  );
 }
 
 /* ====================== HISTORY REPAIR SWEEP ====================== */

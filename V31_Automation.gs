@@ -1460,23 +1460,30 @@ function getV31CycleData_(cycle, email, isHr) {
 }
 
 function getEmployeeCompensationAcknowledgement_(cycle) {
-  const decision = normalizeCompensationDecision_(
-    cycle['Compensation Decision']
-  );
-  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
-    return null;
-  }
   const recordLoc = findCompensationRecordByCycleOptional_(
     cycle['Cycle ID']
   );
-  if (
-    !recordLoc ||
-    String(recordLoc.object['Status']) !==
-      V31_COMP.STATUS.AWAITING_SIGNATURES
-  ) {
+  if (!recordLoc) {
     return null;
   }
   const record = recordLoc.object;
+  // Hard privacy: denied recommendations are invisible to employees.
+  if (
+    String(record['Owner Decision'] || '') ===
+      V31_COMP.OWNER_DECISION.DENIED ||
+    String(record['Status'] || '') === V31_COMP.STATUS.DENIED
+  ) {
+    return null;
+  }
+  if (!isApprovedCompensationAdjustment_(record)) {
+    return null;
+  }
+  if (
+    record['Final Approved Pay Rate'] === '' ||
+    record['Final Approved Pay Rate'] == null
+  ) {
+    return null;
+  }
   return {
     currentPayRate: Number(record['Original Pay Rate'] || 0),
     currentAnnualSalary: Number(

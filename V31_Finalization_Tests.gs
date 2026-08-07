@@ -62,8 +62,8 @@ function runV31FinalizationTests_() {
   );
   results.push(
     runFinalCase_(
-      'PDF filename uses cycle ID not employee name',
-      testPdfFileNameUsesCycleId_
+      'PDF filename is human-readable; legacy cycle-id name remains recoverable',
+      testPdfFileNameUsesHumanReadableShape_
     )
   );
   results.push(
@@ -399,19 +399,27 @@ function testFinalizingVisibilityAndPrimaryAction_() {
   );
 }
 
-function testPdfFileNameUsesCycleId_() {
+function testPdfFileNameUsesHumanReadableShape_() {
   const name = buildReviewPdfFileName_(
     'CYCLE-9',
-    'Self-Evaluation'
-  );
-
-  assertFinal_(
-    name === 'AITHERAS_CYCLE-9_Self_Evaluation_FINAL.pdf',
-    'PDF recovery name must key on cycle ID'
+    PR.TYPE.SELF
   );
   assertFinal_(
-    name.indexOf('Employee') < 0,
-    'PDF recovery name must not rely on employee display name'
+    /\.pdf$/i.test(name),
+    'PDF name must end with .pdf'
+  );
+  assertFinal_(
+    name.indexOf('Employee Self Evaluation') >= 0 ||
+      name.indexOf('Self_Evaluation') >= 0,
+    'PDF name must identify the self-evaluation document'
+  );
+  const legacy = buildLegacyReviewPdfFileNames_(
+    'CYCLE-9',
+    PR.TYPE.SELF
+  );
+  assertFinal_(
+    legacy.indexOf('AITHERAS_CYCLE-9_Self_Evaluation_FINAL.pdf') >= 0,
+    'Legacy cycle-id PDF name must remain recoverable'
   );
 }
 

@@ -493,6 +493,25 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] Owner-decision alert auto-resolves when the decision is recorded
 - [ ] Adjustment-bearing review cannot reach Complete until CAF is sealed
 
+### Compensation UX polish (percentage-only / deny / privacy / roster)
+
+- [ ] Manager enters only Recommended Increase %; rate/salary fields are read-only
+- [ ] Server ignores client-supplied recommended rate and recalculates from roster
+- [ ] 0% / negative / malformed percent rejected
+- [ ] HR Approve Recommendation uses manager % unchanged
+- [ ] HR Approve Different Amount is percentage-only; derives final rate/salary
+- [ ] HR Decline Adjustment confirms; no CAF / history / rate update; manager rec preserved
+- [ ] Manager receives durable approved / modified / denied outcome email (deduped)
+- [ ] Manager/HR see collapsed Compensation Details; employee does not
+- [ ] Denied: employee sees no recommendation, denial, acknowledgement, CAF, or compensation wording
+- [ ] Approved final email: 3 PDFs (Manager, Self, CAF)
+- [ ] Denied / no-adjustment final email: 2 PDFs only
+- [ ] Human-readable PDF filenames; recovery still works via provenance / legacy names
+- [ ] After CAF seal + history, due Current Pay Rate updates Column H before Complete
+- [ ] Manual roster change before update → Conflict, no overwrite, System Alert
+- [ ] Recheck after correcting predecessor applies approved rate
+- [ ] `runV31CompensationTests_()` passes
+
 ### Compensation edges (signature provenance / finalization gate)
 
 - [ ] Manager Signature File ID points to Employee's valid image → CAF refuses to seal

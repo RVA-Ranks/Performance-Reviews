@@ -5368,10 +5368,46 @@ function sendCombinedSignatureEmailBody_(cycle, role) {
 }
 
 function sendCompletedPacket_(cycle, recipients) {
+  const attachments = [
+    DriveApp.getFileById(cycle['Manager Review PDF ID']).getBlob(),
+    DriveApp.getFileById(cycle['Self Evaluation PDF ID']).getBlob(),
+  ];
+
+  // Approved adjustments only: attach the sealed CAF. Denied / no-adjustment
+  // packets must never include compensation artifacts or wording.
+  let cafAttached = false;
+  try {
+    const recordLoc = findCompensationRecordByCycleOptional_(
+      cycle['Cycle ID']
+    );
+    if (
+      recordLoc &&
+      isApprovedCompensationAdjustment_(recordLoc.object) &&
+      String(recordLoc.object['CAF Final PDF ID'] || '') &&
+      String(recordLoc.object['Status']) === V31_COMP.STATUS.COMPLETE
+    ) {
+      attachments.push(
+        DriveApp.getFileById(
+          String(recordLoc.object['CAF Final PDF ID'])
+        ).getBlob()
+      );
+      cafAttached = true;
+    }
+  } catch (cafError) {
+    Logger.log(
+      'Final packet CAF attach skipped: ' +
+        String(cafError.message || cafError)
+    );
+  }
+
   const htmlBody =
     '<p>The performance review cycle for <strong>' +
     htmlEscape_(cycle['Employee Name']) +
-    '</strong> is complete.</p><p>The signed manager review and employee self-evaluation are attached.</p>';
+    '</strong> is complete.</p><p>The signed manager review and employee self-evaluation' +
+    (cafAttached
+      ? ', and the compensation adjustment form,'
+      : '') +
+    ' are attached.</p>';
 
   MailApp.sendEmail({
     to: uniqueEmails_(
@@ -5386,14 +5422,7 @@ function sendCompletedPacket_(cycle, recipients) {
       cycle['Employee Name'],
     body: htmlToPlainText_(htmlBody),
     htmlBody: htmlBody,
-    attachments: [
-      DriveApp.getFileById(
-        cycle['Manager Review PDF ID']
-      ).getBlob(),
-      DriveApp.getFileById(
-        cycle['Self Evaluation PDF ID']
-      ).getBlob(),
-    ],
+    attachments: attachments,
     name: PR.SETTINGS_DEFAULTS.APP_NAME || 'AITHERAS HR',
   });
 
@@ -5403,7 +5432,7 @@ function sendCompletedPacket_(cycle, recipients) {
     cycle['HR Email'],
     PR.CYCLE.FINALIZING,
     PR.CYCLE.FINALIZING,
-    ''
+    cafAttached ? 'with-caf' : 'without-caf'
   );
 }
 

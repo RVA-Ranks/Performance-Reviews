@@ -11,6 +11,15 @@ function maybeGenerateCompensationPdfAfterSignatures_(cycleId) {
   const decision = normalizeCompensationDecision_(
     cycle['Compensation Decision']
   );
+  const recordLoc = findCompensationRecordByCycleOptional_(cycleId);
+  if (
+    recordLoc &&
+    (String(recordLoc.object['Owner Decision'] || '') ===
+      V31_COMP.OWNER_DECISION.DENIED ||
+      String(recordLoc.object['Status'] || '') === V31_COMP.STATUS.DENIED)
+  ) {
+    return { skipped: true, reason: 'denied' };
+  }
   if (decision !== V31.COMPENSATION.ADJUSTMENT) {
     return { skipped: true, reason: 'no-adjustment' };
   }
@@ -249,13 +258,51 @@ function commitCompensationCafSealed_(cycleId, pdfId, options) {
     // History is a separate durable step; a sealed CAF must be able to repair
     // missing history on a later call even if this append fails now.
     ensureCompensationHistory_(cycleId);
+    // Authoritative roster update: after history, apply Current Pay Rate when
+    // the effective date is due. Future dates stay Pending Effective Date.
+    try {
+      applyCompensationRateUpdateOnce_(cycleId);
+    } catch (rateError) {
+      Logger.log(
+        'Post-CAF roster update deferred/failed: ' +
+          String(rateError.message || rateError)
+      );
+    }
   }
 
   return result;
 }
 
 function buildCompensationCafFileName_(cycleId) {
-  return 'AITHERAS_' + cycleId + '_Compensation_Adjustment_FINAL.pdf';
+  let cycle;
+  try {
+    cycle = findCycle_(cycleId).object;
+  } catch (error) {
+    cycle = { 'Cycle ID': cycleId };
+  }
+  const employee = sanitizeFileNamePart_(
+    cycle['Employee Name'] || 'Employee'
+  );
+  const datePart = formatFileNameDate_(
+    cycle['Review Date'] || cycle['Completed At'] || new Date()
+  );
+  const reviewType = sanitizeFileNamePart_(
+    cycle['Review Type'] || 'Review'
+  );
+  return (
+    employee +
+    ' - ' +
+    datePart +
+    ' - ' +
+    reviewType +
+    ' - Compensation Adjustment Form.pdf'
+  );
+}
+
+function buildLegacyCompensationCafFileNames_(cycleId) {
+  return [
+    'AITHERAS_' + cycleId + '_Compensation_Adjustment_FINAL.pdf',
+  ];
 }
 
 /**
@@ -315,9 +362,25 @@ function assertValidCompensationCafFile_(file, cycleId, record, folderId) {
     );
   }
   if (
-    String(file.getName()) !== buildCompensationCafFileName_(cycleId)
+    String(file.getName()) !== buildCompensationCafFileName_(cycleId) &&
+    buildLegacyCompensationCafFileNames_(cycleId).indexOf(
+      String(file.getName())
+    ) < 0
   ) {
-    throw new Error('Candidate CAF ' + fileId + ' name mismatch.');
+    // Name mismatch is OK only when provenance proves identity (below).
+    // Continue into provenance checks rather than failing on name alone when
+    // provenance is present; fail closed when neither matches.
+    const earlyProvenance = parseCompensationCafProvenance_(
+      file.getDescription()
+    );
+    if (
+      !earlyProvenance ||
+      String(earlyProvenance.cycleId) !== String(cycleId) ||
+      String(earlyProvenance.recordId) !==
+        String(record['Compensation Record ID'] || '')
+    ) {
+      throw new Error('Candidate CAF ' + fileId + ' name mismatch.');
+    }
   }
   const provenance = parseCompensationCafProvenance_(file.getDescription());
   if (!provenance) {
@@ -346,7 +409,7 @@ function assertValidCompensationCafFile_(file, cycleId, record, folderId) {
 }
 
 /**
- * Scan deterministic-name CAF artifacts, separating valid from rejected.
+ * Scan CAF artifacts by recognized filenames and by provenance.
  * A rejected (e.g. no-provenance, manually uploaded) same-named file never
  * aborts the scan and is never trashed; it is retained as evidence so a
  * single valid candidate can still be reconciled.
@@ -360,27 +423,20 @@ function collectCompensationCafArtifacts_(cycleId, record) {
     );
   }
   const folder = DriveApp.getFolderById(folderId);
-  const fileName = buildCompensationCafFileName_(cycleId);
-  const files = folder.getFilesByName(fileName);
+  const recognizedNames = [buildCompensationCafFileName_(cycleId)].concat(
+    buildLegacyCompensationCafFileNames_(cycleId)
+  );
+  const seen = {};
   const valid = [];
   const rejected = [];
-  const seen = {};
-  while (files.hasNext()) {
-    const file = files.next();
-    if (file.isTrashed()) continue;
-    let id;
+
+  function considerFile_(file) {
+    if (file.isTrashed()) return;
+    const id = String(file.getId());
+    if (seen[id]) return;
+    seen[id] = true;
     try {
-      id = assertValidCompensationCafFile_(file, cycleId, record, folderId);
-    } catch (error) {
-      rejected.push({
-        id: String(file.getId()),
-        name: String(file.getName() || ''),
-        reason: String(error.message || error),
-      });
-      continue;
-    }
-    if (!seen[id]) {
-      seen[id] = true;
+      assertValidCompensationCafFile_(file, cycleId, record, folderId);
       valid.push({
         id: id,
         name: String(file.getName() || ''),
@@ -388,8 +444,47 @@ function collectCompensationCafArtifacts_(cycleId, record) {
           ? file.getLastUpdated().toISOString()
           : '',
       });
+    } catch (error) {
+      // Only retain as rejected evidence when the name matches a recognized
+      // CAF name (or provenance mentions this cycle) — avoid flooding from
+      // unrelated folder contents.
+      const name = String(file.getName() || '');
+      const provenance = parseCompensationCafProvenance_(
+        file.getDescription()
+      );
+      const relevant =
+        recognizedNames.indexOf(name) >= 0 ||
+        (provenance && String(provenance.cycleId) === String(cycleId));
+      if (relevant) {
+        rejected.push({
+          id: id,
+          name: name,
+          reason: String(error.message || error),
+        });
+      }
     }
   }
+
+  recognizedNames.forEach(function (fileName) {
+    const files = folder.getFilesByName(fileName);
+    while (files.hasNext()) {
+      considerFile_(files.next());
+    }
+  });
+
+  // Provenance-first recovery: also consider PDFs whose description matches
+  // this cycle even if the human-readable name differs.
+  const allPdfs = folder.getFilesByType(MimeType.PDF);
+  let checked = 0;
+  while (allPdfs.hasNext() && checked < 200) {
+    checked += 1;
+    const file = allPdfs.next();
+    const provenance = parseCompensationCafProvenance_(file.getDescription());
+    if (provenance && String(provenance.cycleId) === String(cycleId)) {
+      considerFile_(file);
+    }
+  }
+
   return { valid: valid, rejected: rejected };
 }
 
