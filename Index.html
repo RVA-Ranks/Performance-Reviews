@@ -1913,7 +1913,14 @@ async function refreshCompensationQueue() {
               : '') +
             (item.rateUpdateStatus
               ? '<br><span class="field-help">Rate: ' +
-                escapeHtml(item.rateUpdateStatus) +
+                escapeHtml(
+                  item.rateUpdateDisplay || item.rateUpdateStatus
+                ) +
+                '</span>'
+              : '') +
+            (item.managerOutcomeEmailStatus
+              ? '<br><span class="field-help">Manager email: ' +
+                escapeHtml(item.managerOutcomeEmailStatus) +
                 '</span>'
               : '') +
             '</td><td>' +
@@ -1934,6 +1941,13 @@ async function refreshCompensationQueue() {
               ? '<br><button class="button outline" onclick="recoverCompensationRate(\'' +
                 escapeAttr(item.cycleId) +
                 '\')">Resolve Rate Update</button>'
+              : '') +
+            (item.managerOutcomeEmailStatus === 'Delivery Unknown'
+              ? '<br><button class="button outline" onclick="openManagerOutcomeEmailRecovery(\'' +
+                escapeAttr(item.cycleId) +
+                '\',\'' +
+                escapeAttr(item.managerOutcomeEmailAttemptId || '') +
+                '\')">Reconcile Manager Email</button>'
               : '') +
             (item.rateUpdateStatus === 'Conflict'
               ? '<div class="field-help" style="margin-top:6px">' +
@@ -2009,6 +2023,71 @@ async function recoverCompensationRate(cycleId) {
   } catch (error) {
     showToast('error', 'Compensation rate update', errorMessage(error));
   }
+}
+
+async function openManagerOutcomeEmailRecovery(cycleId, attemptId) {
+  openModal({
+    title: 'Reconcile manager outcome email',
+    body:
+      '<p><strong>Delivery Unknown:</strong> the manager may already have received the compensation outcome email. Do not auto-resend.</p>' +
+      '<p>Attempt ID: <code>' +
+      escapeHtml(attemptId || '') +
+      '</code></p>' +
+      '<label>Action<br><select id="managerOutcomeRecoveryAction">' +
+      '<option value="markConfirmed">Mark Confirmed (already delivered)</option>' +
+      '<option value="resend">Confirmed Resend</option>' +
+      '</select></label>' +
+      '<label style="display:block;margin-top:12px;">Evidence note (required to Mark Confirmed)<br>' +
+      '<textarea id="managerOutcomeEvidence" rows="3" style="width:100%"></textarea></label>',
+    confirmLabel: 'Apply Reconciliation',
+    tone: 'warning',
+    onConfirm: async function () {
+      const action = document.getElementById(
+        'managerOutcomeRecoveryAction'
+      ).value;
+      const evidenceNote = String(
+        document.getElementById('managerOutcomeEvidence').value || ''
+      ).trim();
+      closeModal();
+      try {
+        if (action === 'markConfirmed') {
+          if (!evidenceNote) {
+            showToast(
+              'error',
+              'Manager outcome email',
+              'An evidence note is required to mark confirmed.'
+            );
+            return;
+          }
+          await server('markCompensationManagerOutcomeEmailConfirmed', cycleId, {
+            confirmed: true,
+            confirmationToken: 'MARK_MANAGER_OUTCOME_EMAIL_CONFIRMED',
+            originalAttemptId: attemptId || '',
+            evidenceNote: evidenceNote,
+          });
+          showToast(
+            'success',
+            'Manager outcome email',
+            'Marked confirmed with evidence.'
+          );
+        } else {
+          await server('resendCompensationManagerOutcomeEmailUnknown', cycleId, {
+            confirmed: true,
+            confirmationToken: 'RESEND_MANAGER_OUTCOME_EMAIL_UNKNOWN',
+            originalAttemptId: attemptId || '',
+          });
+          showToast(
+            'success',
+            'Manager outcome email',
+            'Confirmed resend completed.'
+          );
+        }
+        refreshCompensationQueue();
+      } catch (error) {
+        showToast('error', 'Manager outcome email', errorMessage(error));
+      }
+    },
+  });
 }
 
 function healthLevelClass(level) {

@@ -1047,9 +1047,12 @@ function ensureFinalDistribution_(cycleId, options) {
   const preflight = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = location.object;
+    const cafBinding = getFinalDistributionCafBinding_(cycleId);
     return {
       managerPdfId: String(cycle['Manager Review PDF ID'] || ''),
       selfPdfId: String(cycle['Self Evaluation PDF ID'] || ''),
+      cafRequired: !!cafBinding.cafRequired,
+      cafPdfId: String(cafBinding.cafPdfId || ''),
       status: String(
         cycle['Final Distribution Status'] || V31.DELIVERY.PENDING
       ),
@@ -1067,6 +1070,9 @@ function ensureFinalDistribution_(cycleId, options) {
         PR.TYPE.SELF,
         preflight.selfPdfId
       );
+      if (preflight.cafRequired) {
+        validateAuthoritativeCafPdfId_(cycleId, preflight.cafPdfId);
+      }
     } catch (pdfError) {
       withLock_(function () {
         const location = findCycle_(cycleId);
@@ -1090,6 +1096,8 @@ function ensureFinalDistribution_(cycleId, options) {
             {
               managerPdfId: preflight.managerPdfId,
               selfPdfId: preflight.selfPdfId,
+              cafRequired: preflight.cafRequired,
+              cafPdfId: preflight.cafPdfId,
             }
           );
         writeCycle_(location.rowNumber, cycle);
@@ -1099,6 +1107,8 @@ function ensureFinalDistribution_(cycleId, options) {
         error: String(pdfError.message || pdfError),
         managerPdfId: preflight.managerPdfId,
         selfPdfId: preflight.selfPdfId,
+        cafRequired: preflight.cafRequired,
+        cafPdfId: preflight.cafPdfId,
       });
       throw pdfError;
     }
@@ -1194,6 +1204,16 @@ function ensureFinalDistribution_(cycleId, options) {
         'Authoritative PDF IDs changed after validation. Refresh and retry final distribution.'
       );
     }
+    const liveCaf = getFinalDistributionCafBinding_(cycleId);
+    if (
+      !!liveCaf.cafRequired !== !!preflight.cafRequired ||
+      String(liveCaf.cafPdfId || '') !== String(preflight.cafPdfId || '') ||
+      (liveCaf.cafRequired && !liveCaf.cafPdfId)
+    ) {
+      throw new Error(
+        'Authoritative CAF binding changed after validation. Refresh and retry final distribution.'
+      );
+    }
     const attemptId = Utilities.getUuid();
     cycle['Final Distribution Status'] = V31.DELIVERY.SENDING;
     cycle['Final Distribution Attempt ID'] = attemptId;
@@ -1208,6 +1228,8 @@ function ensureFinalDistribution_(cycleId, options) {
       attemptId: attemptId,
       managerPdfId: String(cycle['Manager Review PDF ID']),
       selfPdfId: String(cycle['Self Evaluation PDF ID']),
+      cafRequired: !!liveCaf.cafRequired,
+      cafPdfId: String(liveCaf.cafPdfId || ''),
     };
   });
   if (claim.action === 'skip') return;
@@ -1236,6 +1258,9 @@ function ensureFinalDistribution_(cycleId, options) {
       PR.TYPE.SELF,
       claim.selfPdfId
     );
+    if (claim.cafRequired) {
+      validateAuthoritativeCafPdfId_(cycleId, claim.cafPdfId);
+    }
   } catch (pdfError) {
     preSendValidationError = pdfError;
   }
@@ -1262,6 +1287,8 @@ function ensureFinalDistribution_(cycleId, options) {
           {
             managerPdfId: claim.managerPdfId,
             selfPdfId: claim.selfPdfId,
+            cafRequired: claim.cafRequired,
+            cafPdfId: claim.cafPdfId,
           }
         );
       writeCycle_(location.rowNumber, cycle);
@@ -1275,13 +1302,21 @@ function ensureFinalDistribution_(cycleId, options) {
       ),
       managerPdfId: claim.managerPdfId,
       selfPdfId: claim.selfPdfId,
+      cafRequired: claim.cafRequired,
+      cafPdfId: claim.cafPdfId,
     });
     throw preSendValidationError;
   }
 
+  const packetSpec = buildFinalDistributionPacketSpec_(
+    claim.managerPdfId,
+    claim.selfPdfId,
+    { cafRequired: claim.cafRequired, cafPdfId: claim.cafPdfId }
+  );
+
   let sendError = null;
   try {
-    sendCompletedPacket_(claim.cycle, claim.recipients);
+    sendCompletedPacket_(claim.cycle, claim.recipients, packetSpec);
     maybeInjectExternalSideEffectFault_(
       'AFTER_FINAL_DISTRIBUTION_BEFORE_PERSISTENCE',
       cycleId
@@ -1312,11 +1347,14 @@ function ensureFinalDistribution_(cycleId, options) {
       recipientError ||
       JSON.stringify(currentRecipients) !==
         JSON.stringify(claim.recipients);
+    const liveCaf = getFinalDistributionCafBinding_(cycleId);
     const pdfIdsChanged =
       String(cycle['Manager Review PDF ID'] || '') !==
         String(claim.managerPdfId) ||
       String(cycle['Self Evaluation PDF ID'] || '') !==
-        String(claim.selfPdfId);
+        String(claim.selfPdfId) ||
+      !!liveCaf.cafRequired !== !!claim.cafRequired ||
+      String(liveCaf.cafPdfId || '') !== String(claim.cafPdfId || '');
     if (sendError) {
       cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
       cycle['Final Distribution Last Error'] = String(
@@ -1327,12 +1365,26 @@ function ensureFinalDistribution_(cycleId, options) {
           'send-or-commit-unknown',
           claim.attemptId,
           claim.recipients,
-          sendError
+          sendError,
+          {
+            claimedManagerPdfId: claim.managerPdfId,
+            claimedSelfPdfId: claim.selfPdfId,
+            claimedCafRequired: !!claim.cafRequired,
+            claimedCafPdfId: claim.cafPdfId,
+            currentManagerPdfId: String(
+              cycle['Manager Review PDF ID'] || ''
+            ),
+            currentSelfPdfId: String(
+              cycle['Self Evaluation PDF ID'] || ''
+            ),
+            currentCafRequired: !!liveCaf.cafRequired,
+            currentCafPdfId: String(liveCaf.cafPdfId || ''),
+          }
         );
     } else if (recipientsChanged || pdfIdsChanged) {
       cycle['Final Distribution Status'] = V31.DELIVERY.UNKNOWN;
       cycle['Final Distribution Last Error'] = pdfIdsChanged
-        ? 'Final packet may have been sent, but authoritative PDF IDs changed before commit.'
+        ? 'Final packet may have been sent, but authoritative PDF/CAF IDs changed before commit.'
         : 'Final packet was sent to the claimed recipients, but the authoritative cycle recipients changed before commit.';
       cycle['Final Distribution Recovery Details JSON'] =
         buildFinalDistributionRecoveryDetails_(
@@ -1346,12 +1398,16 @@ function ensureFinalDistribution_(cycleId, options) {
             currentRecipients: currentRecipients,
             claimedManagerPdfId: claim.managerPdfId,
             claimedSelfPdfId: claim.selfPdfId,
+            claimedCafRequired: !!claim.cafRequired,
+            claimedCafPdfId: claim.cafPdfId,
             currentManagerPdfId: String(
               cycle['Manager Review PDF ID'] || ''
             ),
             currentSelfPdfId: String(
               cycle['Self Evaluation PDF ID'] || ''
             ),
+            currentCafRequired: !!liveCaf.cafRequired,
+            currentCafPdfId: String(liveCaf.cafPdfId || ''),
           }
         );
     } else {

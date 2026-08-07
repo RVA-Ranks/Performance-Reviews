@@ -1,5 +1,22 @@
 # V3.1 Changelog
 
+## Final distribution binds approved CAF (`feat/compensation-integration`)
+
+- `ensureFinalDistribution_()` now binds `managerPdfId`, `selfPdfId`,
+  `cafRequired`, and `cafPdfId` in the durable claim. Approved adjustments
+  validate the sealed CAF before claim, immediately before send, and again
+  before Sent commit. CAF disappearance/change becomes Delivery Unknown —
+  never a silent 2-PDF send.
+- `sendCompletedPacket_()` takes an authoritative `packetSpec`; opportunistic
+  CAF attach/skip is removed from the claim path.
+- `compensationFinalizationDisposition_()` always requires a sealed CAF when
+  the decision is Adjustment Recommended, even if
+  `COMPENSATION_DECISION_REQUIRED` is later turned off.
+- Manager outcome email Delivery Unknown retains its attempt ID and exposes
+  HR Mark Confirmed / Confirmed Resend (never auto-resend) in the
+  Compensation Queue.
+- Future-dated rate updates display as `Scheduled for <date>` in the queue.
+
 ## Compensation UX polish — percentage-only, deny, privacy, roster (`feat/compensation-integration`)
 
 - Manager recommendation is **percentage-only**. Recommended rate/salary are

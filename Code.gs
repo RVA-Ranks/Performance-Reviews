@@ -5367,37 +5367,62 @@ function sendCombinedSignatureEmailBody_(cycle, role) {
   );
 }
 
-function sendCompletedPacket_(cycle, recipients) {
+/**
+ * Send the completed review packet.
+ * When packetSpec is provided (final-distribution claim path), attachments are
+ * bound strictly to the claim: no opportunistic CAF attach/skip.
+ * cafRequired=true → exactly 3 files (Manager, Self, CAF); failure if CAF missing.
+ * cafRequired=false → exactly 2 files.
+ */
+function sendCompletedPacket_(cycle, recipients, packetSpec) {
+  const managerPdfId = packetSpec
+    ? String(packetSpec.managerPdfId || '')
+    : String(cycle['Manager Review PDF ID'] || '');
+  const selfPdfId = packetSpec
+    ? String(packetSpec.selfPdfId || '')
+    : String(cycle['Self Evaluation PDF ID'] || '');
+  if (!managerPdfId || !selfPdfId) {
+    throw new Error(
+      'Final packet requires Manager and Self Evaluation PDF IDs.'
+    );
+  }
+
   const attachments = [
-    DriveApp.getFileById(cycle['Manager Review PDF ID']).getBlob(),
-    DriveApp.getFileById(cycle['Self Evaluation PDF ID']).getBlob(),
+    DriveApp.getFileById(managerPdfId).getBlob(),
+    DriveApp.getFileById(selfPdfId).getBlob(),
   ];
 
-  // Approved adjustments only: attach the sealed CAF. Denied / no-adjustment
-  // packets must never include compensation artifacts or wording.
   let cafAttached = false;
-  try {
+  if (packetSpec) {
+    if (packetSpec.cafRequired) {
+      const cafPdfId = String(packetSpec.cafPdfId || '').trim();
+      if (!cafPdfId) {
+        throw new Error(
+          'Approved compensation final packet requires a bound CAF PDF ID.'
+        );
+      }
+      attachments.push(DriveApp.getFileById(cafPdfId).getBlob());
+      cafAttached = true;
+    }
+  } else {
+    // Legacy callers without a claim packetSpec: fail closed for approved CAF.
     const recordLoc = findCompensationRecordByCycleOptional_(
       cycle['Cycle ID']
     );
     if (
       recordLoc &&
       isApprovedCompensationAdjustment_(recordLoc.object) &&
-      String(recordLoc.object['CAF Final PDF ID'] || '') &&
       String(recordLoc.object['Status']) === V31_COMP.STATUS.COMPLETE
     ) {
-      attachments.push(
-        DriveApp.getFileById(
-          String(recordLoc.object['CAF Final PDF ID'])
-        ).getBlob()
-      );
+      const cafPdfId = String(recordLoc.object['CAF Final PDF ID'] || '').trim();
+      if (!cafPdfId) {
+        throw new Error(
+          'Approved compensation final packet requires a sealed CAF PDF.'
+        );
+      }
+      attachments.push(DriveApp.getFileById(cafPdfId).getBlob());
       cafAttached = true;
     }
-  } catch (cafError) {
-    Logger.log(
-      'Final packet CAF attach skipped: ' +
-        String(cafError.message || cafError)
-    );
   }
 
   const htmlBody =

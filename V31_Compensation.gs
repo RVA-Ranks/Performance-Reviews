@@ -55,6 +55,10 @@ const V31_COMP = Object.freeze({
     FAILED: 'Failed',
   },
 
+  MANAGER_OUTCOME_CONFIRM_TOKEN: 'MARK_MANAGER_OUTCOME_EMAIL_CONFIRMED',
+  MANAGER_OUTCOME_RESEND_TOKEN: 'RESEND_MANAGER_OUTCOME_EMAIL_UNKNOWN',
+  MANAGER_OUTCOME_CONFIRM_EVENT_PREFIX: 'MANAGER_OUTCOME_EMAIL_CONFIRMED:',
+
   RECORD_HEADERS: [
     'Compensation Record ID',
     'Review Cycle ID',
@@ -453,17 +457,100 @@ function ensureCompensationHistory_(cycleId) {
  *   'block'   → Pending, blank, or unexpected value; completion must be blocked
  */
 function compensationFinalizationDisposition_(decisionRaw, compensationRequired) {
-  if (!compensationRequired) {
-    return 'skip';
-  }
   const decision = normalizeCompensationDecision_(decisionRaw);
-  if (decision === V31.COMPENSATION.NONE) {
-    return 'skip';
-  }
+  // An existing adjustment always requires a sealed CAF, even if the optional
+  // COMPENSATION_DECISION_REQUIRED setting is later turned off.
   if (decision === V31.COMPENSATION.ADJUSTMENT) {
     return 'require';
   }
+  if (decision === V31.COMPENSATION.NONE) {
+    return 'skip';
+  }
+  // Pending / blank / unexpected: optional only when the setting allows it.
+  if (!compensationRequired) {
+    return 'skip';
+  }
   return 'block';
+}
+
+/**
+ * Authoritative final-packet CAF binding for a cycle.
+ * Approved/Modified adjustments require a sealed CAF ID.
+ * Denied / no-record / no-adjustment → cafRequired=false.
+ */
+function getFinalDistributionCafBinding_(cycleId) {
+  const recordLoc = findCompensationRecordByCycleOptional_(cycleId);
+  if (!recordLoc) {
+    return { cafRequired: false, cafPdfId: '', reason: 'no-record' };
+  }
+  const record = recordLoc.object;
+  const ownerDecision = String(record['Owner Decision'] || '');
+  const status = String(record['Status'] || '');
+  if (
+    ownerDecision === V31_COMP.OWNER_DECISION.DENIED ||
+    status === V31_COMP.STATUS.DENIED
+  ) {
+    return { cafRequired: false, cafPdfId: '', reason: 'denied' };
+  }
+  const approved =
+    ownerDecision === V31_COMP.OWNER_DECISION.APPROVED ||
+    ownerDecision === V31_COMP.OWNER_DECISION.MODIFIED ||
+    (isApprovedCompensationAdjustment_(record) &&
+      record['Final Approved Pay Rate'] !== '' &&
+      record['Final Approved Pay Rate'] != null);
+  if (!approved) {
+    return { cafRequired: false, cafPdfId: '', reason: 'not-approved' };
+  }
+  return {
+    cafRequired: true,
+    cafPdfId: String(record['CAF Final PDF ID'] || ''),
+    reason: 'approved-adjustment',
+  };
+}
+
+function buildFinalDistributionPacketSpec_(managerPdfId, selfPdfId, cafBinding) {
+  const binding = cafBinding || { cafRequired: false, cafPdfId: '' };
+  return {
+    managerPdfId: String(managerPdfId || ''),
+    selfPdfId: String(selfPdfId || ''),
+    cafRequired: !!binding.cafRequired,
+    cafPdfId: binding.cafRequired ? String(binding.cafPdfId || '') : '',
+  };
+}
+
+function classifyFinalDistributionAttachmentCount_(packetSpec) {
+  return packetSpec && packetSpec.cafRequired ? 3 : 2;
+}
+
+/**
+ * Validate a sealed CAF PDF ID for final distribution.
+ * Fails closed when cafRequired and the file is missing/invalid.
+ */
+function validateAuthoritativeCafPdfId_(cycleId, fileId) {
+  const id = String(fileId || '').trim();
+  if (!id) {
+    throw new Error(
+      'CAF PDF ID is required for an approved compensation final packet.'
+    );
+  }
+  const record = findCompensationRecordByCycle_(cycleId).object;
+  const settings = getSettings_();
+  const folderId = String(settings.COMPENSATION_FOLDER_ID || '').trim();
+  if (!folderId) {
+    throw new Error(
+      'COMPENSATION_FOLDER_ID is not configured; approved CAF cannot be validated.'
+    );
+  }
+  let file;
+  try {
+    file = DriveApp.getFileById(id);
+  } catch (error) {
+    throw new Error(
+      'CAF PDF could not be read (' + id + '): ' + String(error.message || error)
+    );
+  }
+  assertValidCompensationCafFile_(file, cycleId, record, folderId);
+  return id;
 }
 
 function isCompensationSealedForFinalization_(cycle) {
@@ -1511,7 +1598,20 @@ function getCompensationQueue() {
           ),
           cafPdfStatus: String(record['CAF PDF Status'] || ''),
           rateUpdateStatus: String(record['Rate Update Status'] || ''),
+          rateUpdateDisplay: formatCompensationRateUpdateDisplay_(
+            record['Rate Update Status'],
+            record['Compensation Effective Date']
+          ),
           rateUpdateLastError: String(record['Rate Update Last Error'] || ''),
+          managerOutcomeEmailStatus: String(
+            record['Manager Outcome Email Status'] || ''
+          ),
+          managerOutcomeEmailAttemptId: String(
+            record['Manager Outcome Email Attempt ID'] || ''
+          ),
+          managerOutcomeEmailLastError: String(
+            record['Manager Outcome Email Last Error'] || ''
+          ),
           expectedPredecessorPayRate: Number(record['Original Pay Rate'] || 0),
           submittedAt: formatDateTime_(
             record['Manager Recommendation Submitted At']
@@ -1522,6 +1622,21 @@ function getCompensationQueue() {
         return String(b.submittedAt).localeCompare(String(a.submittedAt));
       }),
   };
+}
+
+/**
+ * Human-readable rate-update label for the Compensation Queue.
+ * Future-dated approvals show the scheduled effective date explicitly.
+ */
+function formatCompensationRateUpdateDisplay_(statusRaw, effectiveDateRaw) {
+  const status = String(statusRaw || '');
+  if (status === V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE) {
+    const when = formatDate_(effectiveDateRaw);
+    return when
+      ? 'Scheduled for ' + when
+      : V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE;
+  }
+  return status;
 }
 
 function compensationOwnerAlertKey_(cycleId) {
@@ -1620,10 +1735,11 @@ function resolveCompensationOwnerAlert_(cycleId, actorEmail) {
 /**
  * Durable manager notification after an owner decision.
  * Uses claim → send → confirm on CompensationRecords so retries never
- * duplicate the email.
+ * duplicate the email. Delivery Unknown never auto-resends.
  */
-function ensureCompensationManagerOutcomeEmail_(cycleId) {
+function ensureCompensationManagerOutcomeEmail_(cycleId, options) {
   ensureCompensationDataModel_();
+  const opts = options || {};
   const claimed = withLock_(function () {
     const recordLoc = findCompensationRecordByCycle_(cycleId);
     const record = recordLoc.object;
@@ -1648,21 +1764,32 @@ function ensureCompensationManagerOutcomeEmail_(cycleId) {
       ) {
         return { skip: true, reason: 'in-progress' };
       }
+      // Retain Attempt ID so HR can Mark Confirmed or Confirmed Resend.
       record['Manager Outcome Email Status'] = V31.DELIVERY.UNKNOWN;
       record['Manager Outcome Email Last Error'] =
         'Manager outcome email claim went stale before confirmation.';
-      record['Manager Outcome Email Attempt ID'] = '';
-      record['Manager Outcome Email Started At'] = '';
       record['Updated At'] = new Date();
       writeCompensationRecord_(recordLoc.rowNumber, record);
+      SpreadsheetApp.flush();
       throw new Error(
         'Manager compensation outcome email is Delivery Unknown and requires recovery.'
       );
     }
     if (status === V31.DELIVERY.UNKNOWN) {
-      throw new Error(
-        'Manager compensation outcome email is Delivery Unknown. HR must reconcile before retry.'
-      );
+      if (opts.allowUnknownResend !== true) {
+        throw new Error(
+          'Manager compensation outcome email is Delivery Unknown. HR must reconcile before retry.'
+        );
+      }
+      if (
+        opts.expectedAttemptId !== undefined &&
+        String(record['Manager Outcome Email Attempt ID'] || '') !==
+          String(opts.expectedAttemptId || '')
+      ) {
+        throw new Error(
+          'Manager outcome email attempt changed after confirmation. Refresh and confirm again.'
+        );
+      }
     }
 
     const attemptId = Utilities.getUuid();
@@ -1706,8 +1833,6 @@ function ensureCompensationManagerOutcomeEmail_(cycleId) {
       }
       rec['Manager Outcome Email Status'] = V31.DELIVERY.SENT;
       rec['Manager Outcome Email Sent At'] = new Date();
-      rec['Manager Outcome Email Attempt ID'] = '';
-      rec['Manager Outcome Email Started At'] = '';
       rec['Manager Outcome Email Last Error'] = '';
       rec['Updated At'] = new Date();
       writeCompensationRecord_(loc.rowNumber, rec);
@@ -1724,16 +1849,130 @@ function ensureCompensationManagerOutcomeEmail_(cycleId) {
       ) {
         return;
       }
+      // Retain Attempt ID for HR Mark Confirmed / Confirmed Resend.
       rec['Manager Outcome Email Status'] = V31.DELIVERY.UNKNOWN;
       rec['Manager Outcome Email Last Error'] = String(error.message || error);
-      rec['Manager Outcome Email Attempt ID'] = '';
-      rec['Manager Outcome Email Started At'] = '';
       rec['Updated At'] = new Date();
       writeCompensationRecord_(loc.rowNumber, rec);
       SpreadsheetApp.flush();
     });
     throw error;
   }
+}
+
+/**
+ * HR-only: mark a Delivery Unknown manager outcome email as Sent with evidence.
+ * Never sends email.
+ */
+function markCompensationManagerOutcomeEmailConfirmed(cycleId, payload) {
+  const actor = assertActiveHrDomain_();
+  const input = payload || {};
+  const evidenceNote = String(input.evidenceNote || '').trim();
+  if (
+    input.confirmed !== true ||
+    String(input.confirmationToken || '') !==
+      V31_COMP.MANAGER_OUTCOME_CONFIRM_TOKEN ||
+    !evidenceNote
+  ) {
+    throw new Error(
+      'Confirmation, exact token, and an evidence note are required.'
+    );
+  }
+  const eventId =
+    V31_COMP.MANAGER_OUTCOME_CONFIRM_EVENT_PREFIX + String(cycleId);
+  const before = findCompensationRecordByCycle_(cycleId).object;
+  if (
+    String(before['Manager Outcome Email Status'] || '') !==
+      V31.DELIVERY.UNKNOWN ||
+    String(input.originalAttemptId || '') !==
+      String(before['Manager Outcome Email Attempt ID'] || '')
+  ) {
+    throw new Error(
+      'Manager outcome email status or attempt changed. Refresh and confirm again.'
+    );
+  }
+  withLock_(function () {
+    const loc = findCompensationRecordByCycle_(cycleId);
+    const rec = loc.object;
+    if (
+      String(rec['Manager Outcome Email Status'] || '') !==
+        V31.DELIVERY.UNKNOWN ||
+      String(rec['Manager Outcome Email Attempt ID'] || '') !==
+        String(input.originalAttemptId || '')
+    ) {
+      throw new Error(
+        'Only the confirmed Delivery Unknown manager outcome attempt may be marked Sent.'
+      );
+    }
+    auditIdempotentUnlocked_(
+      cycleId,
+      'Manager outcome email manually confirmed',
+      actor,
+      V31.DELIVERY.UNKNOWN,
+      V31.DELIVERY.SENT,
+      evidenceNote,
+      eventId
+    );
+    const confirmedAt = new Date();
+    rec['Manager Outcome Email Status'] = V31.DELIVERY.SENT;
+    rec['Manager Outcome Email Sent At'] =
+      rec['Manager Outcome Email Sent At'] || confirmedAt;
+    rec['Manager Outcome Email Last Error'] = '';
+    rec['Updated At'] = confirmedAt;
+    writeCompensationRecord_(loc.rowNumber, rec);
+    SpreadsheetApp.flush();
+  });
+  return { ok: true, eventId: eventId, status: V31.DELIVERY.SENT };
+}
+
+/**
+ * HR-only: explicitly resend a Delivery Unknown manager outcome email.
+ * Requires exact confirmation; never automatic.
+ */
+function resendCompensationManagerOutcomeEmailUnknown(cycleId, payload) {
+  const actor = assertActiveHrDomain_();
+  const input = payload || {};
+  if (
+    input.confirmed !== true ||
+    String(input.confirmationToken || '') !==
+      V31_COMP.MANAGER_OUTCOME_RESEND_TOKEN
+  ) {
+    throw new Error(
+      'Exact manager-outcome email resend confirmation is required.'
+    );
+  }
+  const before = findCompensationRecordByCycle_(cycleId).object;
+  if (
+    String(before['Manager Outcome Email Status'] || '') !==
+      V31.DELIVERY.UNKNOWN ||
+    String(input.originalAttemptId || '') !==
+      String(before['Manager Outcome Email Attempt ID'] || '')
+  ) {
+    throw new Error(
+      'Manager outcome email status or attempt changed. Refresh and confirm again.'
+    );
+  }
+  const resendAuthorizationEventId =
+    'MANAGER_OUTCOME_EMAIL_RESEND_AUTHORIZED:' +
+    String(cycleId) +
+    ':' +
+    String(input.originalAttemptId || '');
+  auditIdempotent_(
+    cycleId,
+    'Manager outcome email resend authorized',
+    actor,
+    V31.DELIVERY.UNKNOWN,
+    'Resend Authorized',
+    JSON.stringify({
+      schemaVersion: 1,
+      originalAttemptId: String(input.originalAttemptId || ''),
+    }),
+    resendAuthorizationEventId
+  );
+  return ensureCompensationManagerOutcomeEmail_(cycleId, {
+    allowUnknownResend: true,
+    expectedAttemptId: String(input.originalAttemptId || ''),
+  });
 }
 
 function formatCompensationMoney_(value) {

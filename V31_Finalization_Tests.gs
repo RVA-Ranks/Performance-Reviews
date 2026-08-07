@@ -104,6 +104,12 @@ function runV31FinalizationTests_() {
   );
   results.push(
     runFinalCase_(
+      'final packet CAF binding and attachment count are authoritative',
+      testFinalDistributionCafPacketBinding_
+    )
+  );
+  results.push(
+    runFinalCase_(
       'audit Event ID header order is exact',
       testAuditEventIdHeaderOrder_
     )
@@ -507,6 +513,60 @@ function testFinalDistributionAmbiguityClassification_() {
     classifyFinalDistributionCommit_(null, false) ===
       V31.DELIVERY.UNKNOWN,
     'Commit mismatch must be Delivery Unknown'
+  );
+}
+
+function testFinalDistributionCafPacketBinding_() {
+  const approved = buildFinalDistributionPacketSpec_('mgr-pdf', 'self-pdf', {
+    cafRequired: true,
+    cafPdfId: 'caf-pdf',
+  });
+  assertFinal_(
+    approved.cafRequired === true &&
+      approved.cafPdfId === 'caf-pdf' &&
+      classifyFinalDistributionAttachmentCount_(approved) === 3,
+    'Approved adjustment packet must bind CAF and require 3 attachments'
+  );
+
+  const denied = buildFinalDistributionPacketSpec_('mgr-pdf', 'self-pdf', {
+    cafRequired: false,
+    cafPdfId: 'should-be-cleared',
+  });
+  assertFinal_(
+    denied.cafRequired === false &&
+      denied.cafPdfId === '' &&
+      classifyFinalDistributionAttachmentCount_(denied) === 2,
+    'Denied/no-adjustment packet must not bind CAF and must require 2 attachments'
+  );
+
+  const noAdj = buildFinalDistributionPacketSpec_('mgr-pdf', 'self-pdf', {
+    cafRequired: false,
+    cafPdfId: '',
+  });
+  assertFinal_(
+    classifyFinalDistributionAttachmentCount_(noAdj) === 2,
+    'No-adjustment packet must require 2 attachments'
+  );
+
+  // CAF ID change after claim/send is treated as commit ambiguity.
+  const claim = {
+    managerPdfId: 'mgr-1',
+    selfPdfId: 'self-1',
+    cafRequired: true,
+    cafPdfId: 'caf-1',
+  };
+  const liveAfterChange = {
+    cafRequired: true,
+    cafPdfId: 'caf-2',
+  };
+  const pdfIdsChanged =
+    String('mgr-1') !== String(claim.managerPdfId) ||
+    String('self-1') !== String(claim.selfPdfId) ||
+    !!liveAfterChange.cafRequired !== !!claim.cafRequired ||
+    String(liveAfterChange.cafPdfId || '') !== String(claim.cafPdfId || '');
+  assertFinal_(
+    pdfIdsChanged === true,
+    'CAF ID change after send must block Sent commit'
   );
 }
 

@@ -506,11 +506,18 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] Denied: employee sees no recommendation, denial, acknowledgement, CAF, or compensation wording
 - [ ] Approved final email: 3 PDFs (Manager, Self, CAF)
 - [ ] Denied / no-adjustment final email: 2 PDFs only
+- [ ] Approved final distribution claim binds managerPdfId + selfPdfId + cafPdfId + cafRequired=true
+- [ ] Approved: CAF missing before claim → distribution blocked, no email
+- [ ] Approved: CAF ID changes after claim before send → blocked / Unknown, no silent 2-file send
+- [ ] Approved: CAF changes after send before commit → Delivery Unknown with claimed/current CAF IDs
+- [ ] Adjustment Recommended + COMPENSATION_DECISION_REQUIRED=FALSE → disposition require
+- [ ] Manager outcome email Delivery Unknown → no automatic resend; HR Mark Confirmed / Confirmed Resend available
 - [ ] Human-readable PDF filenames; recovery still works via provenance / legacy names
 - [ ] After CAF seal + history, due Current Pay Rate updates Column H before Complete
+- [ ] Future effective date shows Rate Update as Scheduled for <date> (not bare Pending Effective Date)
 - [ ] Manual roster change before update → Conflict, no overwrite, System Alert
 - [ ] Recheck after correcting predecessor applies approved rate
-- [ ] `runV31CompensationTests_()` passes
+- [ ] `runV31CompensationTests_()` and `runV31FinalizationTests_()` pass
 
 ### Compensation edges (signature provenance / finalization gate)
 

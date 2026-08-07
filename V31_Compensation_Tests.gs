@@ -462,6 +462,87 @@ function runV31CompensationTests_() {
     );
   });
 
+  check(
+    'Finalization disposition: existing Adjustment requires CAF even when setting is off',
+    function () {
+      assert_(
+        compensationFinalizationDisposition_(
+          V31.COMPENSATION.ADJUSTMENT,
+          false
+        ) === 'require',
+        'Adjustment Recommended must require CAF regardless of COMPENSATION_DECISION_REQUIRED'
+      );
+    }
+  );
+
+  check(
+    'Finalization disposition: Pending + not required → skip',
+    function () {
+      assert_(
+        compensationFinalizationDisposition_(
+          V31.COMPENSATION.PENDING,
+          false
+        ) === 'skip',
+        'Pending with setting off may skip'
+      );
+    }
+  );
+
+  check('CAF binding: approved requires CAF ID', function () {
+    // Pure helpers: packetSpec + attachment count (record lookup covered live).
+    const spec = buildFinalDistributionPacketSpec_('m', 's', {
+      cafRequired: true,
+      cafPdfId: 'caf-1',
+    });
+    assert_(
+      spec.cafRequired === true &&
+        spec.cafPdfId === 'caf-1' &&
+        classifyFinalDistributionAttachmentCount_(spec) === 3,
+      'Approved CAF binding must require three attachments'
+    );
+  });
+
+  check('CAF binding: denied/no-adj clears CAF', function () {
+    const spec = buildFinalDistributionPacketSpec_('m', 's', {
+      cafRequired: false,
+      cafPdfId: 'ignored',
+    });
+    assert_(
+      spec.cafRequired === false &&
+        spec.cafPdfId === '' &&
+        classifyFinalDistributionAttachmentCount_(spec) === 2,
+      'Non-approved packets must bind two attachments only'
+    );
+  });
+
+  check('Rate update display shows scheduled effective date', function () {
+    assert_(
+      formatCompensationRateUpdateDisplay_(
+        V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE,
+        '2026-09-01'
+      ).indexOf('Scheduled for') === 0,
+      'Future-dated rate update must show Scheduled for <date>'
+    );
+  });
+
+  check('Manager outcome email recovery tokens are exact', function () {
+    assert_(
+      V31_COMP.MANAGER_OUTCOME_CONFIRM_TOKEN ===
+        'MARK_MANAGER_OUTCOME_EMAIL_CONFIRMED',
+      'Confirm token must be exact'
+    );
+    assert_(
+      V31_COMP.MANAGER_OUTCOME_RESEND_TOKEN ===
+        'RESEND_MANAGER_OUTCOME_EMAIL_UNKNOWN',
+      'Resend token must be exact'
+    );
+    assert_(
+      V31_COMP.MANAGER_OUTCOME_CONFIRM_EVENT_PREFIX + 'C-1' ===
+        'MANAGER_OUTCOME_EMAIL_CONFIRMED:C-1',
+      'Confirm event ID prefix must be deterministic'
+    );
+  });
+
   check('Finalization disposition: Pending → block (fail closed)', function () {
     assert_(
       compensationFinalizationDisposition_(
