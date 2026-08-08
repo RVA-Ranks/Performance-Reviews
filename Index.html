@@ -1341,6 +1341,105 @@
       .guidance-card .button { margin: 12px 0 0; width: 100%; }
     }
 
+    .derived-overall {
+      display: inline-flex;
+      align-items: center;
+      min-height: 42px;
+      padding: 8px 14px;
+      border-radius: 10px;
+      background: var(--brand-soft);
+      color: var(--brand-dark);
+      font-weight: 750;
+      font-size: 1.25rem;
+    }
+
+    .info-tip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      margin-left: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: help;
+      vertical-align: middle;
+    }
+    .info-tip:focus,
+    .info-tip:hover { color: var(--brand); border-color: var(--brand); outline: none; }
+    .info-tip-bubble {
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 8px);
+      transform: translateX(-50%);
+      width: min(260px, 70vw);
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #2b2233;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.4;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .15s ease;
+      z-index: 40;
+      text-align: left;
+    }
+    .info-tip:hover .info-tip-bubble,
+    .info-tip:focus .info-tip-bubble,
+    .info-tip.is-open .info-tip-bubble { opacity: 1; }
+
+    .app-loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(38, 31, 43, 0.42);
+      backdrop-filter: blur(2px);
+    }
+    .app-loading-card {
+      width: min(420px, 100%);
+      padding: 28px 24px;
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+    .app-loading-card h2 { margin: 16px 0 8px; font-size: 1.2rem; }
+    .app-loading-card p { margin: 0; color: var(--muted); }
+    .app-loading-spinner {
+      width: 46px;
+      height: 46px;
+      margin: 0 auto;
+      border-radius: 50%;
+      border: 3px solid var(--brand-soft);
+      border-top-color: var(--brand);
+      animation: app-spin 0.8s linear infinite;
+    }
+    .app-loading-stages { margin: 18px 0 0; text-align: left; }
+    .app-loading-stage {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin: 8px 0;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+    .app-loading-stage.done { color: var(--success); font-weight: 650; }
+    .app-loading-stage.active { color: var(--ink); font-weight: 650; }
+    .app-loading-actions { margin-top: 18px; }
+    @keyframes app-spin { to { transform: rotate(360deg); } }
+
   </style>
 </head>
 <body>
@@ -1415,6 +1514,16 @@
   </aside>
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <div id="appLoadingOverlay" class="app-loading-overlay hidden" aria-live="assertive" aria-busy="true">
+    <div class="app-loading-card" role="status">
+      <div id="appLoadingSpinner" class="app-loading-spinner" aria-hidden="true"></div>
+      <h2 id="appLoadingTitle">Loading</h2>
+      <p id="appLoadingMessage">Please wait…</p>
+      <div id="appLoadingStages" class="app-loading-stages hidden"></div>
+      <div id="appLoadingActions" class="app-loading-actions hidden"></div>
+    </div>
+  </div>
 
   <div id="modalOverlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="modal">
@@ -1507,12 +1616,91 @@ function server(method) {
   });
 }
 
+let appLoadingDepth = 0;
+let appLoadingToken = 0;
+
+function showAppLoading_(options) {
+  const opts = options || {};
+  appLoadingDepth += 1;
+  const overlay = document.getElementById('appLoadingOverlay');
+  if (!overlay) return;
+  overlay.classList.remove('hidden');
+  updateAppLoading_(opts);
+}
+
+function updateAppLoading_(options) {
+  const opts = options || {};
+  const title = document.getElementById('appLoadingTitle');
+  const message = document.getElementById('appLoadingMessage');
+  const stages = document.getElementById('appLoadingStages');
+  const actions = document.getElementById('appLoadingActions');
+  const spinner = document.getElementById('appLoadingSpinner');
+  if (title) title.textContent = opts.title || 'Loading';
+  if (message) message.textContent = opts.message || 'Please wait…';
+  if (spinner) spinner.classList.toggle('hidden', !!opts.hideSpinner);
+  if (actions) {
+    actions.classList.add('hidden');
+    actions.innerHTML = '';
+  }
+  if (stages) {
+    if (Array.isArray(opts.stages) && opts.stages.length) {
+      stages.classList.remove('hidden');
+      stages.innerHTML = opts.stages.map(function(stage) {
+        const state = stage.state || 'pending';
+        const mark = state === 'done' ? '✓' : state === 'active' ? '●' : '○';
+        return '<div class="app-loading-stage ' + escapeAttr(state) + '"><span>' + mark + '</span><span>' + escapeHtml(stage.label || '') + '</span></div>';
+      }).join('');
+    } else {
+      stages.classList.add('hidden');
+      stages.innerHTML = '';
+    }
+  }
+}
+
+function hideAppLoading_() {
+  appLoadingDepth = Math.max(0, appLoadingDepth - 1);
+  if (appLoadingDepth > 0) return;
+  const overlay = document.getElementById('appLoadingOverlay');
+  if (overlay) overlay.classList.add('hidden');
+  const actions = document.getElementById('appLoadingActions');
+  if (actions) {
+    actions.classList.add('hidden');
+    actions.innerHTML = '';
+  }
+}
+
+function forceHideAppLoading_() {
+  appLoadingDepth = 0;
+  hideAppLoading_();
+}
+
+function withAppLoading_(options, work) {
+  const token = ++appLoadingToken;
+  showAppLoading_(options);
+  return Promise.resolve()
+    .then(work)
+    .then(function(result) {
+      if (token === appLoadingToken) hideAppLoading_();
+      return result;
+    })
+    .catch(function(error) {
+      if (token === appLoadingToken) hideAppLoading_();
+      throw error;
+    });
+}
+
 async function refreshApplication(cycleId, action) {
   showBootScreen();
   try {
-    const data = await server('getReviewBootstrapData', cycleId || '');
+    const data = await withAppLoading_({
+      title: 'Loading Review',
+      message: 'Retrieving the latest review information…'
+    }, function() {
+      return server('getReviewBootstrapData', cycleId || '');
+    });
     renderApplication(data, action || '');
   } catch (error) {
+    forceHideAppLoading_();
     showFatalError(error);
   }
 }
@@ -1685,7 +1873,7 @@ function renderCompactCycleTable(cycles) {
 
 function renderReviewsView() {
   document.getElementById('reviewsView').innerHTML =
-    '<div class="page-header"><div><h1>Reviews</h1><p>Search and filter every review cycle available to you.</p></div></div>' +
+    '<div class="page-header"><div><h1>Reviews</h1><p>View reviews assigned to you, track their progress, and open actions that require your attention.</p></div></div>' +
     '<div class="card"><div class="filter-bar"><input id="reviewSearch" placeholder="Search employee, manager, project…" oninput="applyReviewFilters()">' +
     '<select id="reviewStatusFilter" onchange="applyReviewFilters()"><option value="">All statuses</option><option>Open for Input</option><option>Ready for Review Meeting</option><option>Review Meeting Open</option><option>Awaiting Signatures</option><option>Complete</option></select>' +
     '<select id="reviewRoleFilter" onchange="applyReviewFilters()"><option value="">All roles</option><option value="Manager">Manager</option><option value="Employee">Employee</option><option value="HR">HR</option></select>' +
@@ -1722,7 +1910,7 @@ function renderSignaturesView() {
   document.getElementById('signatureNavCount').textContent = cycles.length;
   document.getElementById('signatureNavCount').classList.toggle('hidden', !cycles.length);
   document.getElementById('signaturesView').innerHTML =
-    '<div class="page-header"><div><h1>Signatures</h1><p>Review packets currently assigned to you for signature.</p></div></div>' +
+    '<div class="page-header"><div><h1>Signatures</h1><p>Complete your required review acknowledgements and monitor outstanding signatures.</p></div></div>' +
     '<div class="card">' + (cycles.length ? renderActionList(cycles) : '<div class="empty-state"><div class="empty-state-icon">✓</div><strong>No signatures waiting</strong>You have no outstanding review packets to sign.</div>') + '</div>';
 }
 
@@ -1834,9 +2022,9 @@ function renderAdminView() {
   const health = (state.v31 && state.v31.systemHealth) || null;
 
   document.getElementById('adminView').innerHTML =
-    '<div class="page-header"><div><h1>Administration</h1><p>Monitor system health, recover blocked work, and manage review automation.</p></div></div>' +
+    '<div class="page-header"><div><h1>Administration</h1><p>Monitor review automation, system health, recovery items, and compensation decisions.</p></div></div>' +
     '<div id="systemHealthPanel">' + renderSystemHealthPanel(health) + '</div>' +
-    '<div id="compensationQueuePanel"><div class="card"><div class="card-header"><div><h2>Compensation Queue</h2><p>Owner decisions and compensation packet status.</p></div><button class="button outline" onclick="refreshCompensationQueue()">Refresh Queue</button></div><div id="compensationQueueBody"><div class="field-help">Loading compensation queue…</div></div></div></div>' +
+    '<div id="compensationQueuePanel"><div class="card"><div class="card-header"><div><h2>Compensation Queue</h2><p>Review manager compensation recommendations, record owner decisions, and monitor finalized pay updates.</p></div><button class="button outline" onclick="refreshCompensationQueue()">Refresh Queue</button></div><div id="compensationQueueBody"><div class="field-help">Loading compensation queue…</div></div></div></div>' +
     renderAutomationPanel(automation) +
     '<div id="systemAlertsPanel">' + renderSystemAlertsPanel((state.v31 && state.v31.systemAlerts) || (health && health.alerts) || null) + '</div>' +
     '<div class="card"><div class="card-header"><div><h2>Create Review Cycle Manually</h2><p>This sends the full launch package: HR notice, manager instructions, employee instructions, and one shared calendar event.</p></div></div>' +
@@ -2987,9 +3175,15 @@ async function loadCycle(cycleId, action) {
   showCycleSkeleton();
   navigate('cycle');
   try {
-    const result = await server('getReviewCycle', cycleId);
+    const result = await withAppLoading_({
+      title: 'Loading Review',
+      message: 'Retrieving the latest review information…'
+    }, function() {
+      return server('getReviewCycle', cycleId);
+    });
     openCycle(result.cycle, action || 'overview');
   } catch (error) {
+    forceHideAppLoading_();
     renderCycleError(error, cycleId, action);
   }
 }
@@ -3992,6 +4186,11 @@ function renderReviewTab(type, target) {
 function initializeDrafts(cycle) {
   if (cycle.managerReview) {
     editorState.manager.draft = restoreLocalDraft('manager', cycle.managerReview);
+    if (cycle.canEditManagerReview) {
+      editorState.manager.draft.overallRating = calculateClientOverallScore(
+        editorState.manager.draft
+      );
+    }
     editorState.manager.lastSavedAt = cycle.managerReview.lastSavedAt || '';
     editorState.manager.validation = validateReviewDraft(editorState.manager.draft, 'manager');
     editorState.manager.showErrors = false;
@@ -4002,6 +4201,11 @@ function initializeDrafts(cycle) {
   }
   if (cycle.selfEvaluation) {
     editorState.self.draft = restoreLocalDraft('self', cycle.selfEvaluation);
+    if (cycle.canEditSelfEvaluation) {
+      editorState.self.draft.overallRating = calculateClientOverallScore(
+        editorState.self.draft
+      );
+    }
     editorState.self.lastSavedAt = cycle.selfEvaluation.lastSavedAt || '';
     editorState.self.validation = validateReviewDraft(editorState.self.draft, 'self');
     editorState.self.showErrors = false;
@@ -4080,8 +4284,13 @@ function renderRatingGuide() {
 }
 
 function renderSummaryStep(type, draft) {
-  return '<div class="editor-section-header"><h2>Overall Assessment</h2><p>Summarize performance across the full review period rather than averaging individual scores mechanically.</p></div>' +
-    '<div class="field factor-card"><label for="overall-' + type + '">Overall Performance Rating *</label>' + ratingSelectHtml('overall-' + type, draft.overallRating, 'overallRating', '') + '<div id="error-overall-' + type + '" class="field-error hidden"></div></div>' +
+  const overall = calculateClientOverallScore(draft);
+  return '<div class="editor-section-header"><h2>Overall Assessment</h2><p>Overall Score is calculated automatically from your competency ratings. Add narrative context below.</p></div>' +
+    '<div class="field factor-card"><label>Overall Performance Rating ' +
+    infoTipHtml('Automatically calculated as the average of this review\'s competency scores. Blank and N/A factors are excluded.') +
+    '</label><div class="derived-overall" id="overall-' + type + '">' +
+    (overall ? escapeHtml(overall) : '—') +
+    '</div><div class="field-help">Derived from scored factors only. Individual factor ratings still drive this value.</div></div>' +
     '<div class="field"><label for="overall-comments-' + type + '">Overall Comments</label><textarea id="overall-comments-' + type + '" data-kind="field" data-field="overallComments">' + escapeHtml(draft.overallComments || '') + '</textarea><div class="field-help">Describe the major themes, impact, and context behind the overall rating.</div></div>';
 }
 
@@ -4140,10 +4349,11 @@ function updateDraftFromInput(type, input) {
     if (!item) { item = { factorId: factorId, rating: '', comments: '' }; draft.ratings = draft.ratings || []; draft.ratings.push(item); }
     if (kind === 'rating') item.rating = input.value;
     if (kind === 'comments') item.comments = input.value;
-  } else if (kind === 'overallRating') {
-    draft.overallRating = input.value;
   } else if (kind === 'field') {
     draft[input.dataset.field] = input.value;
+  }
+  if (kind === 'rating') {
+    draft.overallRating = calculateClientOverallScore(draft);
   }
   markReviewDirty(type);
   editorState[type].validation = validateReviewDraft(draft, type);
@@ -4304,7 +4514,10 @@ function validateReviewDraft(draft, type) {
     }
   });
 
-  if (!String(draft.overallRating || '').trim()) addValidationError(errors, fieldErrors, 'overall-' + type, 'An overall performance rating is required.', 1);
+  // Overall score is derived from factor ratings; block if no scored factors.
+  if (!calculateClientOverallScore(draft)) {
+    addValidationError(errors, fieldErrors, 'overall-' + type, 'Overall Score requires at least one scored competency rating.', 1);
+  }
   if (!String(draft.overallComments || '').trim()) warnings.push({ message: 'Overall comments are blank.', step: 1 });
   else if (String(draft.overallComments).trim().length < 30) warnings.push({ message: 'Overall comments are very brief; consider adding more context.', step: 1 });
 
@@ -4341,7 +4554,7 @@ function calculateClientProgress(draft, type) {
   const byId = ratingsById(draft.ratings);
   let completed = state.factors.filter(function(factor) { return !!(byId[factor.id] || {}).rating; }).length;
   let total = state.factors.length;
-  const fields = type === 'manager' ? ['overallRating','overallComments','areasForImprovement','actionSteps','supervisorComments'] : ['overallRating','overallComments','keyAccomplishments','areasForGrowth','goalsForNextPeriod','supportNeeded'];
+  const fields = type === 'manager' ? ['overallComments','areasForImprovement','actionSteps','supervisorComments'] : ['overallComments','keyAccomplishments','areasForGrowth','goalsForNextPeriod','supportNeeded'];
   fields.forEach(function(field) { total++; if (String(draft[field] || '').trim()) completed++; });
   return { percent: Math.round(completed / total * 100), completed: completed, total: total, ratingsCompleted: state.factors.filter(function(factor) { return !!(byId[factor.id] || {}).rating; }).length, ratingsTotal: state.factors.length, errors: validation.errors, warnings: validation.warnings };
 }
@@ -4451,7 +4664,7 @@ function renderMeetingTab(target) {
   }
 
   const editable = cycle.status === 'Review Meeting Open';
-  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Review Comparison</h2><p>Large rating differences are highlighted for discussion.</p></div></div>' + renderComparison(cycle) + '</div>' +
+  target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Review Comparison</h2><p>Large rating differences are highlighted for discussion. Difference = Manager score − Employee score.</p></div></div>' + renderComparison(cycle) + '</div>' +
     '<div class="card"><div class="card-header"><div><h2>Meeting Outcomes</h2><p>Document conclusions, goals, action steps, and employee comments.</p></div></div>' +
     renderMeetingField('meetingManagerComments','Manager Final Comments',meetingDraft.managerFinalComments, editable && cycle.canEditManagerMeeting) +
     renderMeetingField('meetingDevelopmentGoals','Development Goals',meetingDraft.developmentGoals, editable && cycle.canEditManagerMeeting) +
@@ -4464,12 +4677,16 @@ function renderMeetingTab(target) {
 function renderComparison(cycle) {
   const manager = ratingsById(cycle.managerReview.ratings);
   const employee = ratingsById(cycle.selfEvaluation.ratings);
-  let html = '<div class="table-wrap"><table class="comparison-table"><thead><tr><th>Factor</th><th>Employee</th><th>Manager</th><th>Gap</th><th></th></tr></thead><tbody>';
+  let html = '<div class="table-wrap"><table class="comparison-table"><thead><tr><th>Factor</th><th>Employee</th><th>Manager</th><th>Difference ' +
+    infoTipHtml('Difference = Manager score − Employee score. Positive means the manager rated higher. Negative means the manager rated lower.') +
+    '</th><th></th></tr></thead><tbody>';
   state.factors.forEach(function(factor, index) {
     const e = (employee[factor.id] || {}).rating || '';
     const m = (manager[factor.id] || {}).rating || '';
-    const diff = isNumericRating(e) && isNumericRating(m) ? Number(e) - Number(m) : '';
-    const display = diff === '' ? '—' : diff > 0 ? '+' + diff : String(diff);
+    const diff = (isNumericRating(e) && isNumericRating(m))
+      ? Number(m) - Number(e)
+      : null;
+    const display = formatClientScoreDifference(diff);
     html += '<tr><td><strong>' + escapeHtml(factor.label) + '</strong></td><td>' + escapeHtml(ratingLabel(e)) + '</td><td>' + escapeHtml(ratingLabel(m)) + '</td><td class="' + (Math.abs(Number(diff)) >= 2 ? 'difference-large' : '') + '">' + escapeHtml(display) + '</td><td><button class="button text" onclick="toggleComparisonDetail(' + index + ')">Comments</button></td></tr>' +
       '<tr id="comparison-detail-' + index + '" class="hidden"><td colspan="5"><div class="comparison-detail"><div class="comparison-comment"><strong>Employee perspective</strong>' + escapeHtml((employee[factor.id] || {}).comments || 'No comments provided.') + '</div><div class="comparison-comment"><strong>Manager perspective</strong>' + escapeHtml((manager[factor.id] || {}).comments || 'No comments provided.') + '</div></div></td></tr>';
   });
@@ -4647,9 +4864,64 @@ function renderSignaturesTab(target) {
 async function submitSignature() {
   const pad = signaturePads.packetSignature;
   if (!pad || pad.isEmpty) { showToast('error','Signature required','Draw your signature before continuing.'); return; }
-  const button = document.getElementById('signPacketButton'); setButtonBusy(button,true,'Recording signature…');
-  try { const result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature')); showToast(result.ok === false || result.partial ? 'warning' : 'success', result.signatureRecorded ? 'Signature recorded' : 'Signature recovery required', result.message); await refreshApplication(currentCycle.cycleId,'signatures'); }
-  catch (error) { setButtonBusy(button,false,'Sign Both Review Documents'); showToast('error','Could not record signature',errorMessage(error)); }
+  const button = document.getElementById('signPacketButton');
+  setButtonBusy(button,true,'Recording signature…');
+  const stages = [
+    { label: 'Validating signature', state: 'active' },
+    { label: 'Recording signature', state: 'pending' },
+    { label: 'Updating review documents', state: 'pending' },
+    { label: 'Refreshing review status', state: 'pending' }
+  ];
+  showAppLoading_({
+    title: 'Finalizing Signature',
+    message: 'Please keep this window open while the signature is recorded.',
+    stages: stages
+  });
+  try {
+    updateAppLoading_({
+      title: 'Finalizing Signature',
+      message: 'Recording your signature…',
+      stages: [
+        { label: 'Validating signature', state: 'done' },
+        { label: 'Recording signature', state: 'active' },
+        { label: 'Updating review documents', state: 'pending' },
+        { label: 'Refreshing review status', state: 'pending' }
+      ]
+    });
+    const result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature'));
+    updateAppLoading_({
+      title: 'Signature Recorded',
+      message: 'Refreshing the review workspace…',
+      hideSpinner: false,
+      stages: [
+        { label: 'Validating signature', state: 'done' },
+        { label: 'Recording signature', state: 'done' },
+        { label: 'Updating review documents', state: 'done' },
+        { label: 'Refreshing review status', state: 'active' }
+      ]
+    });
+    showToast(result.ok === false || result.partial ? 'warning' : 'success', result.signatureRecorded ? 'Signature recorded' : 'Signature recovery required', result.message);
+    await refreshApplication(currentCycle.cycleId,'signatures');
+    forceHideAppLoading_();
+  } catch (error) {
+    forceHideAppLoading_();
+    setButtonBusy(button,false,'Sign Both Review Documents');
+    showAppLoading_({
+      title: 'Signature could not be finalized',
+      message: 'Your review has not been lost. ' + errorMessage(error),
+      hideSpinner: true,
+      stages: []
+    });
+    const actions = document.getElementById('appLoadingActions');
+    if (actions) {
+      actions.classList.remove('hidden');
+      actions.innerHTML = '<button class="button primary" id="signatureRetryButton">Try Again</button>';
+      document.getElementById('signatureRetryButton').onclick = function() {
+        forceHideAppLoading_();
+        submitSignature();
+      };
+    }
+  }
 }
 
 function initializeSignaturePad(canvasId) {
@@ -4935,15 +5207,21 @@ async function beginCompensationRecommendation(cycleId) {
       body:
         '<p>Enter only the recommended increase percentage. All rates and salaries are calculated automatically from the current HR roster rate.</p>' +
         '<div class="notice" style="margin-bottom:12px">' +
-        '<div>Current Pay Rate: <strong>' +
+        '<div>Current Pay Rate ' +
+        infoTipHtml('Authoritative live rate from EmployeeAssignments. Managers cannot edit this value.') +
+        ': <strong>' +
         escapeHtml(formatMoneyDisplay(context.currentPayRate)) +
         '</strong> <span class="field-help">(read-only)</span></div>' +
-        '<div>Current Annual Salary: <strong>' +
+        '<div>Current Annual Salary ' +
+        infoTipHtml('Calculated automatically from Current Pay Rate × 2,080.') +
+        ': <strong>' +
         escapeHtml(formatMoneyDisplay(context.currentAnnualSalary)) +
-        '</strong> <span class="field-help">(rate × 2080)</span></div>' +
+        '</strong></div>' +
         '</div>' +
         '<div class="form-grid">' +
-        '<div><label for="recommendedPercent">Recommended Increase % *</label><input id="recommendedPercent" type="number" min="0.01" step="0.01" placeholder="e.g. 6" required oninput="syncRecommendationPercentFields(' +
+        '<div><label for="recommendedPercent">Recommended Increase % * ' +
+        infoTipHtml('Enter only the recommended increase percentage. Rate and salary are derived automatically.') +
+        '</label><input id="recommendedPercent" type="number" min="0.01" step="0.01" placeholder="e.g. 6" required oninput="syncRecommendationPercentFields(' +
         Number(context.currentPayRate) +
         ',' +
         Number(context.currentAnnualSalary) +
@@ -4951,7 +5229,9 @@ async function beginCompensationRecommendation(cycleId) {
         '<div><label>Recommended Pay Rate</label><input id="recommendedPayRateDisplay" readonly></div>' +
         '<div><label>Recommended Annual Salary</label><input id="recommendedAnnual" readonly></div>' +
         '<div><label>Annual Salary Increase</label><input id="recommendedAnnualIncrease" readonly></div>' +
-        '<div><label for="proposedEffectiveDate">Proposed Effective Date *</label><input id="proposedEffectiveDate" type="date" required></div>' +
+        '<div><label for="proposedEffectiveDate">Proposed Effective Date * ' +
+        infoTipHtml('The date the approved pay rate should take effect. Future dates schedule the roster update; today or earlier update Current Pay Rate after CAF seal.') +
+        '</label><input id="proposedEffectiveDate" type="date" required></div>' +
         '<div class="wide"><label for="businessJustification">Business Justification *</label><textarea id="businessJustification" required></textarea></div>' +
         '</div>',
       confirmLabel: 'Submit Recommendation',
@@ -4993,14 +5273,16 @@ async function submitCompensationRecommendationForm(cycleId) {
   };
   closeModal();
   try {
-    const result = await server(
-      'submitCompensationRecommendation',
-      cycleId,
-      payload
-    );
+    const result = await withAppLoading_({
+      title: 'Submitting Recommendation',
+      message: 'Saving the compensation recommendation and notifying HR…'
+    }, function() {
+      return server('submitCompensationRecommendation', cycleId, payload);
+    });
     showToast('success', 'Recommendation submitted', result.message);
     await loadCycle(cycleId, 'overview');
   } catch (error) {
+    forceHideAppLoading_();
     showToast('error', 'Could not submit recommendation', errorMessage(error));
   }
 }
@@ -5415,6 +5697,39 @@ function humanStatus(value){const map={'Open for Input':'Drafting','Ready for Re
 function humanDocumentStatus(value){const map={'Not Started':'Not started','Draft':'In progress','Submitted':'Submitted and sealed','Pending Manager and Employee Signatures':'Waiting for manager and employee signatures','Pending Manager Signature':'Waiting for manager signature','Pending Employee Signature':'Waiting for employee signature','Pending HR Signature':'Waiting for HR signature','Complete':'Complete'};return map[value]||value||'';}
 function ratingLabel(value){if(!value)return'';if(value==='N/A')return'N/A';const item=state.ratings.find(function(r){return String(r.value)===String(value);});return item?item.value+' — '+item.label:String(value);}
 function isNumericRating(value){const n=Number(value);return value!==''&&value!=='N/A'&&Number.isInteger(n)&&n>=1&&n<=7;}
+function calculateClientOverallScore(draft){
+  let sum = 0;
+  let count = 0;
+  ((draft && draft.ratings) || []).forEach(function(item) {
+    const raw = String((item && item.rating) || '').trim();
+    if (!raw || raw.toUpperCase() === 'N/A') return;
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return;
+    sum += numeric;
+    count += 1;
+  });
+  if (!count) return '';
+  return (Math.round((sum / count) * 100) / 100).toFixed(2);
+}
+function formatClientScoreDifference(difference){
+  if (difference == null || !Number.isFinite(Number(difference))) return '—';
+  const value = Number(difference);
+  if (value > 0) return '+' + String(value);
+  return String(value);
+}
+function infoTipHtml(text){
+  return '<button type="button" class="info-tip" aria-label="More information" onclick="toggleInfoTip(event, this)" onblur="closeInfoTip(this)"><span aria-hidden="true">ⓘ</span><span class="info-tip-bubble">' + escapeHtml(text || '') + '</span></button>';
+}
+function toggleInfoTip(event, button){
+  if (event) event.preventDefault();
+  document.querySelectorAll('.info-tip.is-open').forEach(function(el){
+    if (el !== button) el.classList.remove('is-open');
+  });
+  button.classList.toggle('is-open');
+}
+function closeInfoTip(button){
+  setTimeout(function(){ button.classList.remove('is-open'); }, 120);
+}
 function greetingPeriod(){const hour=new Date().getHours();return hour<12?'morning':hour<17?'afternoon':'evening';}
 function formatLocalDateTime(value){if(!value)return'';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
 function deepClone(value){return JSON.parse(JSON.stringify(value||{}));}
