@@ -1,5 +1,29 @@
 # V3.1 Changelog
 
+## Live-test polish — loading, scoring, CAF names, roster, HR notify
+
+- Global indeterminate loading overlay (`showAppLoading_` /
+  `updateAppLoading_` / `hideAppLoading_`) for navigation, signing stages,
+  compensation submits, and bootstrap. Success and failure always clear it.
+- Side-by-side difference is now **Manager − Employee** with explicit `+`
+  signs and an explanatory tooltip.
+- Overall Score is derived as the average of scored competency ratings
+  (2 decimals). Editable overall controls removed; server ignores client
+  `overallRating` and recomputes on save/submit. Historical sealed values are
+  left untouched.
+- Durable HR recommendation email
+  (`COMP_RECOMMENDATION_READY:<CompensationRecordId>`) sends when a manager
+  recommendation is submitted (self-evaluation not required), with queue link
+  and derived pay details.
+- CAF Drive files and email attachments use the shared
+  `buildHumanReadableDocumentFileName_` helper
+  (`… - Compensation Adjustment Form.pdf`). Legacy UUID names are renamed on
+  reuse; provenance remains the crash-safe identity.
+- Roster update path hardened: currency parsing, Failed persistence when the
+  assignment row/column is missing, immediate `ensureCompensationRateUpdate_`
+  after CAF/history, clearer
+  `Scheduled Pay Rate Update · Effective: YYYY-MM-DD` queue label.
+
 ## Final distribution binds approved CAF (`feat/compensation-integration`)
 
 - `ensureFinalDistribution_()` now binds `managerPdfId`, `selfPdfId`,

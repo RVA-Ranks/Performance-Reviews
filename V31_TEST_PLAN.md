@@ -506,6 +506,15 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] Denied: employee sees no recommendation, denial, acknowledgement, CAF, or compensation wording
 - [ ] Approved final email: 3 PDFs (Manager, Self, CAF)
 - [ ] Denied / no-adjustment final email: 2 PDFs only
+- [ ] CAF email/Drive filename is human-readable (`… Compensation Adjustment Form.pdf`), never UUID
+- [ ] Effective date today/earlier after CAF+history → Column H = final approved; Rate Update = Complete
+- [ ] Future effective date → Column H unchanged; Status = Scheduled Pay Rate Update · Effective: <date>
+- [ ] Daily/automation due date → Column H updates to Complete
+- [ ] Conflict: unexpected live rate → no overwrite + SystemAlert
+- [ ] Manager 5 / Employee 4 difference = +1; Manager 3 / Employee 5 = −2
+- [ ] Overall Score = average of scored factors; malicious client overall ignored
+- [ ] HR receives one durable compensation recommendation email on submit (no duplicate on retry)
+- [ ] Loading overlay appears for navigation/signing and clears on success and failure
 - [ ] Approved final distribution claim binds managerPdfId + selfPdfId + cafPdfId + cafRequired=true
 - [ ] Approved: CAF missing before claim → distribution blocked, no email
 - [ ] Approved: CAF ID changes after claim before send → blocked / Unknown, no silent 2-file send

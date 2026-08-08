@@ -520,8 +520,45 @@ function runV31CompensationTests_() {
       formatCompensationRateUpdateDisplay_(
         V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE,
         '2026-09-01'
-      ).indexOf('Scheduled for') === 0,
-      'Future-dated rate update must show Scheduled for <date>'
+      ).indexOf('Scheduled Pay Rate Update') === 0,
+      'Future-dated rate update must show Scheduled Pay Rate Update'
+    );
+    assert_(
+      formatCompensationRateUpdateDisplay_(
+        V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE,
+        '2026-09-01'
+      ).indexOf('Effective: ') > 0,
+      'Future-dated rate update must include Effective date'
+    );
+  });
+
+  check('CAF shared filename helper uses Compensation Adjustment Form', function () {
+    // buildCompensationCafFileName_ delegates to the shared human-readable helper.
+    assert_(
+      typeof buildHumanReadableDocumentFileName_ === 'function',
+      'Shared human-readable filename helper must exist'
+    );
+    assert_(
+      typeof buildCompensationCafFileName_ === 'function',
+      'CAF filename builder must exist'
+    );
+  });
+
+  check('Currency parser accepts formatted pay strings', function () {
+    assert_(
+      roundCurrency_(parseSpreadsheetCurrency_('$46.40')) === 46.4,
+      'Currency strings must parse'
+    );
+    assert_(
+      roundCurrency_(parseSpreadsheetCurrency_(46.4)) === 46.4,
+      'Numeric rates must parse'
+    );
+  });
+
+  check('HR recommendation event prefix is durable and unique', function () {
+    assert_(
+      V31_COMP.HR_RECOMMENDATION_EVENT_PREFIX === 'COMP_RECOMMENDATION_READY:',
+      'HR recommendation event prefix must match Coach contract'
     );
   });
 

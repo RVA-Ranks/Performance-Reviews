@@ -220,13 +220,11 @@ function commitCompensationCafSealed_(cycleId, pdfId, options) {
         V31_COMP.RATE_UPDATE.PENDING ||
       !String(record['Rate Update Status'] || '')
     ) {
-      const effective = v31Date_(record['Compensation Effective Date']);
-      const today = v31Today_();
-      if (effective && effective.getTime() > today.getTime()) {
+      if (isCompensationEffectiveDateDue_(record['Compensation Effective Date'])) {
+        record['Rate Update Status'] = V31_COMP.RATE_UPDATE.PENDING;
+      } else {
         record['Rate Update Status'] =
           V31_COMP.RATE_UPDATE.PENDING_EFFECTIVE;
-      } else {
-        record['Rate Update Status'] = V31_COMP.RATE_UPDATE.PENDING;
       }
     }
 
@@ -261,7 +259,7 @@ function commitCompensationCafSealed_(cycleId, pdfId, options) {
     // Authoritative roster update: after history, apply Current Pay Rate when
     // the effective date is due. Future dates stay Pending Effective Date.
     try {
-      applyCompensationRateUpdateOnce_(cycleId);
+      ensureCompensationRateUpdate_(cycleId);
     } catch (rateError) {
       Logger.log(
         'Post-CAF roster update deferred/failed: ' +
@@ -274,29 +272,32 @@ function commitCompensationCafSealed_(cycleId, pdfId, options) {
 }
 
 function buildCompensationCafFileName_(cycleId) {
-  let cycle;
+  return buildHumanReadableDocumentFileName_(
+    cycleId,
+    'Compensation Adjustment Form'
+  );
+}
+
+/**
+ * Ensure a CAF Drive file uses the shared human-readable name.
+ * Reused legacy UUID-named artifacts are renamed in place; provenance is kept.
+ */
+function ensureHumanReadableCompensationCafName_(fileId, cycleId) {
+  const expected = buildCompensationCafFileName_(cycleId);
+  const id = String(fileId || '').trim();
+  if (!id) return expected;
   try {
-    cycle = findCycle_(cycleId).object;
+    const file = DriveApp.getFileById(id);
+    if (String(file.getName() || '') !== expected) {
+      file.setName(expected);
+    }
   } catch (error) {
-    cycle = { 'Cycle ID': cycleId };
+    Logger.log(
+      'CAF human-readable rename deferred: ' +
+        String(error.message || error)
+    );
   }
-  const employee = sanitizeFileNamePart_(
-    cycle['Employee Name'] || 'Employee'
-  );
-  const datePart = formatFileNameDate_(
-    cycle['Review Date'] || cycle['Completed At'] || new Date()
-  );
-  const reviewType = sanitizeFileNamePart_(
-    cycle['Review Type'] || 'Review'
-  );
-  return (
-    employee +
-    ' - ' +
-    datePart +
-    ' - ' +
-    reviewType +
-    ' - Compensation Adjustment Form.pdf'
-  );
+  return expected;
 }
 
 function buildLegacyCompensationCafFileNames_(cycleId) {
@@ -545,6 +546,7 @@ function generateCompensationCafPdf_(cycleId) {
 
   const existingId = findExistingCompensationCafId_(cycleId, record);
   if (existingId) {
+    ensureHumanReadableCompensationCafName_(existingId, cycleId);
     return existingId;
   }
 
@@ -722,8 +724,10 @@ function generateCompensationCafPdf_(cycleId) {
   const docFile = DriveApp.getFileById(doc.getId());
   const pdfBlob = docFile.getAs(MimeType.PDF).setName(fileName);
   const pdfFile = folder.createFile(pdfBlob);
+  pdfFile.setName(fileName);
   pdfFile.setDescription(buildCompensationCafProvenance_(cycleId, record));
   docFile.setTrashed(true);
+  ensureHumanReadableCompensationCafName_(pdfFile.getId(), cycleId);
 
   return pdfFile.getId();
 }

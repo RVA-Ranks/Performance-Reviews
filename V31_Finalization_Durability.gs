@@ -372,11 +372,12 @@ function formatFileNameDate_(value) {
 }
 
 /**
- * Human-readable final PDF name:
- *   Jane Doe - 2026-08-07 - Annual Review - Manager Review.pdf
- * Recovery still recognizes legacy AITHERAS_<cycleId>_ names.
+ * Shared human-readable final document name:
+ *   [Employee] - [YYYY-MM-DD] - [Review Type] - [Document Type].pdf
+ * Used by Manager Review, Self Evaluation, and CAF PDFs.
+ * Crash-safe identity remains Cycle ID + provenance, not the display name.
  */
-function buildReviewPdfFileName_(cycleId, documentType) {
+function buildHumanReadableDocumentFileName_(cycleId, documentLabel) {
   let cycle;
   try {
     cycle = findCycle_(cycleId).object;
@@ -392,13 +393,7 @@ function buildReviewPdfFileName_(cycleId, documentType) {
   const reviewType = sanitizeFileNamePart_(
     cycle['Review Type'] || 'Review'
   );
-  const docLabel =
-    documentType === PR.TYPE.MANAGER
-      ? 'Manager Review'
-      : documentType === PR.TYPE.SELF
-      ? 'Employee Self Evaluation'
-      : '';
-  if (!docLabel) throw new Error('Unsupported PDF document type.');
+  const docLabel = sanitizeFileNamePart_(documentLabel || 'Document');
   return (
     employee +
     ' - ' +
@@ -409,6 +404,22 @@ function buildReviewPdfFileName_(cycleId, documentType) {
     docLabel +
     '.pdf'
   );
+}
+
+/**
+ * Human-readable final PDF name:
+ *   Jane Doe - 2026-08-07 - Annual Review - Manager Review.pdf
+ * Recovery still recognizes legacy AITHERAS_<cycleId>_ names.
+ */
+function buildReviewPdfFileName_(cycleId, documentType) {
+  const docLabel =
+    documentType === PR.TYPE.MANAGER
+      ? 'Manager Review'
+      : documentType === PR.TYPE.SELF
+      ? 'Employee Self Evaluation'
+      : '';
+  if (!docLabel) throw new Error('Unsupported PDF document type.');
+  return buildHumanReadableDocumentFileName_(cycleId, docLabel);
 }
 
 function buildLegacyReviewPdfFileNames_(cycleId, documentType) {
