@@ -68,6 +68,18 @@ function runV31FinalizationTests_() {
   );
   results.push(
     runFinalCase_(
+      'CAF and review PDFs share one human-readable naming helper',
+      testSharedHumanReadableDocumentFileName_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'overall score is derived average and ignores client overall',
+      testDerivedOverallScoreAndDifference_
+    )
+  );
+  results.push(
+    runFinalCase_(
       'final distribution attempt identity is required in headers',
       testFinalDistributionAttemptIdHeader_
     )
@@ -426,6 +438,89 @@ function testPdfFileNameUsesHumanReadableShape_() {
   assertFinal_(
     legacy.indexOf('AITHERAS_CYCLE-9_Self_Evaluation_FINAL.pdf') >= 0,
     'Legacy cycle-id PDF name must remain recoverable'
+  );
+}
+
+function testSharedHumanReadableDocumentFileName_() {
+  const shared = buildHumanReadableDocumentFileName_(
+    'CYCLE-9',
+    'Compensation Adjustment Form'
+  );
+  assertFinal_(
+    shared.indexOf('Compensation Adjustment Form.pdf') >= 0,
+    'Shared helper must produce the CAF document label'
+  );
+  assertFinal_(
+    shared.indexOf('AITHERAS_') < 0,
+    'Shared helper must not use UUID/legacy AITHERAS_ prefix'
+  );
+  assertFinal_(
+    buildCompensationCafFileName_('CYCLE-9') === shared,
+    'CAF builder must use the shared naming helper'
+  );
+  assertFinal_(
+    buildReviewPdfFileName_('CYCLE-9', PR.TYPE.MANAGER).indexOf(
+      'Manager Review.pdf'
+    ) >= 0,
+    'Manager PDF must use the shared naming helper'
+  );
+}
+
+function testDerivedOverallScoreAndDifference_() {
+  assertFinal_(
+    calculateOverallScore_([
+      { rating: '5' },
+      { rating: '4' },
+      { rating: '4' },
+      { rating: '3' },
+    ]) === '4.00',
+    'Overall must average scored factors to 2 decimals'
+  );
+  assertFinal_(
+    calculateOverallScore_([
+      { rating: '5' },
+      { rating: 'N/A' },
+      { rating: '' },
+      { rating: '3' },
+    ]) === '4.00',
+    'Overall must ignore blank and N/A factors'
+  );
+  const cleaned = validateManagerReview_(
+    {
+      ratings: PR.FACTORS.map(function (factor, index) {
+        return {
+          factorId: factor.id,
+          rating: String((index % 7) + 1),
+          comments: [1, 2, 6, 7].indexOf((index % 7) + 1) >= 0 ? 'Evidence' : '',
+        };
+      }),
+      overallRating: '7',
+      overallComments: 'Narrative',
+      areasForImprovement: '',
+      actionSteps: '',
+      supervisorComments: '',
+    },
+    false
+  );
+  assertFinal_(
+    cleaned.overallRating !== '7',
+    'Server must ignore malicious client overallRating'
+  );
+  assertFinal_(
+    cleaned.overallRating === calculateOverallScore_(cleaned.ratings),
+    'Server overall must equal derived factor average'
+  );
+  assertFinal_(
+    calculateScoreDifference_(5, 4) === 1,
+    'Difference must be Manager − Employee (+1)'
+  );
+  assertFinal_(
+    calculateScoreDifference_(3, 5) === -2,
+    'Difference must be Manager − Employee (−2)'
+  );
+  assertFinal_(
+    formatScoreDifference_(1) === '+1',
+    'Positive differences must show an explicit plus sign'
   );
 }
 

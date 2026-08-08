@@ -2518,14 +2518,12 @@ function calculateReviewProgress_(review, type) {
   const narrativeFields =
     type === PR.TYPE.MANAGER
       ? [
-          'overallRating',
           'overallComments',
           'areasForImprovement',
           'actionSteps',
           'supervisorComments',
         ]
       : [
-          'overallRating',
           'overallComments',
           'keyAccomplishments',
           'areasForGrowth',
@@ -2540,8 +2538,10 @@ function calculateReviewProgress_(review, type) {
     }
   });
 
-  if (!cleanText_(review.overallRating)) {
-    blocking++;
+  // Derived overall counts once factor ratings exist.
+  total++;
+  if (calculateOverallScore_(ratings)) {
+    completed++;
   }
 
   return {
@@ -2685,9 +2685,11 @@ function validateCyclePayload_(payload, domain) {
 }
 
 function validateManagerReview_(payload, submitting) {
+  const ratings = validateRatings_(payload.ratings, submitting);
   return {
-    ratings: validateRatings_(payload.ratings, submitting),
-    overallRating: normalizeRating_(payload.overallRating),
+    ratings: ratings,
+    // Server-authoritative overall: ignore any client-supplied overallRating.
+    overallRating: calculateOverallScore_(ratings),
     overallComments: cleanText_(payload.overallComments),
     areasForImprovement: cleanText_(
       payload.areasForImprovement
@@ -2699,9 +2701,11 @@ function validateManagerReview_(payload, submitting) {
 }
 
 function validateSelfEvaluation_(payload, submitting) {
+  const ratings = validateRatings_(payload.ratings, submitting);
   return {
-    ratings: validateRatings_(payload.ratings, submitting),
-    overallRating: normalizeRating_(payload.overallRating),
+    ratings: ratings,
+    // Server-authoritative overall: ignore any client-supplied overallRating.
+    overallRating: calculateOverallScore_(ratings),
     overallComments: cleanText_(payload.overallComments),
     keyAccomplishments: cleanText_(payload.keyAccomplishments),
     areasForGrowth: cleanText_(payload.areasForGrowth),
@@ -2709,6 +2713,49 @@ function validateSelfEvaluation_(payload, submitting) {
     supportNeeded: cleanText_(payload.supportNeeded),
     submittedAt: cleanText_(payload.submittedAt),
   };
+}
+
+/**
+ * Overall Score = average of scored competency/factor ratings.
+ * Ignores blank and N/A factors. Returns '' when nothing is scored yet.
+ * Display precision: 2 decimals (e.g. "4.00").
+ */
+function calculateOverallScore_(ratings) {
+  let sum = 0;
+  let count = 0;
+  (ratings || []).forEach(function (item) {
+    const raw = String((item && item.rating) || '').trim();
+    if (!raw || raw.toUpperCase() === 'N/A') return;
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return;
+    sum += numeric;
+    count += 1;
+  });
+  if (!count) return '';
+  return (Math.round((sum / count) * 100) / 100).toFixed(2);
+}
+
+/**
+ * Side-by-side difference convention:
+ *   Manager score − Employee score
+ * Positive means the manager rated higher than the employee.
+ */
+function calculateScoreDifference_(managerScore, employeeScore) {
+  const manager = Number(managerScore);
+  const employee = Number(employeeScore);
+  if (!Number.isFinite(manager) || !Number.isFinite(employee)) {
+    return null;
+  }
+  return manager - employee;
+}
+
+function formatScoreDifference_(difference) {
+  if (difference == null || !Number.isFinite(Number(difference))) {
+    return '—';
+  }
+  const value = Number(difference);
+  if (value > 0) return '+' + String(value);
+  return String(value);
 }
 
 function validateRatings_(ratings, submitting) {
@@ -5388,8 +5435,12 @@ function sendCompletedPacket_(cycle, recipients, packetSpec) {
   }
 
   const attachments = [
-    DriveApp.getFileById(managerPdfId).getBlob(),
-    DriveApp.getFileById(selfPdfId).getBlob(),
+    DriveApp.getFileById(managerPdfId)
+      .getBlob()
+      .setName(buildReviewPdfFileName_(cycle['Cycle ID'], PR.TYPE.MANAGER)),
+    DriveApp.getFileById(selfPdfId)
+      .getBlob()
+      .setName(buildReviewPdfFileName_(cycle['Cycle ID'], PR.TYPE.SELF)),
   ];
 
   let cafAttached = false;
@@ -5401,7 +5452,7 @@ function sendCompletedPacket_(cycle, recipients, packetSpec) {
           'Approved compensation final packet requires a bound CAF PDF ID.'
         );
       }
-      attachments.push(DriveApp.getFileById(cafPdfId).getBlob());
+      attachments.push(getNamedCompensationCafBlob_(cycle['Cycle ID'], cafPdfId));
       cafAttached = true;
     }
   } else {
@@ -5420,7 +5471,7 @@ function sendCompletedPacket_(cycle, recipients, packetSpec) {
           'Approved compensation final packet requires a sealed CAF PDF.'
         );
       }
-      attachments.push(DriveApp.getFileById(cafPdfId).getBlob());
+      attachments.push(getNamedCompensationCafBlob_(cycle['Cycle ID'], cafPdfId));
       cafAttached = true;
     }
   }
@@ -5459,6 +5510,13 @@ function sendCompletedPacket_(cycle, recipients, packetSpec) {
     PR.CYCLE.FINALIZING,
     cafAttached ? 'with-caf' : 'without-caf'
   );
+}
+
+function getNamedCompensationCafBlob_(cycleId, cafPdfId) {
+  ensureHumanReadableCompensationCafName_(cafPdfId, cycleId);
+  return DriveApp.getFileById(cafPdfId)
+    .getBlob()
+    .setName(buildCompensationCafFileName_(cycleId));
 }
 
 function sendHtmlEmail_(to, subject, htmlBody) {
