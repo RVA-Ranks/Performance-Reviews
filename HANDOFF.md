@@ -1527,8 +1527,18 @@ Signatures remain explicit user actions.
 ## CAF PDF
 
 Generated once after Manager + Employee + HR PR signatures exist.
-Filename: `AITHERAS_<cycleId>_Compensation_Adjustment_FINAL.pdf`
+Human-readable filename (shared helper with Manager/Self PDFs):
+`[Employee] - [YYYY-MM-DD] - [Review Type] - Compensation Adjustment Form.pdf`
+Legacy `AITHERAS_<cycleId>_Compensation_Adjustment_FINAL.pdf` remains recoverable.
 Folder setting: `COMPENSATION_FOLDER_ID`
+
+After CAF seal → CompensationHistory → due `EmployeeAssignments.Current Pay Rate`
+update (header lookup, conflict-guarded). Future effective dates stay
+`Pending Effective Date` / Scheduled until due.
+
+Manager recommendation submit sends a durable HR email
+(`COMP_RECOMMENDATION_READY:<CompensationRecordId>`) without waiting for
+self-evaluation.
 
 Standalone legacy CAF remains available for unrelated adjustments and must not
 be migrated mid-flight.
