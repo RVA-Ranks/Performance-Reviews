@@ -5,6 +5,9 @@
 - Signature artifact creation failures now use attempt-scoped scan classification:
   0 artifacts + complete search → `Failed` (safe retry); 1 → self-heal/commit;
   >1 or incomplete search → `Delivery Unknown`.
+- Artifact-creation `Delivery Unknown` returns structured `recoveryRequired`
+  (no generic Try Again). Failed/Unknown persistence requires exact
+  `Signing` + Attempt ID ownership.
 - `signReviewCycle` returns compact live signature state; Manager/Employee clients
   patch local state without `refreshApplication`.
 - UI separates “Signature could not be recorded” from “Signature recorded.

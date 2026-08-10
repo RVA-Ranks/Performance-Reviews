@@ -322,6 +322,58 @@ function runV31SignatureTests_() {
         'Incomplete search must not be Failed'
       );
     }),
+    sigCase_('Failed persistence requires Signing + exact Attempt ID', function () {
+      assertSig_(
+        canPersistSignatureClaimOutcome_(
+          V31.SIGNATURE.SIGNING,
+          'attempt-A',
+          'attempt-A'
+        ),
+        'Matching Signing claim may persist Failed'
+      );
+      assertSig_(
+        !canPersistSignatureClaimOutcome_(
+          V31.SIGNATURE.SIGNING,
+          'attempt-B',
+          'attempt-A'
+        ),
+        'Attempt B must block Attempt A Failed write'
+      );
+      assertSig_(
+        !canPersistSignatureClaimOutcome_(
+          V31.SIGNATURE.SIGNING,
+          '',
+          'attempt-A'
+        ),
+        'Cleared Attempt ID must block stale Failed write'
+      );
+      assertSig_(
+        !canPersistSignatureClaimOutcome_(
+          V31.SIGNATURE.FAILED,
+          'attempt-A',
+          'attempt-A'
+        ),
+        'Non-Signing status must block Failed write'
+      );
+    }),
+    sigCase_('Unknown persistence uses the same exact claim ownership rule', function () {
+      assertSig_(
+        canPersistSignatureClaimOutcome_(
+          V31.SIGNATURE.SIGNING,
+          'a1',
+          'a1'
+        ),
+        'Matching Signing claim may persist Unknown'
+      );
+      assertSig_(
+        !canPersistSignatureClaimOutcome_(
+          V31.SIGNATURE.PENDING,
+          'a1',
+          'a1'
+        ),
+        'Pending status must not accept Unknown overwrite from stale claim'
+      );
+    }),
     {
       name: 'Audit failure after authoritative signature commit',
       severity: 'Blocking',

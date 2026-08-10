@@ -1273,7 +1273,7 @@ function signReviewCycle(cycleId, signatureDataUrl) {
             ' signature Failed with no Drive artifact. Ordinary retry is allowed.'
         );
       } else {
-        persistSignatureCommitUnknown_(
+        const recovery = persistSignatureCommitUnknown_(
           cycleId,
           claim,
           null,
@@ -1286,7 +1286,43 @@ function signReviewCycle(cycleId, signatureDataUrl) {
               'artifact-creation-unconfirmed',
           }
         );
-        throw error;
+        if (
+          recovery.observedOutcome ===
+            V31.SIGNATURE_COMMIT_OUTCOME.COMMITTED ||
+          recovery.observedOutcome ===
+            V31.SIGNATURE_COMMIT_OUTCOME.SUPERSEDED
+        ) {
+          const observedCycle =
+            recovery.observedCycle || findCycle_(cycleId).object;
+          return buildParticipantSignatureLiveResult_(
+            cycleId,
+            email,
+            claim.role,
+            {
+              outcome: recovery.observedOutcome,
+              cycle: observedCycle,
+              updatedState: getCombinedSignatureState_(observedCycle),
+            },
+            {
+              auditWarning: '',
+              canonicalWarning: '',
+              notificationWarning: '',
+            }
+          );
+        }
+        // Delivery Unknown must not throw into the generic Try Again UI.
+        return {
+          ok: false,
+          signatureRecorded: false,
+          recoveryRequired: true,
+          status: V31.SIGNATURE.UNKNOWN,
+          outcome: V31.SIGNATURE_COMMIT_OUTCOME.UNKNOWN,
+          role: claim.role,
+          cycleId: String(cycleId),
+          recovery: recovery,
+          message:
+            'Your signature could not be safely confirmed. HR must reconcile this attempt before another signature can be submitted.',
+        };
       }
     }
     // Artifact was created before the throw — continue to winner commit.
@@ -2001,6 +2037,22 @@ function classifySignatureAttemptScanResult_(scan, generationError) {
   };
 }
 
+/**
+ * Exact claim ownership required before persisting Failed or Delivery Unknown.
+ * Stale/cleared/superseded attempts must not mutate the role row.
+ */
+function canPersistSignatureClaimOutcome_(
+  currentStatus,
+  currentAttemptId,
+  claimAttemptId
+) {
+  return (
+    String(currentStatus || '') === V31.SIGNATURE.SIGNING &&
+    !!String(claimAttemptId || '') &&
+    String(currentAttemptId || '') === String(claimAttemptId || '')
+  );
+}
+
 function persistSignatureCommitFailed_(
   cycleId,
   claim,
@@ -2024,21 +2076,25 @@ function persistSignatureCommitFailed_(
     const cycle = location.object;
     const fields = claim.fields;
     const currentAttempt = String(cycle[fields.attemptField] || '');
+    const currentStatus = String(cycle[fields.statusField] || '');
     if (
-      currentAttempt &&
-      currentAttempt !== String(claim.attemptId)
+      !canPersistSignatureClaimOutcome_(
+        currentStatus,
+        currentAttempt,
+        claim.attemptId
+      )
     ) {
       details.persistenceSkipped =
-        'A different active signature claim is authoritative.';
+        'Claim ownership changed; Failed classification skipped.';
+      details.observedStatus = currentStatus;
+      details.observedAttemptId = currentAttempt;
+      details.observedCycle = cycle;
       return;
     }
-    if (
-      String(cycle[fields.statusField] || '') ===
-        V31.SIGNATURE.SIGNED ||
-      String(cycle[fields.fileField] || '')
-    ) {
+    if (String(cycle[fields.fileField] || '')) {
       details.persistenceSkipped =
-        'Signature already recorded; Failed classification skipped.';
+        'Signature file already present; Failed classification skipped.';
+      details.observedCycle = cycle;
       return;
     }
     cycle[fields.statusField] = V31.SIGNATURE.FAILED;
@@ -2091,6 +2147,7 @@ function persistSignatureCommitUnknown_(
       const currentAttempt = String(
         cycle[fields.attemptField] || ''
       );
+      const currentStatus = String(cycle[fields.statusField] || '');
       const observedOutcome = decideSignatureCommitOutcome_(
         currentWinner,
         cycle[fields.statusField],
@@ -2105,11 +2162,17 @@ function persistSignatureCommitUnknown_(
         return;
       }
       if (
-        currentAttempt &&
-        currentAttempt !== String(claim.attemptId)
+        !canPersistSignatureClaimOutcome_(
+          currentStatus,
+          currentAttempt,
+          claim.attemptId
+        )
       ) {
         details.persistenceSkipped =
-          'A different active signature claim is authoritative.';
+          'Claim ownership changed; Delivery Unknown classification skipped.';
+        details.observedStatus = currentStatus;
+        details.observedAttemptId = currentAttempt;
+        details.observedCycle = cycle;
         return;
       }
       clearSignatureArtifactMirrorsIfMatching_(
