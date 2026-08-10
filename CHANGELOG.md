@@ -1,5 +1,17 @@
 # V3.1 Changelog
 
+## Performance diagnostics closure
+
+- Sheet/Drive PERF events now record **actual** `getValues` / `getFolderById`
+  latency (not zero-ms counters).
+- Bootstrap attribution: `auth › …` and `v31Bootstrap › …` child timers;
+  `cycles › review summaries` marked as child of `cycles` (do not sum).
+- HR automation admin (Drive signature-recovery folder probe) deferred off Home
+  bootstrap; loaded when Administration opens (`automationDeferred`).
+- `runPerformanceProfile` prints one Logger report; Home Drive-call target is 0.
+- Editor HR evidence captured in `PERFORMANCE_PROFILE.md` (~3.6s cold / ~2.9s
+  warm). Deployed manager web-app ×5 still required for 100%.
+
 ## Performance & responsiveness (interactive paths)
 
 - Added `V31_Performance.gs` with optional PERF logging

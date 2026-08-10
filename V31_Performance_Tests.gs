@@ -106,8 +106,8 @@ function runPerformanceProfile() {
   }
 
   const text = formatPerformanceProfileReport_(report);
+  // Single sink — Apps Script Executions surfaces Logger output.
   Logger.log(text);
-  console.log(text);
 
   try {
     const ui = SpreadsheetApp.getUi();
@@ -244,6 +244,10 @@ function testV31BootstrapDoesNotDeclareEnsureDependency_() {
     source.indexOf('ensureV31DataModel_') < 0,
     'getV31BootstrapData_ must not call ensureV31DataModel_ on interactive path'
   );
+  assertPerf_(
+    source.indexOf('getAutomationAdminData_') < 0,
+    'Home bootstrap must not load automation admin / Drive folder probe'
+  );
 }
 
 function testPublicPerformanceProfileEntry_() {
@@ -317,14 +321,37 @@ function buildPerformanceVerdicts_(report) {
       verdictAgainstTarget_('Open Review', report.openReviewMs, 3000, 8000)
     );
   }
+  rows.push(
+    verdictAgainstTarget_(
+      'Home Drive calls',
+      report.driveCallsCold == null ? null : Number(report.driveCallsCold) * 1,
+      0,
+      0,
+      true
+    )
+  );
   return rows;
 }
 
-function verdictAgainstTarget_(name, valueMs, targetMs, warnMs) {
+function verdictAgainstTarget_(name, valueMs, targetMs, warnMs, treatAsCount) {
   if (valueMs == null || !isFinite(Number(valueMs))) {
     return { name: name, status: 'SKIP', detail: 'not measured' };
   }
   const ms = Number(valueMs);
+  if (treatAsCount) {
+    if (ms > targetMs) {
+      return {
+        name: name,
+        status: 'FAIL',
+        detail: ms + ' Drive calls (target ' + targetMs + ')',
+      };
+    }
+    return {
+      name: name,
+      status: 'PASS',
+      detail: ms + ' Drive calls',
+    };
+  }
   if (ms > warnMs) {
     return {
       name: name,
@@ -362,6 +389,9 @@ function formatPerformanceProfileReport_(report) {
   lines.push('- Sheet reads cold/warm: ' +
     String(report.sheetReadsCold) + ' / ' + String(report.sheetReadsWarm));
   lines.push('- Drive calls cold: ' + String(report.driveCallsCold));
+  if (report.driveCallsCold != null && Number(report.driveCallsCold) > 0) {
+    lines.push('  NOTE: ordinary Home target is Drive calls = 0');
+  }
   lines.push('');
   lines.push('Verdicts');
   (report.verdicts || []).forEach(function (row) {
@@ -375,19 +405,37 @@ function formatPerformanceProfileReport_(report) {
     });
   }
   lines.push('');
-  lines.push('Component events (captured)');
+  lines.push('Component events (do not sum parent + child)');
   (report.events || []).forEach(function (event) {
-    if (event.label === 'sheetRead' || event.label === 'driveCall') return;
+    const nested =
+      event.details && event.details.nested
+        ? ' [parent]'
+        : String(event.label || '').indexOf(' › ') >= 0
+          ? ' [child]'
+          : '';
     lines.push(
       '- [' +
         (event.run || '') +
         '] ' +
         event.label +
+        nested +
         ': ' +
         event.durationMs +
-        'ms'
+        'ms' +
+        (event.label === 'sheetRead' || event.label === 'driveCall'
+          ? ' (' +
+            JSON.stringify(event.details || {}) +
+            ')'
+          : '')
     );
   });
+  lines.push('');
+  lines.push(
+    'Open Meeting server cost ≈ Open Review (getReviewCycle); meeting tab switch is client-only.'
+  );
+  lines.push(
+    'Record Signature must be timed in the deployed web app (mutation path).'
+  );
   lines.push('===== End Performance Profile =====');
   return lines.join('\n');
 }

@@ -459,8 +459,9 @@ function validateSignatureRecoveryFolder_(
 ) {
   let folder;
   try {
-    perfCountDriveCall_('getFolderById');
+    const started = Date.now();
     folder = DriveApp.getFolderById(String(folderId || ''));
+    perfCountDriveCall_('getFolderById', Date.now() - started);
   } catch (error) {
     throw new Error(
       'SIGNATURE_RECOVERY_FOLDER_ID is configured but inaccessible. Correct or clear the setting.'
@@ -1148,9 +1149,14 @@ function protectV31Sheet_(sheet, description) {
 function getV31BootstrapData_(email, isHr) {
   // Interactive bootstrap must not run full schema/migrate ensure.
   // Keep ensure on upgrade/setup/admin/mutations only.
+  // HR automation admin (incl. Drive folder probe) loads when Administration opens.
 
+  const settingsTimer = perfStart_('v31Bootstrap › settings');
   const settings = getSettings_();
+  perfEnd_(settingsTimer);
+
   const normalized = normalizeEmail_(email);
+  const managerTimer = perfStart_('v31Bootstrap › manager role (assignments)');
   const isManager = getActiveAssignments_().some(
     function (assignment) {
       return (
@@ -1159,9 +1165,11 @@ function getV31BootstrapData_(email, isHr) {
       );
     }
   );
-  const mayViewCompensation = isHr || isManager;
+  perfEnd_(managerTimer);
 
-  return {
+  const flagsTimer = perfStart_('v31Bootstrap › compensation flags');
+  const mayViewCompensation = isHr || isManager;
+  const payload = {
     version: V31.VERSION,
     compensationAdjustmentUrl:
       mayViewCompensation
@@ -1178,10 +1186,14 @@ function getV31BootstrapData_(email, isHr) {
         : false,
     helpCenterEnabled:
       v31Boolean_(settings.HELP_CENTER_ENABLED, true),
-    automation: isHr
-      ? getAutomationAdminData_()
-      : null,
+    // Lazy: full automation admin (Drive folder validation, triggers, preview)
+    // is fetched only when HR opens Administration.
+    automation: null,
+    automationDeferred: !!isHr,
   };
+  perfEnd_(flagsTimer);
+
+  return payload;
 }
 
 function getV31CycleData_(cycle, email, isHr, options) {

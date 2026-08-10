@@ -18,7 +18,10 @@ Live (Preview), five runs each as Manager / Employee / HR:
 - [ ] Click shows loader before server round-trip
 - [ ] Administration System Health / Comp Queue do **not** load until Admin opened
 - [ ] Diagnostics off by default (`ENABLE_PERFORMANCE_DIAGNOSTICS === false`)
+- [ ] `runPerformanceProfile` Drive calls on Home = 0
+- [ ] Sheet/Drive PERF lines show non-zero durations when services are slow
 - [ ] Permissions, compensation privacy, CAF, finalization, scoring unchanged
+- [ ] Deployed manager web app Home ×5 recorded in PERFORMANCE_PROFILE.md
 
 ## Previous Review Context (post-v3.1)
 

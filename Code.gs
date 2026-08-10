@@ -359,15 +359,28 @@ function doGet(e) {
 /* ============================= BOOTSTRAP ================================= */
 
 function getReviewBootstrapData(initialCycleId) {
-  perfBeginRequest_('managerBootstrap');
+  perfBeginRequest_('homeBootstrap');
   const total = perfStart_('bootstrap total');
   try {
     const authTimer = perfStart_('auth');
+
+    const userTimer = perfStart_('auth › active user');
     const email = getCurrentUserEmail_();
+    perfEnd_(userTimer);
+
+    const settingsTimer = perfStart_('auth › ReviewSettings');
     const settings = getSettings_();
+    perfEnd_(settingsTimer);
+
+    const domainTimer = perfStart_('auth › domain validation');
     assertDomain_(email, settings.ALLOWED_DOMAIN);
+    perfEnd_(domainTimer);
+
+    const hrTimer = perfStart_('auth › ReviewHRUsers / role');
     const isHr = isHrUser_(email);
-    perfEnd_(authTimer, { isHr: isHr });
+    perfEnd_(hrTimer, { isHr: isHr });
+
+    perfEnd_(authTimer, { isHr: isHr, nested: true });
 
     const profileTimer = perfStart_('userProfile');
     const user = getUserProfile_(email, isHr);
@@ -375,7 +388,10 @@ function getReviewBootstrapData(initialCycleId) {
 
     const cyclesTimer = perfStart_('cycles');
     const cycles = listVisibleCycles_(email, isHr);
-    perfEnd_(cyclesTimer, { cycleCount: cycles.length });
+    perfEnd_(cyclesTimer, {
+      cycleCount: cycles.length,
+      note: 'parent of review summaries',
+    });
 
     const assignTimer = perfStart_('assignments');
     const assignments = isHr ? getActiveAssignments_() : [];
@@ -383,7 +399,7 @@ function getReviewBootstrapData(initialCycleId) {
 
     const v31Timer = perfStart_('v31Bootstrap');
     const v31 = getV31BootstrapData_(email, isHr);
-    perfEnd_(v31Timer);
+    perfEnd_(v31Timer, { nested: true });
 
     let selectedCycle = null;
     if (initialCycleId) {
@@ -2180,7 +2196,8 @@ function getSignatureTasks_(cycle, email) {
 /* ============================= VIEW MODELS =============================== */
 
 function listVisibleCycles_(email, isHr) {
-  const enrichmentTimer = perfStart_('review summaries');
+  // Child of parent timer "cycles" in getReviewBootstrapData — do not sum both.
+  const enrichmentTimer = perfStart_('cycles › review summaries');
   // One CompensationRecords scan for the whole list (not once per cycle).
   const compensationByCycleId = getCompensationRecordsByCycleId_();
   const rows = getAllObjects_(PR.SHEETS.CYCLES)
@@ -5696,10 +5713,11 @@ function getSettings_() {
   if (req && req.cache.settings !== undefined) {
     return req.cache.settings;
   }
-  const settings = readSettings_(
-    getSpreadsheet_().getSheetByName(PR.SHEETS.SETTINGS)
-  );
-  perfCountSheetRead_(PR.SHEETS.SETTINGS);
+  const sheet = getSpreadsheet_().getSheetByName(PR.SHEETS.SETTINGS);
+  const started = Date.now();
+  const settings = readSettings_(sheet);
+  // readSettings_ uses getDataRange; attribute the service latency here.
+  perfCountSheetRead_(PR.SHEETS.SETTINGS, Date.now() - started);
   if (req) req.cache.settings = settings;
   return settings;
 }
@@ -5731,8 +5749,7 @@ function getAllObjects_(sheetName) {
   }
 
   const sheet = getSpreadsheet_().getSheetByName(sheetName);
-  const values = sheet.getDataRange().getValues();
-  perfCountSheetRead_(sheetName);
+  const values = perfTimedSheetValues_(sheet, sheetName);
 
   if (values.length < 2) {
     if (req && req.cache.sheets) req.cache.sheets[sheetName] = [];

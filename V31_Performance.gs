@@ -100,26 +100,33 @@ function perfEnd_(timer, details) {
   return durationMs;
 }
 
-function perfCountSheetRead_(sheetName) {
+function perfCountSheetRead_(sheetName, durationMs) {
   const req = V31_PERF_REQUEST_;
   if (req) req.sheetReads += 1;
   if (isPerfDiagnosticsEnabled_() || V31_PERF_CAPTURE_) {
-    perfEmit_('sheetRead', 0, {
+    perfEmit_('sheetRead', Number(durationMs) || 0, {
       sheet: String(sheetName || ''),
       sheetReads: req ? req.sheetReads : null,
     });
   }
 }
 
-function perfCountDriveCall_(operation) {
+function perfCountDriveCall_(operation, durationMs) {
   const req = V31_PERF_REQUEST_;
   if (req) req.driveCalls += 1;
   if (isPerfDiagnosticsEnabled_() || V31_PERF_CAPTURE_) {
-    perfEmit_('driveCall', 0, {
+    perfEmit_('driveCall', Number(durationMs) || 0, {
       operation: String(operation || ''),
       driveCalls: req ? req.driveCalls : null,
     });
   }
+}
+
+function perfTimedSheetValues_(sheet, sheetName) {
+  const started = Date.now();
+  const values = sheet.getDataRange().getValues();
+  perfCountSheetRead_(sheetName || (sheet && sheet.getName ? sheet.getName() : ''), Date.now() - started);
+  return values;
 }
 
 function perfLogPayloadBytes_(label, payload) {
@@ -177,8 +184,7 @@ function getCompensationRecordsByCycleId_() {
     return map;
   }
 
-  const values = sheet.getDataRange().getValues();
-  perfCountSheetRead_(V31_COMP.RECORDS_SHEET);
+  const values = perfTimedSheetValues_(sheet, V31_COMP.RECORDS_SHEET);
   if (values.length >= 2) {
     const headers = values[0].map(String);
     const cycleIndex = headers.indexOf('Review Cycle ID');

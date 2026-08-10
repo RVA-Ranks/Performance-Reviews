@@ -4,156 +4,131 @@ Branch: `perf/application-responsiveness`
 Feature work frozen. This document tracks BEFORE/AFTER interactive latency.
 
 Diagnostics default: `ENABLE_PERFORMANCE_DIAGNOSTICS = false` in
-[`V31_Performance.gs`](V31_Performance.gs). Set to `true` only while profiling,
-then return to `false`.
+[`V31_Performance.gs`](V31_Performance.gs). Set to `true` only while gathering
+deployed manager browser evidence, then restore `false`.
+
+Rollback tip: `backup/pre-perf-responsiveness` @ `c212443`.
 
 ## How to capture live timings
 
 ### Preferred: editor Run menu
 
-1. Paste `V31_Performance.gs` and `V31_Performance_Tests.gs` (plus the other
-   perf-pass files if not already deployed).
-2. In the Apps Script editor, open the function dropdown and choose
-   **`runPerformanceProfile`** (public — no trailing underscore).
-3. Click **Run**. Approve permissions if prompted.
-4. Read the popup summary and the full report in **Executions → Logs**.
+1. Paste the perf-pass Apps Script files (see delivery notes).
+2. Select **`runPerformanceProfile`** in the Run dropdown → **Run**.
+3. Read the popup + **Executions → Logs** (single report; no duplicate print).
 
 That runner:
 
-- executes pure acceptance checks
-- times live Home bootstrap twice for the signed-in account (cold + warm)
-- times Open Review for the first visible cycle when one exists
-- restores `ENABLE_PERFORMANCE_DIAGNOSTICS` to its previous value afterward
+- pure acceptance checks
+- Home bootstrap cold + warm for the signed-in account
+- Open Review for the first visible cycle
+- restores diagnostics afterward
 
-It does not send mail, create Calendar events, or mutate review workflow.
+Does not send mail, create Calendar events, or mutate review workflow.
 
-### Optional: app browsing with diagnostics
+Open Meeting server cost ≈ Open Review (`getReviewCycle`). Meeting tab switch
+is client-only. Record Signature must be timed in the deployed web app.
 
-1. Set `ENABLE_PERFORMANCE_DIAGNOSTICS = true` in `V31_Performance.gs`.
-2. Use the web app as Manager / Employee / HR.
-3. Copy `PERF` JSON lines from Executions into the tables below.
-4. Set diagnostics back to `false`.
+### Required: deployed Manager web app
 
-Client timings appear in the browser console when bootstrap returns
-`perfDiagnostics: true`.
+1. Deploy/paste this build (Preview).
+2. Optionally set `ENABLE_PERFORMANCE_DIAGNOSTICS = true` for server PERF lines.
+3. Log in as the **manager account that previously saw ~5-minute Home**.
+4. Load Home five times; record shell / loader / usable / server total.
+5. Also time Open Review, Open Meeting, Record Signature (split signature write
+   vs downstream vs refresh when possible).
+6. Restore `ENABLE_PERFORMANCE_DIAGNOSTICS = false`.
 
-## Static BEFORE inventory (code analysis @ tip before this pass)
-
-Manager Home was a single RPC `getReviewBootstrapData` that:
+## Static BEFORE inventory (pre-pass)
 
 | Step | Cost driver |
 |------|-------------|
-| `ensureV31DataModel_` on every boot | Header ensure, checkbox writes, compensation migrate, format/protect |
-| Settings / Assignments / Cycles | Repeated full-sheet `getDataRange` with no request cache |
-| `getV31CycleData_` × N cycles | `findCompensationRecordByCycle_` → **full CompensationRecords scan per cycle** |
-| Review JSON parse × N | Progress bars for every visible cycle |
-| HR only: `getAutomationAdminData_` | Preview candidates + Drive recovery-folder validation |
-| HR only after paint | `getSystemHealthSummary` + `getCompensationQueue` even when Admin hidden |
+| `ensureV31DataModel_` on every boot | migrate / format / protect |
+| Repeated Settings/Assignments/Cycles reads | no request cache |
+| CompensationRecords × N cycles | per-cycle full scans |
+| HR `getAutomationAdminData_` on bootstrap | Drive `getFolderById` |
+| HR Admin System Health + Comp Queue on every paint | post-bootstrap RPCs |
 
-Not on manager Home path (already): Previous Review, Recovery Center, PDF/Drive
-validation for finalization, signature image blobs.
+## Editor server timings (HR account — structural AFTER)
 
-### Estimated BEFORE sheet reads (manager, C visible cycles)
+Actor: `aitheras-hr@aitheras.com` (`isHr: true`)  
+Method: `runPerformanceProfile` in Apps Script editor (not browser/manager).
 
-```text
-Settings:     3–5
-HR:           1
-Assignments:  2
-Cycles:       1 (+ migrate scan)
-Compensation: C   ← dominant when C is large
-```
+| Metric | Result | Verdict |
+|--------|--------|---------|
+| Home cold | 3609 ms | PASS (&lt;5s) |
+| Home warm | 2941 ms | WARN (target &lt;2s; tolerable &lt;4s) |
+| Open Review | 2319 ms | PASS (&lt;3s) |
+| Payload | 14983 bytes | Excellent |
+| Sheet reads | 5 | Reasonable (count) |
+| Drive calls | 1 | Was HR automation folder probe on Home |
+| Acceptance | 5/5 PASS | |
 
-Live multi-minute Home loads are consistent with migrate + O(C) compensation
-scans + cold Apps Script container startup.
-
-## Live BEFORE (Daniel Workspace)
-
-Fill after profiling with diagnostics on **before** deploying optimizations, or
-use the first cold run after paste as the baseline if measuring post-change.
-
-### Manager
-
-| Operation | Run1 | Run2 | Run3 | Run4 | Run5 | Min | Median | Max |
-|-----------|------|------|------|------|------|-----|--------|-----|
-| Home cold | | | | | | | | |
-| Home warm | | | | | | | | |
-| Open Review | | | | | | | | |
-| Open Meeting | | | | | | | | |
-| Previous Review | | | | | | | | |
-| Compensation Details | | | | | | | | |
-| Record Signature | | | | | | | | |
-
-### Employee
-
-| Operation | Min | Median | Max |
-|-----------|-----|--------|-----|
-| Home | | | |
-| Open Self Evaluation | | | |
-| Save / Submit | | | |
-| Meeting | | | |
-| Sign | | | |
-
-### HR
-
-| Operation | Min | Median | Max |
-|-----------|-----|--------|-----|
-| Home | | | |
-| Administration (first open) | | | |
-| Compensation Queue | | | |
-| System Health | | | |
-| Owner Decision | | | |
-
-## Changes in this pass (AFTER expected shape)
-
-| Change | Expected effect |
-|--------|-----------------|
-| Skip `ensureV31DataModel_` on interactive bootstrap | Removes migrate/format from Home critical path |
-| Request-scoped spreadsheet + settings + sheet caches | Collapse repeated Settings/Assignments/Cycles reads to ~1 each |
-| `getCompensationRecordsByCycleId_` once per request | Compensation cost O(1 sheet) not O(C sheets) |
-| Home `summaryOnly` V31 DTO | Skip full compensation record views, guidance, HR recovery blocks on list |
-| Defer System Health + Comp Queue until Admin opened | HR Home no longer pays for Admin RPCs |
-| Staged loading + stale request tokens + keep shell on refresh | Perceived responsiveness &lt;100ms feedback |
-
-## Live AFTER
-
-### Manager
-
-| Operation | Target | Min | Median | Max | Pass? |
-|-----------|--------|-----|--------|-----|-------|
-| Shell visible | &lt;2s | | | | |
-| Home cold | &lt;5s | | | | |
-| Home warm | &lt;2s | | | | |
-| Open Review | &lt;3s | | | | |
-| Open Meeting | &lt;3s | | | | |
-| Click feedback | &lt;100ms | | | | |
-
-### Example PERF log shape
+Warm attribution (do **not** sum parent + child):
 
 ```text
-PERF managerBootstrap total                …ms
-PERF auth                                  …ms
-PERF cycles / review summaries             …ms
-PERF v31Bootstrap                          …ms
-PERF serialization                         …ms
-PERF bootstrap bytes                       …
-PERF sheetRead count (request)             …
+auth                     ~975 ms   [parent]
+  (nested: user / settings / HR role)
+review summaries / cycles ~751–753 ms  [same op; child of cycles]
+v31Bootstrap             ~807 ms   [parent]
+userProfile              ~356 ms
+assignments               ~26 ms
+serialization              ~6 ms
 ```
 
-## Remaining slow paths (known)
+Notes:
 
-- HR bootstrap still loads `getAutomationAdminData_` (includes Drive folder
-  probe) because Administration settings render from that payload.
-- Home still parses Manager/Self review JSON for progress percentages.
-- Cold Apps Script container startup is outside application control.
-- Signing still refreshes full bootstrap after success (durable correctness).
+- Labels previously said `managerBootstrap` while actor was HR — renamed to
+  `homeBootstrap`.
+- `sheetRead`/`driveCall` previously logged `durationMs: 0` (count only). Fixed
+  to wrap actual `getValues` / `getFolderById` latency.
+- Nested timers use `parent › child` labels.
 
-## Regression guardrails
+## Closure refinements (this diagnostics commit)
 
-Performance changes must not weaken:
+| Change | Intent |
+|--------|--------|
+| Timed Sheet/Drive service calls | Real durations, not zero placeholders |
+| Auth + v31Bootstrap sub-timers | Attribute remaining ~3s |
+| Defer HR `getAutomationAdminData_` off Home | Home Drive calls → 0 |
+| Lazy-load automation when Administration opens | Keep Admin complete without Home cost |
+| Single Logger report | No duplicate profile print |
 
-- permissions / domain checks
-- denied compensation privacy
-- signature provenance
-- CAF / final distribution durability
-- rate-update conflict protection
-- Overall Score / Manager−Employee delta rules
+## Deployed Manager browser timings (REQUIRED)
+
+Fill with the previously slow manager account through the **web app**.
+
+| Run | Shell visible | Loader visible | Home usable | Server bootstrap |
+|-----|---------------|----------------|-------------|------------------|
+| 1 | | | | |
+| 2 | | | | |
+| 3 | | | | |
+| 4 | | | | |
+| 5 | | | | |
+
+| Operation | Min | Median | Max | Target |
+|-----------|-----|--------|-----|--------|
+| Home cold | | | | &lt;5s ideal / &lt;6s tolerable |
+| Home warm | | | | &lt;2s ideal / &lt;4s tolerable |
+| Open Review | | | | &lt;3s ideal / &lt;5s OK |
+| Open Meeting | | | | &lt;3s |
+| Signature accepted | | | | immediate feedback &lt;100ms |
+| Downstream finalize | | | | staged messages OK |
+
+&gt;8s → investigate. Minutes → automatic failure.
+
+## UX acceptance (independent of backend ms)
+
+- [ ] Feedback &lt;100ms after click
+- [ ] Shell stays visible on refresh when already booted
+- [ ] Slow-path message after ~2s / ~8s
+- [ ] Mutation buttons disable while pending
+- [ ] Loaders always clear on success/failure
+- [ ] Stale responses cannot overwrite newer screens
+
+## Remaining known slow paths
+
+- Cold Apps Script container startup (outside app control)
+- Home still parses review JSON for progress bars
+- Warm Home still ~3s for HR in editor — manager web evidence pending
+- Signing still full-bootstrap refreshes after success (correctness over speed)

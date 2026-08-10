@@ -2119,8 +2119,27 @@ function ensureAdminHeavyDataLoaded_() {
   if (queueBody && /Open Administration/.test(queueBody.textContent || '')) {
     queueBody.innerHTML = '<div class="field-help">Loading compensation queue…</div>';
   }
+  loadAdminAutomationSettings_();
   refreshSystemHealth(false);
   refreshCompensationQueue();
+}
+
+async function loadAdminAutomationSettings_() {
+  if (!state || !state.isHr) return;
+  if (state.v31 && state.v31.automation) return;
+  try {
+    const automation = await server('getReviewAutomationAdminData');
+    if (!state.v31) state.v31 = {};
+    state.v31.automation = automation;
+    state.v31.automationDeferred = false;
+    if (currentView === 'admin') {
+      const keepLoaded = adminHeavyDataLoaded;
+      renderAdminView(false);
+      adminHeavyDataLoaded = keepLoaded;
+    }
+  } catch (error) {
+    showToast('error', 'Could not load automation settings', errorMessage(error));
+  }
 }
 
 async function refreshCompensationQueue() {
