@@ -485,31 +485,6 @@ function testDerivedOverallScoreAndDifference_() {
     ]) === '4.00',
     'Overall must ignore blank and N/A factors'
   );
-  const cleaned = validateManagerReview_(
-    {
-      ratings: PR.FACTORS.map(function (factor, index) {
-        return {
-          factorId: factor.id,
-          rating: String((index % 7) + 1),
-          comments: [1, 2, 6, 7].indexOf((index % 7) + 1) >= 0 ? 'Evidence' : '',
-        };
-      }),
-      overallRating: '7',
-      overallComments: 'Narrative',
-      areasForImprovement: '',
-      actionSteps: '',
-      supervisorComments: '',
-    },
-    false
-  );
-  assertFinal_(
-    cleaned.overallRating !== '7',
-    'Server must ignore malicious client overallRating'
-  );
-  assertFinal_(
-    cleaned.overallRating === calculateOverallScore_(cleaned.ratings),
-    'Server overall must equal derived factor average'
-  );
   assertFinal_(
     calculateScoreDifference_(5, 4) === 1,
     'Difference must be Manager − Employee (+1)'
@@ -521,6 +496,34 @@ function testDerivedOverallScoreAndDifference_() {
   assertFinal_(
     formatScoreDifference_(1) === '+1',
     'Positive differences must show an explicit plus sign'
+  );
+
+  const factorRatings = [5, 4, 4, 3, 3, 4, 4, 4, 3, 4];
+  assertFinal_(
+    PR.FACTORS.length === factorRatings.length,
+    'Malicious overall fixture must cover every review factor'
+  );
+  const cleaned = validateManagerReview_(
+    {
+      ratings: PR.FACTORS.map(function (factor, index) {
+        const rating = factorRatings[index];
+        return {
+          factorId: factor.id,
+          rating: String(rating),
+          comments: [1, 2, 6, 7].indexOf(rating) >= 0 ? 'Evidence' : '',
+        };
+      }),
+      overallRating: '7',
+      overallComments: 'Narrative',
+      areasForImprovement: '',
+      actionSteps: '',
+      supervisorComments: '',
+    },
+    false
+  );
+  assertFinal_(
+    cleaned.overallRating === '3.80',
+    'Client overallRating=7 must be ignored; server stores 3.80'
   );
 }
 

@@ -4797,7 +4797,7 @@ function createReviewTemplate_(type, folderId) {
     appendSection_(
       body,
       'Overall Performance',
-      'Overall Rating: {{MGR_OVERALL_RATING}}\n\n{{MGR_OVERALL_COMMENTS}}'
+      'Overall Score: {{MGR_OVERALL_RATING}}\n\n{{MGR_OVERALL_COMMENTS}}'
     );
     appendSection_(
       body,
@@ -4818,7 +4818,7 @@ function createReviewTemplate_(type, folderId) {
     appendSection_(
       body,
       'Overall Self-Assessment',
-      'Overall Rating: {{SELF_OVERALL_RATING}}\n\n{{SELF_OVERALL_COMMENTS}}'
+      'Overall Score: {{SELF_OVERALL_RATING}}\n\n{{SELF_OVERALL_COMMENTS}}'
     );
     appendSection_(
       body,

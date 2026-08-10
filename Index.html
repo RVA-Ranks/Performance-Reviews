@@ -2111,6 +2111,11 @@ async function refreshCompensationQueue() {
                 escapeHtml(item.managerOutcomeEmailStatus) +
                 '</span>'
               : '') +
+            (item.hrRecommendationEmailStatus
+              ? '<br><span class="field-help">HR email: ' +
+                escapeHtml(item.hrRecommendationEmailStatus) +
+                '</span>'
+              : '') +
             '</td><td>' +
             (item.status === 'Awaiting Owner Decision'
               ? '<button class="button primary" onclick="openOwnerDecisionModal(\'' +
@@ -2136,6 +2141,13 @@ async function refreshCompensationQueue() {
                 '\',\'' +
                 escapeAttr(item.managerOutcomeEmailAttemptId || '') +
                 '\')">Reconcile Manager Email</button>'
+              : '') +
+            (item.hrRecommendationEmailStatus === 'Delivery Unknown'
+              ? '<br><button class="button outline" onclick="openHrRecommendationEmailRecovery(\'' +
+                escapeAttr(item.cycleId) +
+                '\',\'' +
+                escapeAttr(item.hrRecommendationEmailAttemptId || '') +
+                '\')">Reconcile HR Email</button>'
               : '') +
             (item.rateUpdateStatus === 'Conflict'
               ? '<div class="field-help" style="margin-top:6px">' +
@@ -2211,6 +2223,71 @@ async function recoverCompensationRate(cycleId) {
   } catch (error) {
     showToast('error', 'Compensation rate update', errorMessage(error));
   }
+}
+
+async function openHrRecommendationEmailRecovery(cycleId, attemptId) {
+  openModal({
+    title: 'Reconcile HR recommendation email',
+    body:
+      '<p><strong>Delivery Unknown:</strong> HR may already have received the compensation recommendation email. Do not auto-resend.</p>' +
+      '<p>Attempt ID: <code>' +
+      escapeHtml(attemptId || '') +
+      '</code></p>' +
+      '<label>Action<br><select id="hrRecommendationRecoveryAction">' +
+      '<option value="markConfirmed">Mark Confirmed (already delivered)</option>' +
+      '<option value="resend">Confirmed Resend</option>' +
+      '</select></label>' +
+      '<label style="display:block;margin-top:12px;">Evidence note (required to Mark Confirmed)<br>' +
+      '<textarea id="hrRecommendationEvidence" rows="3" style="width:100%"></textarea></label>',
+    confirmLabel: 'Apply Reconciliation',
+    tone: 'warning',
+    onConfirm: async function () {
+      const action = document.getElementById(
+        'hrRecommendationRecoveryAction'
+      ).value;
+      const evidenceNote = String(
+        document.getElementById('hrRecommendationEvidence').value || ''
+      ).trim();
+      closeModal();
+      try {
+        if (action === 'markConfirmed') {
+          if (!evidenceNote) {
+            showToast(
+              'error',
+              'HR recommendation email',
+              'An evidence note is required to mark confirmed.'
+            );
+            return;
+          }
+          await server('markCompensationRecommendationHrEmailConfirmed', cycleId, {
+            confirmed: true,
+            confirmationToken: 'MARK_HR_RECOMMENDATION_EMAIL_CONFIRMED',
+            originalAttemptId: attemptId || '',
+            evidenceNote: evidenceNote,
+          });
+          showToast(
+            'success',
+            'HR recommendation email',
+            'Marked confirmed with evidence.'
+          );
+        } else {
+          await server('resendCompensationRecommendationHrEmailUnknown', cycleId, {
+            confirmed: true,
+            confirmationToken: 'RESEND_HR_RECOMMENDATION_EMAIL_UNKNOWN',
+            originalAttemptId: attemptId || '',
+          });
+          showToast(
+            'success',
+            'HR recommendation email',
+            'Confirmed resend completed.'
+          );
+        }
+        refreshCompensationQueue();
+      } catch (error) {
+        showToast('error', 'HR recommendation email', errorMessage(error));
+      }
+    },
+  });
 }
 
 async function openManagerOutcomeEmailRecovery(cycleId, attemptId) {
@@ -4286,7 +4363,7 @@ function renderRatingGuide() {
 function renderSummaryStep(type, draft) {
   const overall = calculateClientOverallScore(draft);
   return '<div class="editor-section-header"><h2>Overall Assessment</h2><p>Overall Score is calculated automatically from your competency ratings. Add narrative context below.</p></div>' +
-    '<div class="field factor-card"><label>Overall Performance Rating ' +
+    '<div class="field factor-card"><label>Overall Score ' +
     infoTipHtml('Automatically calculated as the average of this review\'s competency scores. Blank and N/A factors are excluded.') +
     '</label><div class="derived-overall" id="overall-' + type + '">' +
     (overall ? escapeHtml(overall) : '—') +
@@ -4634,9 +4711,9 @@ function renderReadOnlyReview(review, type) {
   });
   html += '</tbody></table></div>';
   const fields = type === 'manager' ? [
-    ['Overall Rating', ratingLabel(review.overallRating)], ['Overall Comments', review.overallComments], ['Areas for Improvement', review.areasForImprovement], ['Action Steps', review.actionSteps], ['Supervisor Comments', review.supervisorComments], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Manager Signed', review.managerSignedAt || 'Pending'], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
+    ['Overall Score', formatOverallScoreDisplay(review.overallRating)], ['Overall Comments', review.overallComments], ['Areas for Improvement', review.areasForImprovement], ['Action Steps', review.actionSteps], ['Supervisor Comments', review.supervisorComments], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Manager Signed', review.managerSignedAt || 'Pending'], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
   ] : [
-    ['Overall Rating', ratingLabel(review.overallRating)], ['Overall Comments', review.overallComments], ['Key Accomplishments', review.keyAccomplishments], ['Areas for Growth', review.areasForGrowth], ['Goals for Next Period', review.goalsForNextPeriod], ['Support or Training Needed', review.supportNeeded], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['Manager Signed', review.managerSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
+    ['Overall Score', formatOverallScoreDisplay(review.overallRating)], ['Overall Comments', review.overallComments], ['Key Accomplishments', review.keyAccomplishments], ['Areas for Growth', review.areasForGrowth], ['Goals for Next Period', review.goalsForNextPeriod], ['Support or Training Needed', review.supportNeeded], ['Submitted', formatLocalDateTime(review.submittedAt)], ['Employee Signed', review.employeeSignedAt || 'Pending'], ['Manager Signed', review.managerSignedAt || 'Pending'], ['HR Signed', review.hrSignedAt || 'Pending']
   ];
   return html + '<div style="height:18px"></div><div class="summary-grid">' + fields.map(function(field) { return '<div class="summary-label">' + escapeHtml(field[0]) + '</div><div>' + escapeHtml(field[1] || '') + '</div>'; }).join('') + '</div>';
 }
@@ -4665,6 +4742,7 @@ function renderMeetingTab(target) {
 
   const editable = cycle.status === 'Review Meeting Open';
   target.innerHTML = '<div class="card"><div class="card-header"><div><h2>Review Comparison</h2><p>Large rating differences are highlighted for discussion. Difference = Manager score − Employee score.</p></div></div>' + renderComparison(cycle) + '</div>' +
+    renderMeetingCompensationDetails_(cycle) +
     '<div class="card"><div class="card-header"><div><h2>Meeting Outcomes</h2><p>Document conclusions, goals, action steps, and employee comments.</p></div></div>' +
     renderMeetingField('meetingManagerComments','Manager Final Comments',meetingDraft.managerFinalComments, editable && cycle.canEditManagerMeeting) +
     renderMeetingField('meetingDevelopmentGoals','Development Goals',meetingDraft.developmentGoals, editable && cycle.canEditManagerMeeting) +
@@ -4672,6 +4750,106 @@ function renderMeetingTab(target) {
     renderMeetingField('meetingEmployeeComments','Employee Comments After Discussion',meetingDraft.employeeComments, editable && cycle.canEditEmployeeMeeting) +
     (editable && (cycle.canEditManagerMeeting || cycle.canEditEmployeeMeeting) ? '<div class="button-row"><button class="button secondary" onclick="manualSaveMeeting()">Save meeting notes</button>' + (cycle.canReleaseSignatures ? '<button class="button warning" onclick="openReleaseModal()">Finalize & Release for Signature</button>' : '') + '</div>' : '') + '</div>';
   bindMeetingInputs();
+}
+
+/**
+ * Collapsed compensation details for the live meeting, immediately under
+ * the side-by-side comparison. Manager/HR only; employees see nothing.
+ */
+function renderMeetingCompensationDetails_(cycle) {
+  if (
+    !cycle ||
+    cycle.historicalPreviousReview ||
+    !cycle.v31 ||
+    (!cycle.isManager && !cycle.isHr)
+  ) {
+    return '';
+  }
+
+  const record = cycle.v31.compensationRecord;
+  const decision = String(cycle.v31.compensationDecision || '');
+  const status = String(cycle.v31.compensationStatus || '');
+  if (
+    !cycle.v31.compensationRequired &&
+    !record &&
+    decision !== 'No Adjustment Recommended' &&
+    decision !== 'Adjustment Recommended' &&
+    status !== 'Denied'
+  ) {
+    return '';
+  }
+  const ownerDecision = record && record.ownerDecision
+    ? String(record.ownerDecision)
+    : '';
+  const denied = ownerDecision === 'Denied' || status === 'Denied';
+  const noAdjustment =
+    denied ||
+    decision === 'No Adjustment Recommended' ||
+    (!record && decision && decision !== 'Pending' && decision !== 'Adjustment Recommended');
+
+  let detailsHtml = '';
+  if (denied || noAdjustment) {
+    detailsHtml =
+      (record
+        ? '<div><strong>Manager Recommendation:</strong> ' +
+          escapeHtml(String(record.managerRecommendedPercentDisplay)) +
+          '%</div>'
+        : '') +
+      '<div><strong>Final Decision:</strong> No Compensation Adjustment</div>';
+  } else if (record && record.finalApprovedPayRate != null) {
+    detailsHtml =
+      '<div><strong>Current Pay Rate:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
+      '</div>' +
+      '<div><strong>Current Annual Salary:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalAnnualSalary)) +
+      '</div>' +
+      '<div><strong>Manager Recommendation:</strong> ' +
+      escapeHtml(String(record.managerRecommendedPercentDisplay)) +
+      '% → ' +
+      escapeHtml(formatMoneyDisplay(record.managerRecommendedPayRate)) +
+      ' / ' +
+      escapeHtml(formatMoneyDisplay(record.managerRecommendedAnnualSalary)) +
+      '</div>' +
+      '<div><strong>Final Approved Increase:</strong> ' +
+      escapeHtml(String(record.finalApprovedPercentDisplay)) +
+      '%</div>' +
+      '<div><strong>Final Pay Rate:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.finalApprovedPayRate)) +
+      '</div>' +
+      '<div><strong>Final Annual Salary:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.finalApprovedAnnualSalary)) +
+      '</div>' +
+      '<div><strong>Effective Date:</strong> ' +
+      escapeHtml(record.compensationEffectiveDate || '') +
+      '</div>';
+  } else if (record) {
+    detailsHtml =
+      '<div><strong>Current Pay Rate:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalPayRate)) +
+      '</div>' +
+      '<div><strong>Current Annual Salary:</strong> ' +
+      escapeHtml(formatMoneyDisplay(record.originalAnnualSalary)) +
+      '</div>' +
+      '<div><strong>Manager Recommendation:</strong> ' +
+      escapeHtml(String(record.managerRecommendedPercentDisplay)) +
+      '%</div>' +
+      '<div><strong>Final Decision:</strong> Awaiting owner decision</div>';
+  } else {
+    detailsHtml =
+      '<div><strong>Compensation Status:</strong> ' +
+      escapeHtml(decision || status || 'Pending') +
+      '</div>';
+  }
+
+  return (
+    '<div class="card compensation-card"><div class="card-header"><div><h2>Compensation Decision</h2><p>Final approved compensation for this review meeting. Hidden from the employee.</p></div></div>' +
+    '<details class="compensation-details">' +
+    '<summary><strong>Show Compensation Details</strong></summary>' +
+    '<div class="notice" style="margin-top:10px">' +
+    detailsHtml +
+    '</div></details></div>'
+  );
 }
 
 function renderComparison(cycle) {
@@ -5024,11 +5202,11 @@ function renderPreviousReviewPanel() {
       '<summary><div><p class="previous-review-title">' + escapeHtml(heading) + '</p>' +
       '<p class="previous-review-meta">' + escapeHtml(ctx.periodLabel || ctx.reviewType || 'Prior review') +
       ' · ' + escapeHtml(formatPreviousReviewCompleted(ctx.completedAt)) + '</p>' + badge +
-      '<p class="previous-review-meta" style="margin-top:8px">Overall Rating: ' + escapeHtml(overall) + '</p>' +
+      '<p class="previous-review-meta" style="margin-top:8px">Overall Score: ' + escapeHtml(overall) + '</p>' +
       collapsedGoals +
       '</div></summary>' +
       '<div class="previous-review-body">' +
-      '<h4>Previous Overall Rating</h4><p>' + escapeHtml(overall) +
+      '<h4>Previous Overall Score</h4><p>' + escapeHtml(overall) +
       (ctx.previousManagerName ? ' · Manager: ' + escapeHtml(ctx.previousManagerName) : '') + '</p>' +
       '<h4>Previous Factor Ratings</h4>' +
       (factors.length
@@ -5697,6 +5875,13 @@ function humanStatus(value){const map={'Open for Input':'Drafting','Ready for Re
 function humanDocumentStatus(value){const map={'Not Started':'Not started','Draft':'In progress','Submitted':'Submitted and sealed','Pending Manager and Employee Signatures':'Waiting for manager and employee signatures','Pending Manager Signature':'Waiting for manager signature','Pending Employee Signature':'Waiting for employee signature','Pending HR Signature':'Waiting for HR signature','Complete':'Complete'};return map[value]||value||'';}
 function ratingLabel(value){if(!value)return'';if(value==='N/A')return'N/A';const item=state.ratings.find(function(r){return String(r.value)===String(value);});return item?item.value+' — '+item.label:String(value);}
 function isNumericRating(value){const n=Number(value);return value!==''&&value!=='N/A'&&Number.isInteger(n)&&n>=1&&n<=7;}
+function formatOverallScoreDisplay(value){
+  const text = String(value || '').trim();
+  if (!text) return '—';
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return text;
+  return numeric.toFixed(2);
+}
 function calculateClientOverallScore(draft){
   let sum = 0;
   let count = 0;

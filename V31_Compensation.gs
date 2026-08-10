@@ -59,6 +59,9 @@ const V31_COMP = Object.freeze({
   MANAGER_OUTCOME_RESEND_TOKEN: 'RESEND_MANAGER_OUTCOME_EMAIL_UNKNOWN',
   MANAGER_OUTCOME_CONFIRM_EVENT_PREFIX: 'MANAGER_OUTCOME_EMAIL_CONFIRMED:',
   HR_RECOMMENDATION_EVENT_PREFIX: 'COMP_RECOMMENDATION_READY:',
+  HR_RECOMMENDATION_CONFIRM_TOKEN: 'MARK_HR_RECOMMENDATION_EMAIL_CONFIRMED',
+  HR_RECOMMENDATION_RESEND_TOKEN: 'RESEND_HR_RECOMMENDATION_EMAIL_UNKNOWN',
+  HR_RECOMMENDATION_CONFIRM_EVENT_PREFIX: 'HR_RECOMMENDATION_EMAIL_CONFIRMED:',
 
   RECORD_HEADERS: [
     'Compensation Record ID',
@@ -1658,6 +1661,15 @@ function getCompensationQueue() {
           managerOutcomeEmailLastError: String(
             record['Manager Outcome Email Last Error'] || ''
           ),
+          hrRecommendationEmailStatus: String(
+            record['HR Recommendation Email Status'] || ''
+          ),
+          hrRecommendationEmailAttemptId: String(
+            record['HR Recommendation Email Attempt ID'] || ''
+          ),
+          hrRecommendationEmailLastError: String(
+            record['HR Recommendation Email Last Error'] || ''
+          ),
           expectedPredecessorPayRate: Number(record['Original Pay Rate'] || 0),
           submittedAt: formatDateTime_(
             record['Manager Recommendation Submitted At']
@@ -1698,12 +1710,16 @@ function compensationOwnerAlertKey_(cycleId) {
  * Trigger: manager recommendation submitted (self-evaluation is NOT required).
  * Event identity: COMP_RECOMMENDATION_READY:<CompensationRecordId>
  */
-function ensureCompensationRecommendationHrEmail_(cycleId) {
+function ensureCompensationRecommendationHrEmail_(cycleId, options) {
   ensureCompensationDataModel_();
+  const opts = options || {};
   const claimed = withLock_(function () {
     const recordLoc = findCompensationRecordByCycle_(cycleId);
     const record = recordLoc.object;
-    if (String(record['Status']) !== V31_COMP.STATUS.AWAITING_OWNER) {
+    if (
+      String(record['Status']) !== V31_COMP.STATUS.AWAITING_OWNER &&
+      opts.allowUnknownResend !== true
+    ) {
       return { skip: true, reason: 'not-awaiting-owner' };
     }
 
@@ -1722,6 +1738,7 @@ function ensureCompensationRecommendationHrEmail_(cycleId) {
       ) {
         return { skip: true, reason: 'in-progress' };
       }
+      // Retain Attempt ID so HR can Mark Confirmed or Confirmed Resend.
       record['HR Recommendation Email Status'] = V31.DELIVERY.UNKNOWN;
       record['HR Recommendation Email Last Error'] =
         'HR recommendation email claim went stale before confirmation.';
@@ -1733,9 +1750,20 @@ function ensureCompensationRecommendationHrEmail_(cycleId) {
       );
     }
     if (status === V31.DELIVERY.UNKNOWN) {
-      throw new Error(
-        'HR compensation recommendation email is Delivery Unknown. HR must reconcile before retry.'
-      );
+      if (opts.allowUnknownResend !== true) {
+        throw new Error(
+          'HR compensation recommendation email is Delivery Unknown. HR must reconcile before retry.'
+        );
+      }
+      if (
+        opts.expectedAttemptId !== undefined &&
+        String(record['HR Recommendation Email Attempt ID'] || '') !==
+          String(opts.expectedAttemptId || '')
+      ) {
+        throw new Error(
+          'HR recommendation email attempt changed after confirmation. Refresh and confirm again.'
+        );
+      }
     }
 
     const settings = getSettings_();
@@ -1867,6 +1895,121 @@ function sendCompensationRecommendationHrEmailBody_(cycle, record, recipient) {
     body: htmlToPlainText_(htmlBody),
     htmlBody: htmlBody,
     name: PR.SETTINGS_DEFAULTS.APP_NAME || 'AITHERAS HR',
+  });
+}
+
+/**
+ * HR-only: mark a Delivery Unknown HR recommendation email as Sent with evidence.
+ * Never sends email.
+ */
+function markCompensationRecommendationHrEmailConfirmed(cycleId, payload) {
+  const actor = assertActiveHrDomain_();
+  const input = payload || {};
+  const evidenceNote = String(input.evidenceNote || '').trim();
+  if (
+    input.confirmed !== true ||
+    String(input.confirmationToken || '') !==
+      V31_COMP.HR_RECOMMENDATION_CONFIRM_TOKEN ||
+    !evidenceNote
+  ) {
+    throw new Error(
+      'Confirmation, exact token, and an evidence note are required.'
+    );
+  }
+  const eventId =
+    V31_COMP.HR_RECOMMENDATION_CONFIRM_EVENT_PREFIX + String(cycleId);
+  const before = findCompensationRecordByCycle_(cycleId).object;
+  if (
+    String(before['HR Recommendation Email Status'] || '') !==
+      V31.DELIVERY.UNKNOWN ||
+    String(input.originalAttemptId || '') !==
+      String(before['HR Recommendation Email Attempt ID'] || '')
+  ) {
+    throw new Error(
+      'HR recommendation email status or attempt changed. Refresh and confirm again.'
+    );
+  }
+  withLock_(function () {
+    const loc = findCompensationRecordByCycle_(cycleId);
+    const rec = loc.object;
+    if (
+      String(rec['HR Recommendation Email Status'] || '') !==
+        V31.DELIVERY.UNKNOWN ||
+      String(rec['HR Recommendation Email Attempt ID'] || '') !==
+        String(input.originalAttemptId || '')
+    ) {
+      throw new Error(
+        'Only the confirmed Delivery Unknown HR recommendation attempt may be marked Sent.'
+      );
+    }
+    auditIdempotentUnlocked_(
+      cycleId,
+      'HR recommendation email manually confirmed',
+      actor,
+      V31.DELIVERY.UNKNOWN,
+      V31.DELIVERY.SENT,
+      evidenceNote,
+      eventId
+    );
+    const confirmedAt = new Date();
+    rec['HR Recommendation Email Status'] = V31.DELIVERY.SENT;
+    rec['HR Recommendation Email Sent At'] =
+      rec['HR Recommendation Email Sent At'] || confirmedAt;
+    rec['HR Recommendation Email Last Error'] = '';
+    rec['Updated At'] = confirmedAt;
+    writeCompensationRecord_(loc.rowNumber, rec);
+    SpreadsheetApp.flush();
+  });
+  return { ok: true, eventId: eventId, status: V31.DELIVERY.SENT };
+}
+
+/**
+ * HR-only: explicitly resend a Delivery Unknown HR recommendation email.
+ * Requires exact confirmation; never automatic.
+ */
+function resendCompensationRecommendationHrEmailUnknown(cycleId, payload) {
+  const actor = assertActiveHrDomain_();
+  const input = payload || {};
+  if (
+    input.confirmed !== true ||
+    String(input.confirmationToken || '') !==
+      V31_COMP.HR_RECOMMENDATION_RESEND_TOKEN
+  ) {
+    throw new Error(
+      'Exact HR recommendation email resend confirmation is required.'
+    );
+  }
+  const before = findCompensationRecordByCycle_(cycleId).object;
+  if (
+    String(before['HR Recommendation Email Status'] || '') !==
+      V31.DELIVERY.UNKNOWN ||
+    String(input.originalAttemptId || '') !==
+      String(before['HR Recommendation Email Attempt ID'] || '')
+  ) {
+    throw new Error(
+      'HR recommendation email status or attempt changed. Refresh and confirm again.'
+    );
+  }
+  const resendAuthorizationEventId =
+    'HR_RECOMMENDATION_EMAIL_RESEND_AUTHORIZED:' +
+    String(cycleId) +
+    ':' +
+    String(input.originalAttemptId || '');
+  auditIdempotent_(
+    cycleId,
+    'HR recommendation email resend authorized',
+    actor,
+    V31.DELIVERY.UNKNOWN,
+    'Resend Authorized',
+    JSON.stringify({
+      schemaVersion: 1,
+      originalAttemptId: String(input.originalAttemptId || ''),
+    }),
+    resendAuthorizationEventId
+  );
+  return ensureCompensationRecommendationHrEmail_(cycleId, {
+    allowUnknownResend: true,
+    expectedAttemptId: String(input.originalAttemptId || ''),
   });
 }
 

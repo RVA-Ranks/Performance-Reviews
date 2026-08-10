@@ -142,6 +142,12 @@ function runV31WorkflowNotificationTests_() {
       testWorkflowRetryRecipientIsolation_
     )
   );
+  results.push(
+    runWorkflowCase_(
+      'HR recommendation email Delivery Unknown uses manual confirm/resend',
+      testHrRecommendationEmailUnknownRecoveryTokens_
+    )
+  );
 
   if (V31_WORKFLOW_TEST.ENABLE_LIVE_PROBES) {
     results.push(
@@ -954,5 +960,23 @@ function testWorkflowNotificationMarkConfirmedShape_() {
     V31_FINALIZATION.WORKFLOW_CONFIRM_TOKEN ===
       'MARK_WORKFLOW_NOTIFICATION_CONFIRMED',
     'Workflow confirmation token must remain exact'
+  );
+}
+
+function testHrRecommendationEmailUnknownRecoveryTokens_() {
+  assertWorkflow_(
+    V31_COMP.HR_RECOMMENDATION_CONFIRM_TOKEN ===
+      'MARK_HR_RECOMMENDATION_EMAIL_CONFIRMED',
+    'HR recommendation Mark Confirmed token must be exact'
+  );
+  assertWorkflow_(
+    V31_COMP.HR_RECOMMENDATION_RESEND_TOKEN ===
+      'RESEND_HR_RECOMMENDATION_EMAIL_UNKNOWN',
+    'HR recommendation Confirmed Resend token must be exact'
+  );
+  assertWorkflow_(
+    typeof markCompensationRecommendationHrEmailConfirmed === 'function' &&
+      typeof resendCompensationRecommendationHrEmailUnknown === 'function',
+    'HR recommendation Delivery Unknown must expose Mark Confirmed and Confirmed Resend'
   );
 }

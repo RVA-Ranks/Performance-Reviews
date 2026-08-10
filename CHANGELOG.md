@@ -1,5 +1,16 @@
 # V3.1 Changelog
 
+## Meeting compensation placement + scoring regressions
+
+- Compensation Decision details now render on the **Meeting** tab immediately
+  below Review Comparison (collapsed, Manager/HR only, hidden from employees).
+  Overview card remains.
+- Derived-average UI copy standardized to **Overall Score**.
+- HR Recommendation Email Delivery Unknown now has Mark Confirmed / Confirmed
+  Resend (never auto-resend), matching manager outcome recovery.
+- Scoring regressions: `[5,4,4,3]→4.00`, `[5,N/A,3]→4.00`, client overall `7`
+  with factor average `3.80` stores `3.80`, Manager−Employee `+1` / `-2`.
+
 ## Live-test polish — loading, scoring, CAF names, roster, HR notify
 
 - Global indeterminate loading overlay (`showAppLoading_` /

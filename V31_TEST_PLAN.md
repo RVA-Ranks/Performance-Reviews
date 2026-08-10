@@ -502,7 +502,10 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] HR Approve Different Amount is percentage-only; derives final rate/salary
 - [ ] HR Decline Adjustment confirms; no CAF / history / rate update; manager rec preserved
 - [ ] Manager receives durable approved / modified / denied outcome email (deduped)
-- [ ] Manager/HR see collapsed Compensation Details; employee does not
+- [ ] Manager/HR see collapsed Compensation Details on Overview; employee does not
+- [ ] Meeting tab: Review Comparison → Compensation Decision (collapsed) → Meeting Outcomes
+- [ ] Meeting compensation details visible to Manager and HR only; employee sees nothing
+- [ ] HR recommendation email Delivery Unknown → Mark Confirmed / Confirmed Resend; never auto-resend
 - [ ] Denied: employee sees no recommendation, denial, acknowledgement, CAF, or compensation wording
 - [ ] Approved final email: 3 PDFs (Manager, Self, CAF)
 - [ ] Denied / no-adjustment final email: 2 PDFs only
@@ -526,7 +529,7 @@ Confirm exactly one workflow email is sent to each role:
 - [ ] Future effective date shows Rate Update as Scheduled for <date> (not bare Pending Effective Date)
 - [ ] Manual roster change before update → Conflict, no overwrite, System Alert
 - [ ] Recheck after correcting predecessor applies approved rate
-- [ ] `runV31CompensationTests_()` and `runV31FinalizationTests_()` pass
+- [ ] `runV31CompensationTests_()`, `runV31FinalizationTests_()`, `runV31IdempotencyTests_()`, and `runV31WorkflowNotificationTests_()` pass
 
 ### Compensation edges (signature provenance / finalization gate)
 

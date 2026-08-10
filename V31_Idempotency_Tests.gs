@@ -184,6 +184,12 @@ function runV31IdempotencyTests_() {
       testWorkflowAndSignatureHeadersPresent_
     )
   );
+  results.push(
+    runIdemCase_(
+      'overall score is derived average; malicious client overall is ignored',
+      testReviewOverallScoreDerivation_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -1219,5 +1225,67 @@ function testWorkflowAndSignatureHeadersPresent_() {
         '15' &&
       V31.SETTINGS_DEFAULTS.PDF_GENERATION_STALE_MINUTES === '30',
     'Delivery C stale settings must retain independent defaults'
+  );
+}
+
+function testReviewOverallScoreDerivation_() {
+  assertIdem_(
+    calculateOverallScore_([
+      { rating: '5' },
+      { rating: '4' },
+      { rating: '4' },
+      { rating: '3' },
+    ]) === '4.00',
+    '[5,4,4,3] must average to 4.00'
+  );
+  assertIdem_(
+    calculateOverallScore_([
+      { rating: '5' },
+      { rating: 'N/A' },
+      { rating: '3' },
+    ]) === '4.00',
+    '[5,N/A,3] must ignore N/A and average to 4.00'
+  );
+  assertIdem_(
+    calculateScoreDifference_(5, 4) === 1 &&
+      formatScoreDifference_(1) === '+1',
+    'Manager 5 / Employee 4 must display +1'
+  );
+  assertIdem_(
+    calculateScoreDifference_(3, 5) === -2 &&
+      formatScoreDifference_(-2) === '-2',
+    'Manager 3 / Employee 5 must display -2'
+  );
+
+  const factorRatings = [5, 4, 4, 3, 3, 4, 4, 4, 3, 4];
+  assertIdem_(
+    PR.FACTORS.length === factorRatings.length,
+    'Malicious overall fixture must cover every review factor'
+  );
+  const cleaned = validateManagerReview_(
+    {
+      ratings: PR.FACTORS.map(function (factor, index) {
+        const rating = factorRatings[index];
+        return {
+          factorId: factor.id,
+          rating: String(rating),
+          comments: [1, 2, 6, 7].indexOf(rating) >= 0 ? 'Evidence' : '',
+        };
+      }),
+      overallRating: '7',
+      overallComments: 'Narrative',
+      areasForImprovement: '',
+      actionSteps: '',
+      supervisorComments: '',
+    },
+    false
+  );
+  assertIdem_(
+    cleaned.overallRating === '3.80',
+    'Client overallRating=7 must be ignored; server stores 3.80'
+  );
+  assertIdem_(
+    cleaned.overallRating === calculateOverallScore_(cleaned.ratings),
+    'Stored overall must equal the derived factor average'
   );
 }

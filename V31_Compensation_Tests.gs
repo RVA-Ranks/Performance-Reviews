@@ -580,6 +580,24 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('HR recommendation email recovery tokens are exact', function () {
+    assert_(
+      V31_COMP.HR_RECOMMENDATION_CONFIRM_TOKEN ===
+        'MARK_HR_RECOMMENDATION_EMAIL_CONFIRMED',
+      'HR confirm token must be exact'
+    );
+    assert_(
+      V31_COMP.HR_RECOMMENDATION_RESEND_TOKEN ===
+        'RESEND_HR_RECOMMENDATION_EMAIL_UNKNOWN',
+      'HR resend token must be exact'
+    );
+    assert_(
+      V31_COMP.HR_RECOMMENDATION_CONFIRM_EVENT_PREFIX + 'C-1' ===
+        'HR_RECOMMENDATION_EMAIL_CONFIRMED:C-1',
+      'HR confirm event ID prefix must be deterministic'
+    );
+  });
+
   check('Finalization disposition: Pending → block (fail closed)', function () {
     assert_(
       compensationFinalizationDisposition_(
