@@ -2852,20 +2852,114 @@ async function runHealthRecoveryAction(index) {
   if (action === 'retryFinalization' || action === 'retryDistribution' || action === 'retryPdf') {
     openModal({
       title: action === 'retryDistribution' ? 'Retry Distribution?' : 'Retry Finalization?',
-      body: '<p>This resumes only safe unfinished finalization steps for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>.</p><p>Existing PDFs are recovered by deterministic name. Delivery Unknown final packets are never automatically resent.</p>',
+      body: '<p>This resumes only safe unfinished finalization steps for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>.</p><p>Existing PDFs are recovered by deterministic name/provenance. Clean generation failures are Failed and retryable. Delivery Unknown final packets are never automatically resent.</p>',
       confirmLabel: action === 'retryDistribution' ? 'Retry Distribution' : 'Retry Finalization',
       tone: 'primary',
       onConfirm: async function() {
         closeModal();
         try {
-          const result = await server('retryReviewFinalization', item.cycleId);
-          showToast(result.ok ? 'success' : 'warning', 'Finalization', formatOperationalClientMessage(result));
-          await refreshSystemHealth(true);
+          const result = await withAppLoading_({
+            title: 'Retrying Finalization',
+            message: 'Resuming safe unfinished finalization steps…'
+          }, function() {
+            return server('retryReviewFinalization', item.cycleId);
+          });
+          showToast(
+            result && result.ok ? 'success' : 'warning',
+            result && result.partial ? 'Finalization partial' : 'Finalization',
+            formatOperationalClientMessage(result)
+          );
         } catch (error) {
           showToast('error', 'Finalization', friendlyErrorMessage(error));
+        } finally {
+          try {
+            await refreshSystemHealth(true);
+          } catch (refreshError) {
+            showToast('error', 'System Health', friendlyErrorMessage(refreshError));
+          }
         }
       }
     });
+    return;
+  }
+  if (action === 'recoverCaf') {
+    openModal({
+      title: 'Recover CAF PDF?',
+      body: '<p>Reconcile or regenerate the compensation CAF for cycle <strong>' + escapeHtml(item.cycleId) + '</strong>. Ambiguous Delivery Unknown candidates are never auto-duplicated.</p>',
+      confirmLabel: 'Recover CAF',
+      tone: 'primary',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server('recoverCompensationCafPdf', item.cycleId);
+          showToast(
+            'success',
+            'Compensation CAF',
+            result && result.reconciled
+              ? 'CAF PDF reconciled from Drive.'
+              : formatOperationalClientMessage(result, 'CAF PDF recovery completed.')
+          );
+        } catch (error) {
+          showToast('error', 'Compensation CAF', friendlyErrorMessage(error));
+        } finally {
+          try {
+            await refreshSystemHealth(true);
+            await refreshCompensationQueue();
+          } catch (refreshError) {
+            showToast('error', 'System Health', friendlyErrorMessage(refreshError));
+          }
+        }
+      }
+    });
+    return;
+  }
+  if (action === 'recheckRateUpdate') {
+    openModal({
+      title: 'Recheck Rate Update?',
+      body: '<p>Retries Column H synchronization for cycle <strong>' + escapeHtml(item.cycleId) + '</strong> only when the live rate still matches the expected predecessor. Conflicts are never overwritten.</p>',
+      confirmLabel: 'Recheck Rate Update',
+      tone: 'warning',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server('recoverCompensationRateUpdate', item.cycleId);
+          showToast(
+            result && result.skipped ? 'warning' : 'success',
+            'Compensation rate update',
+            result && result.skipped
+              ? 'Rate update was not in a recoverable state (' +
+                String(result.status || '') +
+                ').'
+              : formatOperationalClientMessage(result, 'Compensation rate update reprocessed.')
+          );
+        } catch (error) {
+          showToast('error', 'Compensation rate update', friendlyErrorMessage(error));
+        } finally {
+          try {
+            await refreshSystemHealth(true);
+            await refreshCompensationQueue();
+          } catch (refreshError) {
+            showToast('error', 'System Health', friendlyErrorMessage(refreshError));
+          }
+        }
+      }
+    });
+    return;
+  }
+  if (action === 'openCompensationQueue' || action === 'reconcileCaf') {
+    navigate('admin');
+    ensureAdminHeavyDataLoaded_();
+    setTimeout(function() {
+      const panel = document.getElementById('compensationQueuePanel');
+      if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 250);
+    showToast(
+      'info',
+      'Compensation Queue',
+      action === 'reconcileCaf'
+        ? 'Reconcile CAF candidates for ' + item.cycleId + ' in the Compensation Queue.'
+        : 'Open the Compensation Queue for cycle ' + item.cycleId + '.'
+    );
     return;
   }
   if (action === 'markDistributionConfirmed') {
@@ -2881,6 +2975,20 @@ async function runHealthRecoveryAction(index) {
 }
 
 function formatOperationalClientMessage(result, fallback) {
+  if (result && result.blocker) {
+    const parts = [];
+    if (result.message) parts.push(String(result.message));
+    parts.push(
+      'Blocker: ' +
+        result.blocker.component +
+        (result.blocker.status ? ' · ' + result.blocker.status : '')
+    );
+    if (result.blocker.message) parts.push(String(result.blocker.message));
+    if (result.blocker.recommendedAction) {
+      parts.push('Next: ' + String(result.blocker.recommendedAction));
+    }
+    return parts.join(' — ');
+  }
   if (result && result.message) return String(result.message);
   if (result && result.partial) {
     return 'Completed with warnings. Review System Health for remaining work.';
@@ -3542,17 +3650,40 @@ async function rebuildCalendarEvent() {
 async function retryFinalization() {
   openModal({
     title: 'Retry finalization?',
-    body: '<p>This resumes only safe unfinished steps. Existing PDFs are recovered by deterministic name. Delivery Unknown final packets are never automatically resent.</p>',
+    body: '<p>This resumes only safe unfinished steps. Existing PDFs are recovered by deterministic name/provenance. Clean generation failures are Failed and retryable. Delivery Unknown packets/PDFs are never automatically resent or duplicated.</p>',
     confirmLabel: 'Retry Finalization',
     tone: 'primary',
     onConfirm: async function() {
       closeModal();
       try {
-        const result = await server('retryReviewFinalization', currentCycle.cycleId);
-        showToast(result.ok ? 'success' : 'error', 'Finalization', result.message);
-        await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+        const result = await withAppLoading_({
+          title: 'Retrying Finalization',
+          message: 'Resuming safe unfinished finalization steps…'
+        }, function() {
+          return server('retryReviewFinalization', currentCycle.cycleId);
+        });
+        if (result && result.ok) {
+          showToast('success', 'Finalization', result.message);
+        } else {
+          const blocker = result && result.blocker
+            ? (result.blocker.component +
+              (result.blocker.status ? ' · ' + result.blocker.status : ''))
+            : '';
+          showToast(
+            'warning',
+            'Finalization partial',
+            (result && result.message ? result.message : 'Blocked') +
+              (blocker ? ' — Blocker: ' + blocker : '')
+          );
+        }
       } catch (error) {
         showToast('error', 'Could not retry finalization', errorMessage(error));
+      } finally {
+        try {
+          await loadCycle(currentCycle.cycleId, currentCycleTab || 'overview');
+        } catch (refreshError) {
+          showToast('error', 'Could not refresh cycle', errorMessage(refreshError));
+        }
       }
     }
   });

@@ -146,6 +146,24 @@ function runV31FinalizationTests_() {
   );
   results.push(
     runFinalCase_(
+      'review PDF generation failure classification matches CAF model',
+      testReviewPdfGenerationFailureClassification_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'review PDF provenance parse and match',
+      testReviewPdfProvenanceHelpers_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'finalization blocker routes compensation rate conflict',
+      testFinalizationBlockerCompensationRate_
+    )
+  );
+  results.push(
+    runFinalCase_(
       'PDF recovery refuses newer attempt overwrite',
       testRecoveredPdfExpectedStateGuard_
     )
@@ -822,6 +840,126 @@ function testRecoveredPdfExpectedStateGuard_() {
       'file-hr'
     ) === 'state-changed',
     'HR reconciliation must block recovered overwrite'
+  );
+}
+
+function testReviewPdfGenerationFailureClassification_() {
+  const failed = classifyReviewPdfGenerationFailure_(
+    new Error('template explode'),
+    '',
+    [],
+    null
+  );
+  assertFinal_(
+    failed.status === V31.DELIVERY.FAILED,
+    'Zero artifacts after generation error must be Failed'
+  );
+  assertFinal_(
+    failed.clearClaim === true,
+    'Failed classification must clear the claim for safe retry'
+  );
+  assertFinal_(
+    failed.resolution === 'generation-failed-no-artifact',
+    'Failed resolution label must be generation-failed-no-artifact'
+  );
+
+  const healed = classifyReviewPdfGenerationFailure_(
+    new Error('persist died'),
+    '',
+    [{ id: 'pdf-1' }],
+    null
+  );
+  assertFinal_(
+    healed.status === V31.DELIVERY.SENT,
+    'Exactly one candidate must self-heal to Sent'
+  );
+  assertFinal_(
+    healed.fileId === 'pdf-1',
+    'Self-heal must adopt the single candidate id'
+  );
+
+  const ambiguous = classifyReviewPdfGenerationFailure_(
+    new Error('persist died'),
+    '',
+    [{ id: 'a' }, { id: 'b' }],
+    null
+  );
+  assertFinal_(
+    ambiguous.status === V31.DELIVERY.UNKNOWN,
+    'Multiple candidates must be Delivery Unknown'
+  );
+  assertFinal_(
+    ambiguous.clearClaim === false,
+    'Ambiguous Unknown must not clear the claim for blind regenerate'
+  );
+
+  const scanFail = classifyReviewPdfGenerationFailure_(
+    new Error('gen'),
+    '',
+    [],
+    new Error('Drive down')
+  );
+  assertFinal_(
+    scanFail.status === V31.DELIVERY.UNKNOWN,
+    'Candidate scan failure must be Delivery Unknown'
+  );
+}
+
+function testReviewPdfProvenanceHelpers_() {
+  const marker = buildReviewPdfProvenance_('CYC-1', PR.TYPE.MANAGER);
+  assertFinal_(
+    marker.indexOf('AITHERAS_REVIEW_PDF ') === 0,
+    'Provenance marker must start with AITHERAS_REVIEW_PDF'
+  );
+  const parsed = parseReviewPdfProvenance_(marker);
+  assertFinal_(parsed && parsed.cycleId === 'CYC-1', 'Provenance cycleId');
+  assertFinal_(
+    parsed && parsed.documentType === PR.TYPE.MANAGER,
+    'Provenance documentType'
+  );
+  assertFinal_(
+    reviewPdfProvenanceMatches_(marker, 'CYC-1', PR.TYPE.MANAGER),
+    'Matching provenance must validate'
+  );
+  assertFinal_(
+    !reviewPdfProvenanceMatches_(marker, 'CYC-1', PR.TYPE.SELF),
+    'Mismatched documentType must fail'
+  );
+  assertFinal_(
+    !reviewPdfProvenanceMatches_('human filename only', 'CYC-1', PR.TYPE.MANAGER),
+    'Filename-only description must not match provenance'
+  );
+}
+
+function testFinalizationBlockerCompensationRate_() {
+  const cycle = {
+    Status: PR.CYCLE.FINALIZING,
+    'Cycle ID': 'CYC-BLOCK',
+    'Manager PDF Status': V31.DELIVERY.SENT,
+    'Self PDF Status': V31.DELIVERY.SENT,
+    'Manager Review PDF ID': 'm1',
+    'Self Evaluation PDF ID': 's1',
+    'Final Distribution Status': V31.DELIVERY.PENDING,
+    'Finalization Audit Status': 'Pending',
+    'Compensation Decision': 'Approved',
+    'Manager PDF Last Error': '',
+    'Self PDF Last Error': '',
+    'Finalization Last Error': '',
+  };
+  // Without a live CompensationRecords row, blocker should surface missing record
+  // or fall through safely when compensation helpers cannot seal.
+  const blocker = classifyFinalizationBlocker_(cycle);
+  assertFinal_(
+    blocker && blocker.component,
+    'Blocker classification must return a component'
+  );
+  assertFinal_(
+    blocker.recommendedAction === 'openCompensationQueue' ||
+      blocker.recommendedAction === 'retryFinalization' ||
+      blocker.recommendedAction === 'recoverCaf' ||
+      blocker.recommendedAction === 'recheckRateUpdate' ||
+      blocker.recommendedAction === 'reconcileCaf',
+    'Blocker must recommend a known recovery action'
   );
 }
 

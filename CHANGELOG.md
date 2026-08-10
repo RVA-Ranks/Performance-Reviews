@@ -1,5 +1,23 @@
 # V3.1 Changelog
 
+## Finalization recovery closure
+
+- Manager/Self PDF generation failures now use the CAF classification model:
+  0 artifacts → `Failed` (safe ordinary retry); 1 → adopt/`Sent`; >1 or scan
+  failure → `Delivery Unknown` (HR reconciliation).
+- Fresh `Sending` claims run an immediate deterministic/provenance candidate
+  scan before telling HR to wait for the stale window.
+- Review PDFs store immutable Drive description provenance
+  (`AITHERAS_REVIEW_PDF`); recovery accepts filename **or** provenance.
+- `retryReviewFinalization` returns structured `{ ok, partial, blocker,
+  components }` on later-stage failure instead of an opaque throw; retries are
+  audited either way.
+- Cycle + System Health Retry Finalization always refresh authoritative state
+  in `finally`.
+- System Health Recovery Center surfaces CAF / history / rate-update blockers
+  with Recheck Rate Update / Recover CAF / Compensation Queue actions — not
+  only generic Retry Finalization.
+
 ## Performance diagnostics closure
 
 - Sheet/Drive PERF events now record **actual** `getValues` / `getFolderById`

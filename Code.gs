@@ -3087,22 +3087,63 @@ function retryReviewFinalization(cycleId, options) {
     );
   }
 
-  const result = finalizeReviewCycle_(cycleId, options || {});
-
-  audit_(
-    cycleId,
-    'Review finalization retried',
-    email,
-    PR.CYCLE.FINALIZING,
-    result.alreadyComplete
-      ? PR.CYCLE.COMPLETE
-      : result.ok
+  try {
+    const result = finalizeReviewCycle_(cycleId, options || {});
+    audit_(
+      cycleId,
+      'Review finalization retried',
+      email,
+      PR.CYCLE.FINALIZING,
+      result.alreadyComplete
         ? PR.CYCLE.COMPLETE
-        : PR.CYCLE.FINALIZING,
-    JSON.stringify(result.components || {})
-  );
-
-  return result;
+        : result.ok
+          ? PR.CYCLE.COMPLETE
+          : PR.CYCLE.FINALIZING,
+      JSON.stringify(result.components || {})
+    );
+    return result;
+  } catch (error) {
+    let cycle = null;
+    try {
+      cycle = findCycle_(cycleId).object;
+    } catch (lookupError) {
+      throw error;
+    }
+    const components = getFinalizationSummary_(cycle);
+    const blocker = classifyFinalizationBlocker_(cycle);
+    const result = {
+      ok: false,
+      partial: true,
+      cycleId: String(cycleId),
+      message: String(error.message || error),
+      blocker: blocker,
+      components: components,
+      recommendedAction: blocker && blocker.recommendedAction
+        ? blocker.recommendedAction
+        : 'retryFinalization',
+    };
+    try {
+      audit_(
+        cycleId,
+        'Review finalization retry blocked',
+        email,
+        PR.CYCLE.FINALIZING,
+        PR.CYCLE.FINALIZING,
+        JSON.stringify({
+          schemaVersion: 1,
+          blocker: blocker,
+          components: components,
+          error: result.message,
+        })
+      );
+    } catch (auditError) {
+      Logger.log(
+        'Finalization retry audit failed: ' +
+          String(auditError.message || auditError)
+      );
+    }
+    return result;
+  }
 }
 
 function ensureFinalPdfComponentLegacy_(
@@ -5150,6 +5191,7 @@ function generateReviewPdf_(cycleId, type) {
       .getAs(MimeType.PDF)
       .setName(buildReviewPdfFileName_(cycleId, type))
   );
+  pdf.setDescription(buildReviewPdfProvenance_(cycleId, type));
 
   copy.setTrashed(true);
 

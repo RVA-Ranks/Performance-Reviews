@@ -555,7 +555,7 @@ function collectFinalizationRecoveryItems_(cycle, options) {
   const cycleId = String(cycle['Cycle ID'] || '');
   const employeeName = String(cycle['Employee Name'] || cycleId);
   const finalization = getFinalizationSummary_(cycle);
-  const items = [];
+  let items = [];
 
   [
     {
@@ -599,7 +599,9 @@ function collectFinalizationRecoveryItems_(cycle, options) {
         lastError: String(cycle[entry.errorField] || ''),
         recommendation: entry.unknown
           ? 'Reconcile the deterministic PDF candidate. Do not generate a duplicate while ambiguity remains.'
-          : 'Retry finalization to resume unfinished PDF generation safely.',
+          : entry.status === V31.DELIVERY.FAILED
+            ? 'Retry finalization. Clean PDF generation failures are Failed and safe to regenerate.'
+            : 'Retry finalization to resume unfinished PDF generation safely.',
         details: includeDetails
           ? {
               cycleStatus: status,
@@ -609,6 +611,12 @@ function collectFinalizationRecoveryItems_(cycle, options) {
       })
     );
   });
+
+  items = items.concat(
+    collectCompensationFinalizationRecoveryItems_(cycle, {
+      includeDetails: includeDetails,
+    })
+  );
 
   if (needsDistributionAttention_(status, finalization)) {
     items.push(
@@ -690,6 +698,165 @@ function collectFinalizationRecoveryItems_(cycle, options) {
               expectedEventId:
                 expectedFinalizationAuditEventId_(cycleId),
               missingEvent: missingEvent,
+            }
+          : null,
+      })
+    );
+  }
+
+  return items;
+}
+
+/**
+ * Compensation seal blockers that keep Finalizing stuck even when review PDFs
+ * are Sent. Primary action routes to the compensation recovery path — not
+ * generic Retry Finalization when that cannot change the blocker.
+ */
+function collectCompensationFinalizationRecoveryItems_(cycle, options) {
+  const includeDetails = !!(options && options.includeDetails);
+  const status = String(cycle.Status || '');
+  if (status !== PR.CYCLE.FINALIZING) {
+    return [];
+  }
+  let disposition;
+  try {
+    disposition = compensationFinalizationDisposition_(
+      cycle['Compensation Decision'],
+      true
+    );
+  } catch (error) {
+    return [];
+  }
+  if (disposition !== 'require') {
+    return [];
+  }
+  if (isCompensationSealedForFinalization_(cycle)) {
+    return [];
+  }
+
+  const cycleId = String(cycle['Cycle ID'] || '');
+  const employeeName = String(cycle['Employee Name'] || cycleId);
+  const items = [];
+  let record = null;
+  try {
+    const loc = findCompensationRecordByCycleOptional_(cycleId);
+    record = loc && loc.object ? loc.object : null;
+  } catch (error) {
+    record = null;
+  }
+
+  if (!record) {
+    items.push(
+      createRecoveryItem_({
+        id: 'compensation:missing:' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'compensation',
+        component: 'Compensation Record',
+        status: 'Missing',
+        level: V31_SYSTEM_HEALTH.LEVEL.BLOCKING,
+        action: 'openCompensationQueue',
+        actionLabel: 'Open Compensation Queue',
+        lastError: 'Approved adjustment requires a CompensationRecords row.',
+        recommendation:
+          'Open the Compensation Queue and resolve the missing record before retrying finalization.',
+        details: includeDetails ? { disposition: disposition } : null,
+      })
+    );
+    return items;
+  }
+
+  const cafStatus = String(record['CAF PDF Status'] || '');
+  if (
+    !String(record['CAF Final PDF ID'] || '') ||
+    cafStatus === V31_COMP.PDF.FAILED ||
+    cafStatus === V31_COMP.PDF.UNKNOWN ||
+    cafStatus === V31_COMP.PDF.PENDING ||
+    cafStatus === V31_COMP.PDF.GENERATING
+  ) {
+    const unknown = cafStatus === V31_COMP.PDF.UNKNOWN;
+    items.push(
+      createRecoveryItem_({
+        id: 'compensation:caf:' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'compensation',
+        component: 'Compensation CAF',
+        status: cafStatus || 'Pending',
+        level: V31_SYSTEM_HEALTH.LEVEL.BLOCKING,
+        action: unknown ? 'openCompensationQueue' : 'recoverCaf',
+        actionLabel: unknown ? 'Reconcile CAF' : 'Recover CAF',
+        lastError: String(record['CAF PDF Last Error'] || ''),
+        recommendation: unknown
+          ? 'Reconcile CAF candidates in the Compensation Queue. Do not regenerate while ambiguous.'
+          : 'Use Recover CAF / Recheck from the Compensation Queue, then resume finalization.',
+        details: includeDetails
+          ? {
+              cafPdfId: String(record['CAF Final PDF ID'] || ''),
+              cafStatus: cafStatus,
+            }
+          : null,
+      })
+    );
+  }
+
+  const historyStatus = String(record['Compensation History Status'] || '');
+  if (historyStatus && historyStatus !== V31_COMP.HISTORY.COMPLETE) {
+    items.push(
+      createRecoveryItem_({
+        id: 'compensation:history:' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'compensation',
+        component: 'Compensation History',
+        status: historyStatus,
+        level: V31_SYSTEM_HEALTH.LEVEL.ATTENTION,
+        action: 'retryFinalization',
+        actionLabel: 'Retry Finalization',
+        lastError: String(record['Compensation History Last Error'] || ''),
+        recommendation:
+          'Retry finalization after CAF seal so CompensationHistory can be written once.',
+        details: includeDetails ? { historyStatus: historyStatus } : null,
+      })
+    );
+  }
+
+  const rateStatus = String(record['Rate Update Status'] || '');
+  if (
+    rateStatus === V31_COMP.RATE_UPDATE.CONFLICT ||
+    rateStatus === V31_COMP.RATE_UPDATE.FAILED ||
+    rateStatus === V31_COMP.RATE_UPDATE.UNKNOWN ||
+    rateStatus === V31_COMP.RATE_UPDATE.UPDATING
+  ) {
+    const rateUpdating =
+      rateStatus === V31_COMP.RATE_UPDATE.UPDATING;
+    items.push(
+      createRecoveryItem_({
+        id: 'compensation:rate:' + cycleId,
+        cycleId: cycleId,
+        employeeName: employeeName,
+        category: 'compensation',
+        component: 'Compensation Rate Update',
+        status: rateStatus,
+        level: V31_SYSTEM_HEALTH.LEVEL.BLOCKING,
+        action: rateUpdating ? 'openCompensationQueue' : 'recheckRateUpdate',
+        actionLabel: rateUpdating
+          ? 'Open Compensation Queue'
+          : 'Recheck Rate Update',
+        attemptId: String(record['Rate Update Attempt ID'] || ''),
+        startedAt: String(record['Rate Update Started At'] || ''),
+        lastError: String(record['Rate Update Last Error'] || ''),
+        recommendation:
+          rateStatus === V31_COMP.RATE_UPDATE.CONFLICT
+            ? 'Column H conflict — correct the live rate if needed, then Recheck Rate Update. Generic Retry Finalization cannot overwrite a conflict.'
+            : rateUpdating
+              ? 'A rate update claim is in progress. Open the Compensation Queue; use Recheck only after the claim is Failed, Conflict, or Delivery Unknown.'
+              : 'Recheck / recover the rate update from the Compensation Queue before expecting Finalizing to complete.',
+        details: includeDetails
+          ? {
+              originalPayRate: record['Original Pay Rate'],
+              finalApprovedPayRate: record['Final Approved Pay Rate'],
+              effectiveDate: record['Compensation Effective Date'],
             }
           : null,
       })

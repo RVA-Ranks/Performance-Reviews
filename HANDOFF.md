@@ -5,6 +5,18 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Active work — Finalization recovery closure
+
+Branch: `fix/finalization-recovery-closure` (from `perf/application-responsiveness`)  
+Backup: `backup/pre-finalization-recovery-closure`
+
+Closes Finalizing “purgatory”: Manager/Self PDF Failed vs Delivery Unknown
+classification (CAF model), structured partial `retryReviewFinalization`
+results, UI `finally` refresh, System Health compensation blockers, review PDF
+provenance. **Do not** resume live-signature / Meet polish until Coach clears
+this gate. Preserve live failed-cycle Sheet/Drive evidence before hand-editing
+statuses. Performance web-app manager evidence remains a separate open item.
+
 ## Previous Review Context (post-v3.1 — separate branch)
 
 Branch: `feat/previous-review-context`
