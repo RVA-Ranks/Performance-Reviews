@@ -1024,7 +1024,11 @@ function releaseReviewSignatures(cycleId) {
   // Signature request emails are accelerated off the UI critical path via
   // accelerateSignatureReleaseNotifications (durable outbox). Release itself
   // is already committed above.
-  const live = buildLiveReviewStatePayload_(cycle, email);
+  const live = buildLiveReviewStatePayload_(
+    cycle,
+    email,
+    assertLiveReviewAccess_(cycle, email)
+  );
   live.message =
     'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.';
   return live;

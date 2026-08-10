@@ -3525,7 +3525,9 @@ function openCycle(cycle, action) {
   preferredCycleAction = action || (cycle.primaryAction && cycle.primaryAction.key) || 'overview';
   currentCycleTab = actionToTab(preferredCycleAction, cycle);
   liveReleaseBannerVisible = false;
-  restoreDocumentTitle_();
+  if (shouldRestoreLiveReviewDocumentTitle_(document.hidden)) {
+    restoreDocumentTitle_();
+  }
   renderCycleWorkspace();
   navigate('cycle');
   setTopbar(cycle.employeeName + ' — ' + cycle.reviewType, humanStatus(cycle.status));
@@ -5220,6 +5222,18 @@ function restoreDocumentTitle_() {
   }
 }
 
+/**
+ * Client mirror of shouldRestoreLiveReviewDocumentTitle_ (Apps Script helper).
+ * Keep Signature Ready visible while the tab remains hidden.
+ */
+function shouldRestoreLiveReviewDocumentTitle_(isDocumentHidden) {
+  return isDocumentHidden !== true;
+}
+
+function shouldWarnSignatureReleaseEmailAcceleration_(result) {
+  return !(result && result.ok === true);
+}
+
 function shouldPollLiveReview_() {
   if (!currentCycle || currentView !== 'cycle') return false;
   if (currentCycle.historicalPreviousReview) return false;
@@ -5246,6 +5260,9 @@ function startLiveReviewPolling_() {
 }
 
 function handleLiveReviewVisibilityChange_() {
+  if (!document.hidden) {
+    restoreDocumentTitle_();
+  }
   if (!shouldPollLiveReview_()) return;
   if (liveReviewPollTimer) {
     clearTimeout(liveReviewPollTimer);
@@ -5494,14 +5511,24 @@ async function releaseSignatures() {
     showToast('success', 'Review packet released', result.message || 'Signatures are ready.');
     applyReleaseLiveState_(result);
     // Durable emails — fire and forget; do not block Signature UI.
-    server('accelerateSignatureReleaseNotifications', currentCycle.cycleId).catch(function(error) {
-      showToast(
-        'warning',
-        'Signature emails',
-        'Release succeeded. Signature emails will retry via the durable outbox. ' +
-          errorMessage(error)
-      );
-    });
+    server('accelerateSignatureReleaseNotifications', currentCycle.cycleId)
+      .then(function(emailResult) {
+        if (shouldWarnSignatureReleaseEmailAcceleration_(emailResult)) {
+          showToast(
+            'warning',
+            'Signature emails',
+            'Signatures are available now. One or more email notices are still pending and will retry through the durable notification system.'
+          );
+        }
+      })
+      .catch(function(error) {
+        showToast(
+          'warning',
+          'Signature emails',
+          'Signatures are available now. One or more email notices are still pending and will retry through the durable notification system. ' +
+            errorMessage(error)
+        );
+      });
   } catch (error) {
     showToast('error', 'Could not release review packet', errorMessage(error));
   }

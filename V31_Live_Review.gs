@@ -6,20 +6,12 @@
 /**
  * Compact live-state DTO shared by release + polling.
  * Must never include compensation, review answers, PDFs, or recovery data.
+ * viewerRole should come from assertLiveReviewAccess_ (includes any active HR).
  */
-function buildLiveReviewStatePayload_(cycle, email) {
+function buildLiveReviewStatePayload_(cycle, email, viewerRole) {
   const state = getCombinedSignatureState_(cycle);
   const status = String(cycle['Status'] || '');
   const tasks = getSignatureTasks_(cycle, email);
-  const normalized = normalizeEmail_(email);
-  let viewerRole = '';
-  if (normalizeEmail_(cycle['Manager Email']) === normalized) {
-    viewerRole = PR.ROLE.MANAGER;
-  } else if (normalizeEmail_(cycle['Employee Email']) === normalized) {
-    viewerRole = PR.ROLE.EMPLOYEE;
-  } else if (normalizeEmail_(cycle['HR Email']) === normalized) {
-    viewerRole = PR.ROLE.HR;
-  }
 
   return {
     ok: true,
@@ -36,7 +28,7 @@ function buildLiveReviewStatePayload_(cycle, email) {
     },
     signatureTaskReady: status === PR.CYCLE.SIGNATURES && tasks.length > 0,
     signatureTasks: tasks,
-    viewerRole: viewerRole,
+    viewerRole: String(viewerRole || ''),
   };
 }
 
@@ -74,8 +66,8 @@ function getLiveReviewState(cycleId) {
   }
 
   const cycle = findCycle_(id).object;
-  assertLiveReviewAccess_(cycle, email);
-  return buildLiveReviewStatePayload_(cycle, email);
+  const viewerRole = assertLiveReviewAccess_(cycle, email);
+  return buildLiveReviewStatePayload_(cycle, email, viewerRole);
 }
 
 /**
@@ -139,6 +131,17 @@ function accelerateSignatureReleaseNotifications(cycleId) {
     message:
       'Signature notification acceleration finished. Release state is unchanged.',
   };
+}
+
+/**
+ * Pure policy helpers mirrored by Index.html client behavior.
+ */
+function shouldRestoreLiveReviewDocumentTitle_(isDocumentHidden) {
+  return isDocumentHidden !== true;
+}
+
+function shouldWarnSignatureReleaseEmailAcceleration_(result) {
+  return !(result && result.ok === true);
 }
 
 /**

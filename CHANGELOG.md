@@ -6,11 +6,15 @@
   state immediately; Manager Signature opens without `refreshApplication`.
 - Signature request emails accelerate via
   `accelerateSignatureReleaseNotifications` (durable outbox) off the UI path.
+  Resolved `ok:false` results show a nonblocking toast; release is never rolled
+  back.
 - `getLiveReviewState` provides a tiny authorized poll DTO (no compensation,
-  answers, PDFs, or Drive).
+  answers, PDFs, or Drive). `viewerRole` comes from the authorization helper
+  (any active HR, not only cycle `HR Email`).
 - Client polls Meeting / Awaiting Signatures with non-overlapping `setTimeout`,
   backs off when hidden, and auto-opens Employee Signatures on release (with
-  dirty-draft protection).
+  dirty-draft protection). Hidden-tab `Signature Ready` title persists until
+  the user returns.
 - Sidebar Meeting Tools → Google Meet (`https://meet.google.com/`, new tab).
   No Calendar architecture changes.
 

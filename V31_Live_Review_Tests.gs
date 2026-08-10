@@ -28,11 +28,13 @@ function runV31LiveReviewTests_() {
       };
       const payload = buildLiveReviewStatePayload_(
         cycle,
-        'mgr@example.com'
+        'mgr@example.com',
+        PR.ROLE.MANAGER
       );
       assertLive_(payload.ok === true, 'ok');
       assertLive_(payload.cycleId === 'LIVE-1', 'cycleId');
       assertLive_(payload.status === PR.CYCLE.SIGNATURES, 'status');
+      assertLive_(payload.viewerRole === PR.ROLE.MANAGER, 'viewerRole');
       assertLive_(!!payload.signatureState, 'signatureState');
       assertLive_(
         payload.signatureState.managerSigned === false,
@@ -45,6 +47,37 @@ function runV31LiveReviewTests_() {
       assertLive_(
         liveReviewStatePayloadIsSafe_(payload),
         'payload must only use allow-listed keys'
+      );
+    })
+  );
+
+  results.push(
+    liveCase_('viewerRole uses authorized role not only cycle HR Email', function () {
+      const cycle = {
+        'Cycle ID': 'LIVE-HR',
+        Status: PR.CYCLE.MEETING,
+        'Manager Email': 'mgr@example.com',
+        'Employee Email': 'emp@example.com',
+        'HR Email': 'assigned-hr@example.com',
+        'Updated At': new Date(),
+        'Manager Signature File ID': '',
+        'Employee Signature File ID': '',
+        'HR Signature File ID': '',
+        'MGR Manager Signature ID': '',
+        'SELF Manager Signature ID': '',
+        'MGR Employee Signature ID': '',
+        'SELF Employee Signature ID': '',
+        'MGR HR Signature ID': '',
+        'SELF HR Signature ID': '',
+      };
+      const payload = buildLiveReviewStatePayload_(
+        cycle,
+        'other-hr@example.com',
+        PR.ROLE.HR
+      );
+      assertLive_(
+        payload.viewerRole === PR.ROLE.HR,
+        'authorized HR viewerRole must be HR even when email differs from cycle HR Email'
       );
     })
   );
@@ -108,6 +141,37 @@ function runV31LiveReviewTests_() {
           compensation: { rate: 1 },
         }),
         'compensation key must fail safety check'
+      );
+    })
+  );
+
+  results.push(
+    liveCase_('Signature Ready title restores only when tab is visible', function () {
+      assertLive_(
+        shouldRestoreLiveReviewDocumentTitle_(true) === false,
+        'hidden tab must keep Signature Ready title'
+      );
+      assertLive_(
+        shouldRestoreLiveReviewDocumentTitle_(false) === true,
+        'visible tab may restore normal title'
+      );
+    })
+  );
+
+  results.push(
+    liveCase_('email acceleration ok:false must warn without rolling back', function () {
+      assertLive_(
+        shouldWarnSignatureReleaseEmailAcceleration_({ ok: false, results: [] }) ===
+          true,
+        'partial failure must warn'
+      );
+      assertLive_(
+        shouldWarnSignatureReleaseEmailAcceleration_({ ok: true }) === false,
+        'full success must not warn'
+      );
+      assertLive_(
+        shouldWarnSignatureReleaseEmailAcceleration_(null) === true,
+        'missing result must warn'
       );
     })
   );
