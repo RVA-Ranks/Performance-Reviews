@@ -1,8 +1,129 @@
 /**
- * Interactive performance acceptance checks (pure / lightweight).
+ * Interactive performance acceptance checks + editor-run live profile.
  *
- * Run: runV31PerformanceTests_()
+ * From the Apps Script editor Run menu, select:
+ *   runPerformanceProfile
+ *
+ * That public entry point:
+ * 1) runs pure acceptance checks
+ * 2) times live bootstrap (Home) twice for the signed-in user
+ * 3) times Open Review for the first visible cycle when available
+ * 4) prints a readable report to Logs / Executions
+ *
+ * Private suite (cursor-in-function Run): runV31PerformanceTests_()
  */
+
+/**
+ * Public — appears in the Apps Script Run dropdown.
+ * Safe for Preview. Does not send mail, create Calendar events, or mutate workflow.
+ */
+function runPerformanceProfile() {
+  const previousDiagnostics = ENABLE_PERFORMANCE_DIAGNOSTICS;
+  const report = {
+    ok: true,
+    ranAt: new Date().toISOString(),
+    actor: '',
+    acceptance: null,
+    bootstrapColdMs: null,
+    bootstrapWarmMs: null,
+    openReviewMs: null,
+    cycleCount: null,
+    payloadBytes: null,
+    sheetReadsCold: null,
+    sheetReadsWarm: null,
+    driveCallsCold: null,
+    events: [],
+    verdicts: [],
+    errors: [],
+  };
+
+  try {
+    report.actor = String(Session.getEffectiveUser().getEmail() || '');
+  } catch (error) {
+    report.actor = '(unknown)';
+  }
+
+  try {
+    report.acceptance = runV31PerformanceTests_();
+  } catch (error) {
+    report.ok = false;
+    report.errors.push('Acceptance: ' + String(error.message || error));
+  }
+
+  try {
+    ENABLE_PERFORMANCE_DIAGNOSTICS = true;
+
+    perfCaptureBegin_();
+    const coldStarted = Date.now();
+    const coldPayload = getReviewBootstrapData('');
+    report.bootstrapColdMs = Date.now() - coldStarted;
+    report.cycleCount = (coldPayload.cycles || []).length;
+    report.payloadBytes = estimatePayloadBytes_(coldPayload);
+    const coldEvents = perfCaptureTake_();
+    report.events = report.events.concat(
+      tagPerfRunEvents_('bootstrapCold', coldEvents)
+    );
+    report.sheetReadsCold = lastSheetReads_(coldEvents);
+    report.driveCallsCold = lastDriveCalls_(coldEvents);
+
+    perfCaptureBegin_();
+    const warmStarted = Date.now();
+    const warmPayload = getReviewBootstrapData('');
+    report.bootstrapWarmMs = Date.now() - warmStarted;
+    const warmEvents = perfCaptureTake_();
+    report.events = report.events.concat(
+      tagPerfRunEvents_('bootstrapWarm', warmEvents)
+    );
+    report.sheetReadsWarm = lastSheetReads_(warmEvents);
+
+    const firstCycle =
+      warmPayload && warmPayload.cycles && warmPayload.cycles[0]
+        ? warmPayload.cycles[0].cycleId
+        : '';
+    if (firstCycle) {
+      perfCaptureBegin_();
+      const openStarted = Date.now();
+      getReviewCycle(firstCycle);
+      report.openReviewMs = Date.now() - openStarted;
+      const openEvents = perfCaptureTake_();
+      report.events = report.events.concat(
+        tagPerfRunEvents_('openReview', openEvents)
+      );
+    }
+  } catch (error) {
+    report.ok = false;
+    report.errors.push('Live profile: ' + String(error.message || error));
+    perfCaptureTake_();
+  } finally {
+    ENABLE_PERFORMANCE_DIAGNOSTICS = previousDiagnostics === true;
+    V31_PERF_REQUEST_ = null;
+    V31_PERF_CAPTURE_ = null;
+  }
+
+  report.verdicts = buildPerformanceVerdicts_(report);
+  if (report.verdicts.some(function (row) { return row.status === 'FAIL'; })) {
+    report.ok = false;
+  }
+
+  const text = formatPerformanceProfileReport_(report);
+  Logger.log(text);
+  console.log(text);
+
+  try {
+    const ui = SpreadsheetApp.getUi();
+    if (ui) {
+      ui.alert(
+        report.ok ? 'Performance profile complete' : 'Performance profile needs attention',
+        summarizePerformanceProfileAlert_(report),
+        ui.ButtonSet.OK
+      );
+    }
+  } catch (error) {
+    // Editor-only / headless runs may not have UI.
+  }
+
+  return report;
+}
 
 function runV31PerformanceTests_() {
   const results = [];
@@ -23,6 +144,12 @@ function runV31PerformanceTests_() {
     runPerfCase_(
       'bootstrap no longer calls ensure on V31 bootstrap path',
       testV31BootstrapDoesNotDeclareEnsureDependency_
+    )
+  );
+  results.push(
+    runPerfCase_(
+      'public editor profile entry exists',
+      testPublicPerformanceProfileEntry_
     )
   );
 
@@ -82,6 +209,7 @@ function testPerfHelpersExist_() {
     typeof invalidatePerfSheetCache_ === 'function',
     'invalidatePerfSheetCache_ missing'
   );
+  assertPerf_(typeof perfCaptureBegin_ === 'function', 'perfCaptureBegin_ missing');
 }
 
 function testPerfDiagnosticsDefaultOff_() {
@@ -116,4 +244,174 @@ function testV31BootstrapDoesNotDeclareEnsureDependency_() {
     source.indexOf('ensureV31DataModel_') < 0,
     'getV31BootstrapData_ must not call ensureV31DataModel_ on interactive path'
   );
+}
+
+function testPublicPerformanceProfileEntry_() {
+  assertPerf_(
+    typeof runPerformanceProfile === 'function',
+    'runPerformanceProfile must exist for editor Run menu'
+  );
+  assertPerf_(
+    String(runPerformanceProfile.name || 'runPerformanceProfile').slice(-1) !== '_',
+    'runPerformanceProfile must stay public (no trailing underscore)'
+  );
+}
+
+function estimatePayloadBytes_(payload) {
+  try {
+    return Utilities.newBlob(JSON.stringify(payload)).getBytes().length;
+  } catch (error) {
+    return null;
+  }
+}
+
+function tagPerfRunEvents_(runLabel, events) {
+  return (events || []).map(function (event) {
+    return Object.assign({}, event, {
+      run: runLabel,
+    });
+  });
+}
+
+function lastSheetReads_(events) {
+  for (let i = (events || []).length - 1; i >= 0; i--) {
+    const details = events[i].details || {};
+    if (details.sheetReads != null) return details.sheetReads;
+  }
+  return null;
+}
+
+function lastDriveCalls_(events) {
+  for (let i = (events || []).length - 1; i >= 0; i--) {
+    const details = events[i].details || {};
+    if (details.driveCalls != null) return details.driveCalls;
+  }
+  return null;
+}
+
+function buildPerformanceVerdicts_(report) {
+  const rows = [];
+  rows.push({
+    name: 'Acceptance checks',
+    status: report.acceptance && report.acceptance.ok ? 'PASS' : 'FAIL',
+    detail: report.acceptance && report.acceptance.ok ? 'ok' : 'see errors',
+  });
+  rows.push(
+    verdictAgainstTarget_(
+      'Bootstrap cold (Home)',
+      report.bootstrapColdMs,
+      5000,
+      8000
+    )
+  );
+  rows.push(
+    verdictAgainstTarget_(
+      'Bootstrap warm (Home)',
+      report.bootstrapWarmMs,
+      2000,
+      8000
+    )
+  );
+  if (report.openReviewMs != null) {
+    rows.push(
+      verdictAgainstTarget_('Open Review', report.openReviewMs, 3000, 8000)
+    );
+  }
+  return rows;
+}
+
+function verdictAgainstTarget_(name, valueMs, targetMs, warnMs) {
+  if (valueMs == null || !isFinite(Number(valueMs))) {
+    return { name: name, status: 'SKIP', detail: 'not measured' };
+  }
+  const ms = Number(valueMs);
+  if (ms > warnMs) {
+    return {
+      name: name,
+      status: 'FAIL',
+      detail: ms + 'ms > hard warning ' + warnMs + 'ms (target ' + targetMs + 'ms)',
+    };
+  }
+  if (ms > targetMs) {
+    return {
+      name: name,
+      status: 'WARN',
+      detail: ms + 'ms above target ' + targetMs + 'ms',
+    };
+  }
+  return {
+    name: name,
+    status: 'PASS',
+    detail: ms + 'ms ≤ target ' + targetMs + 'ms',
+  };
+}
+
+function formatPerformanceProfileReport_(report) {
+  const lines = [];
+  lines.push('===== AITHERAS Performance Profile =====');
+  lines.push('Actor: ' + report.actor);
+  lines.push('Ran at: ' + report.ranAt);
+  lines.push('Overall: ' + (report.ok ? 'OK' : 'NEEDS ATTENTION'));
+  lines.push('');
+  lines.push('Measurements');
+  lines.push('- Bootstrap cold: ' + formatMs_(report.bootstrapColdMs));
+  lines.push('- Bootstrap warm: ' + formatMs_(report.bootstrapWarmMs));
+  lines.push('- Open Review: ' + formatMs_(report.openReviewMs));
+  lines.push('- Visible cycles: ' + String(report.cycleCount));
+  lines.push('- Bootstrap payload bytes: ' + String(report.payloadBytes));
+  lines.push('- Sheet reads cold/warm: ' +
+    String(report.sheetReadsCold) + ' / ' + String(report.sheetReadsWarm));
+  lines.push('- Drive calls cold: ' + String(report.driveCallsCold));
+  lines.push('');
+  lines.push('Verdicts');
+  (report.verdicts || []).forEach(function (row) {
+    lines.push('- [' + row.status + '] ' + row.name + ' — ' + row.detail);
+  });
+  if (report.errors && report.errors.length) {
+    lines.push('');
+    lines.push('Errors');
+    report.errors.forEach(function (err) {
+      lines.push('- ' + err);
+    });
+  }
+  lines.push('');
+  lines.push('Component events (captured)');
+  (report.events || []).forEach(function (event) {
+    if (event.label === 'sheetRead' || event.label === 'driveCall') return;
+    lines.push(
+      '- [' +
+        (event.run || '') +
+        '] ' +
+        event.label +
+        ': ' +
+        event.durationMs +
+        'ms'
+    );
+  });
+  lines.push('===== End Performance Profile =====');
+  return lines.join('\n');
+}
+
+function summarizePerformanceProfileAlert_(report) {
+  return [
+    'Actor: ' + report.actor,
+    'Cold Home: ' + formatMs_(report.bootstrapColdMs),
+    'Warm Home: ' + formatMs_(report.bootstrapWarmMs),
+    'Open Review: ' + formatMs_(report.openReviewMs),
+    'Cycles: ' + String(report.cycleCount),
+    'Payload bytes: ' + String(report.payloadBytes),
+    '',
+    (report.verdicts || [])
+      .map(function (row) {
+        return '[' + row.status + '] ' + row.name;
+      })
+      .join('\n'),
+    '',
+    'Full detail is in Executions / Logs.',
+  ].join('\n');
+}
+
+function formatMs_(value) {
+  if (value == null || !isFinite(Number(value))) return 'n/a';
+  return Number(value) + 'ms';
 }

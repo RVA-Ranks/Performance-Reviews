@@ -9,13 +9,30 @@ then return to `false`.
 
 ## How to capture live timings
 
-1. Paste `V31_Performance.gs` plus updated `Code.gs`, `V31_Automation.gs`,
-   `V31_Compensation.gs`, and `Index.html`.
-2. Set `ENABLE_PERFORMANCE_DIAGNOSTICS = true`.
-3. Open **Executions** in the Apps Script project.
-4. As Manager / Employee / HR, run each action five times (cold + warm).
-5. Copy `PERF` JSON lines into the tables below.
-6. Set diagnostics back to `false`.
+### Preferred: editor Run menu
+
+1. Paste `V31_Performance.gs` and `V31_Performance_Tests.gs` (plus the other
+   perf-pass files if not already deployed).
+2. In the Apps Script editor, open the function dropdown and choose
+   **`runPerformanceProfile`** (public — no trailing underscore).
+3. Click **Run**. Approve permissions if prompted.
+4. Read the popup summary and the full report in **Executions → Logs**.
+
+That runner:
+
+- executes pure acceptance checks
+- times live Home bootstrap twice for the signed-in account (cold + warm)
+- times Open Review for the first visible cycle when one exists
+- restores `ENABLE_PERFORMANCE_DIAGNOSTICS` to its previous value afterward
+
+It does not send mail, create Calendar events, or mutate review workflow.
+
+### Optional: app browsing with diagnostics
+
+1. Set `ENABLE_PERFORMANCE_DIAGNOSTICS = true` in `V31_Performance.gs`.
+2. Use the web app as Manager / Employee / HR.
+3. Copy `PERF` JSON lines from Executions into the tables below.
+4. Set diagnostics back to `false`.
 
 Client timings appear in the browser console when bootstrap returns
 `perfDiagnostics: true`.

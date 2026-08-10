@@ -12,9 +12,39 @@
 var ENABLE_PERFORMANCE_DIAGNOSTICS = false;
 
 var V31_PERF_REQUEST_ = null;
+var V31_PERF_CAPTURE_ = null;
 
 function isPerfDiagnosticsEnabled_() {
   return ENABLE_PERFORMANCE_DIAGNOSTICS === true;
+}
+
+function perfCaptureBegin_() {
+  V31_PERF_CAPTURE_ = [];
+}
+
+function perfCaptureTake_() {
+  const rows = V31_PERF_CAPTURE_ || [];
+  V31_PERF_CAPTURE_ = null;
+  return rows;
+}
+
+function perfCapturePush_(entry) {
+  if (!V31_PERF_CAPTURE_) return;
+  V31_PERF_CAPTURE_.push(entry);
+}
+
+function perfEmit_(label, durationMs, details) {
+  const entry = {
+    type: 'PERF',
+    label: String(label || 'timer'),
+    durationMs: Number(durationMs) || 0,
+    details: details || {},
+  };
+  perfCapturePush_(entry);
+  if (isPerfDiagnosticsEnabled_()) {
+    console.log(JSON.stringify(entry));
+  }
+  return entry.durationMs;
 }
 
 function perfBeginRequest_(label) {
@@ -41,22 +71,13 @@ function perfEndRequest_(details) {
   const req = V31_PERF_REQUEST_;
   if (!req) return 0;
   const durationMs = Date.now() - req.startedAt;
-  if (isPerfDiagnosticsEnabled_()) {
-    console.log(
-      JSON.stringify({
-        type: 'PERF',
-        label: req.label + ' total',
-        durationMs: durationMs,
-        details: Object.assign(
-          {
-            sheetReads: req.sheetReads,
-            driveCalls: req.driveCalls,
-          },
-          details || {}
-        ),
-      })
-    );
-  }
+  perfEmit_(req.label + ' total', durationMs, Object.assign(
+    {
+      sheetReads: req.sheetReads,
+      driveCalls: req.driveCalls,
+    },
+    details || {}
+  ));
   V31_PERF_REQUEST_ = null;
   return durationMs;
 }
@@ -71,78 +92,47 @@ function perfStart_(label) {
 function perfEnd_(timer, details) {
   const durationMs =
     Date.now() - (timer && timer.startedAt ? timer.startedAt : Date.now());
-  if (isPerfDiagnosticsEnabled_()) {
-    console.log(
-      JSON.stringify({
-        type: 'PERF',
-        label: timer && timer.label ? timer.label : 'timer',
-        durationMs: durationMs,
-        details: details || {},
-      })
-    );
-  }
+  perfEmit_(
+    timer && timer.label ? timer.label : 'timer',
+    durationMs,
+    details || {}
+  );
   return durationMs;
 }
 
 function perfCountSheetRead_(sheetName) {
   const req = V31_PERF_REQUEST_;
   if (req) req.sheetReads += 1;
-  if (isPerfDiagnosticsEnabled_()) {
-    console.log(
-      JSON.stringify({
-        type: 'PERF',
-        label: 'sheetRead',
-        durationMs: 0,
-        details: {
-          sheet: String(sheetName || ''),
-          sheetReads: req ? req.sheetReads : null,
-        },
-      })
-    );
+  if (isPerfDiagnosticsEnabled_() || V31_PERF_CAPTURE_) {
+    perfEmit_('sheetRead', 0, {
+      sheet: String(sheetName || ''),
+      sheetReads: req ? req.sheetReads : null,
+    });
   }
 }
 
 function perfCountDriveCall_(operation) {
   const req = V31_PERF_REQUEST_;
   if (req) req.driveCalls += 1;
-  if (isPerfDiagnosticsEnabled_()) {
-    console.log(
-      JSON.stringify({
-        type: 'PERF',
-        label: 'driveCall',
-        durationMs: 0,
-        details: {
-          operation: String(operation || ''),
-          driveCalls: req ? req.driveCalls : null,
-        },
-      })
-    );
+  if (isPerfDiagnosticsEnabled_() || V31_PERF_CAPTURE_) {
+    perfEmit_('driveCall', 0, {
+      operation: String(operation || ''),
+      driveCalls: req ? req.driveCalls : null,
+    });
   }
 }
 
 function perfLogPayloadBytes_(label, payload) {
-  if (!isPerfDiagnosticsEnabled_()) return 0;
+  if (!isPerfDiagnosticsEnabled_() && !V31_PERF_CAPTURE_) return 0;
   try {
     const json = JSON.stringify(payload);
     const bytes = Utilities.newBlob(json).getBytes().length;
-    console.log(
-      JSON.stringify({
-        type: 'PERF',
-        label: String(label || 'payload') + ' bytes',
-        durationMs: 0,
-        details: { bytes: bytes },
-      })
-    );
+    perfEmit_(String(label || 'payload') + ' bytes', 0, { bytes: bytes });
     return bytes;
   } catch (error) {
-    console.log(
-      JSON.stringify({
-        type: 'PERF',
-        label: String(label || 'payload') + ' bytes',
-        durationMs: 0,
-        details: { error: String(error.message || error) },
-      })
-    );
+    perfEmit_(String(label || 'payload') + ' bytes', 0, {
+      error: String(error.message || error),
+    });
     return 0;
   }
 }

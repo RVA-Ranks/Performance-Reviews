@@ -15,7 +15,7 @@
 - Loading overlay: staged slow-path messaging, stale-response protection on
   bootstrap/open-cycle, keep shell visible on refresh when already booted.
 - Profile template: `PERFORMANCE_PROFILE.md`. Tests:
-  `runV31PerformanceTests_()`.
+  `runPerformanceProfile` (editor Run menu) and `runV31PerformanceTests_()`.
 
 ## Meeting compensation placement + scoring regressions
 

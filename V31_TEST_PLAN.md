@@ -7,7 +7,8 @@ Use fake employee names and AITHERAS test accounts.
 Branch: `perf/application-responsiveness`. See [`PERFORMANCE_PROFILE.md`](PERFORMANCE_PROFILE.md).
 
 ```javascript
-runV31PerformanceTests_();
+runPerformanceProfile(); // Apps Script Run menu (preferred)
+runV31PerformanceTests_(); // pure acceptance only
 ```
 
 Live (Preview), five runs each as Manager / Employee / HR:
