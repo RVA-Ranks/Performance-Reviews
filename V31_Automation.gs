@@ -1146,8 +1146,8 @@ function protectV31Sheet_(sheet, description) {
 /* ============================= BOOTSTRAP ================================= */
 
 function getV31BootstrapData_(email, isHr) {
-  // Do not run ensureV31DataModel_ on interactive bootstrap.
-  // Schema/migrate belongs to upgrade/setup/admin/mutations.
+  // Interactive bootstrap must not run full schema/migrate ensure.
+  // Keep ensure on upgrade/setup/admin/mutations only.
 
   const settings = getSettings_();
   const normalized = normalizeEmail_(email);
