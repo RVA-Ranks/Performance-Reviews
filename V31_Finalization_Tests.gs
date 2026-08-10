@@ -152,6 +152,24 @@ function runV31FinalizationTests_() {
   );
   results.push(
     runFinalCase_(
+      'review PDF provenance is authoritative over human filename',
+      testReviewPdfProvenanceAuthoritativeIdentity_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'incomplete PDF candidate search is Delivery Unknown not Failed',
+      testReviewPdfIncompleteSearchClassification_
+    )
+  );
+  results.push(
+    runFinalCase_(
+      'fresh Sending self-heal requires matching Attempt ID',
+      testFreshSendingSelfHealAttemptGuard_
+    )
+  );
+  results.push(
+    runFinalCase_(
       'review PDF provenance parse and match',
       testReviewPdfProvenanceHelpers_
     )
@@ -905,6 +923,140 @@ function testReviewPdfGenerationFailureClassification_() {
   );
 }
 
+function testReviewPdfIncompleteSearchClassification_() {
+  const incomplete = classifyReviewPdfGenerationFailure_(
+    new Error('gen failed'),
+    '',
+    [],
+    null,
+    { scanIncomplete: true }
+  );
+  assertFinal_(
+    incomplete.status === V31.DELIVERY.UNKNOWN,
+    'Incomplete search with zero visible candidates must be Delivery Unknown'
+  );
+  assertFinal_(
+    incomplete.resolution === 'incomplete-search',
+    'Incomplete search resolution label must be incomplete-search'
+  );
+  assertFinal_(
+    incomplete.clearClaim === false,
+    'Incomplete search must not clear the claim for safe regenerate'
+  );
+}
+
+function testReviewPdfProvenanceAuthoritativeIdentity_() {
+  const cycleA = 'CYCLE-A';
+  const cycleB = 'CYCLE-B';
+  const humanName = buildReviewPdfFileName_(cycleA, PR.TYPE.MANAGER);
+  // Same employee/date/type shape for cycle B produces the same human filename
+  // when cycle metadata is unavailable (pure unit fixture).
+  assertFinal_(
+    humanName === buildReviewPdfFileName_(cycleB, PR.TYPE.MANAGER),
+    'Human-readable Manager PDF names collide across Cycle IDs without Cycle ID in the name'
+  );
+  assertFinal_(
+    !isLegacyCycleIdReviewPdfName_(humanName, cycleB, PR.TYPE.MANAGER),
+    'Human-readable name must not count as legacy Cycle-ID identity for Cycle B'
+  );
+  assertFinal_(
+    !reviewPdfDurableIdentityOk_(
+      {
+        getName: function () {
+          return humanName;
+        },
+        getDescription: function () {
+          return '';
+        },
+      },
+      cycleB,
+      PR.TYPE.MANAGER
+    ),
+    'Unprovenanced human-name-only Cycle A artifact must not validate for Cycle B'
+  );
+
+  const legacy = 'AITHERAS_' + cycleB + '_Manager_Review_FINAL.pdf';
+  assertFinal_(
+    isLegacyCycleIdReviewPdfName_(legacy, cycleB, PR.TYPE.MANAGER),
+    'Legacy Cycle-ID filename must remain recoverable'
+  );
+  assertFinal_(
+    reviewPdfDurableIdentityOk_(
+      {
+        getName: function () {
+          return legacy;
+        },
+        getDescription: function () {
+          return '';
+        },
+      },
+      cycleB,
+      PR.TYPE.MANAGER
+    ),
+    'Legacy Cycle-ID filename must satisfy durable identity'
+  );
+
+  const renamed = 'Renamed Manager Packet.pdf';
+  const provenance = buildReviewPdfProvenance_(cycleB, PR.TYPE.MANAGER);
+  assertFinal_(
+    reviewPdfDurableIdentityOk_(
+      {
+        getName: function () {
+          return renamed;
+        },
+        getDescription: function () {
+          return provenance;
+        },
+      },
+      cycleB,
+      PR.TYPE.MANAGER
+    ),
+    'Provenance must validate even when the display filename was renamed'
+  );
+  assertFinal_(
+    !reviewPdfDurableIdentityOk_(
+      {
+        getName: function () {
+          return renamed;
+        },
+        getDescription: function () {
+          return provenance;
+        },
+      },
+      cycleA,
+      PR.TYPE.MANAGER
+    ),
+    'Provenance for Cycle B must not validate for Cycle A'
+  );
+}
+
+function testFreshSendingSelfHealAttemptGuard_() {
+  const claim = {
+    action: 'in-progress',
+    expectedAttemptId: 'attempt-A',
+    expectedStatus: V31.DELIVERY.SENDING,
+    expectedFileId: '',
+  };
+  assertFinal_(
+    decideRecoveredPdfCommit_(
+      claim,
+      V31.DELIVERY.SENDING,
+      'attempt-A',
+      ''
+    ) === 'commit',
+    'Matching Attempt A must allow fresh-Sending adoption'
+  );
+  assertFinal_(
+    decideRecoveredPdfCommit_(
+      claim,
+      V31.DELIVERY.SENDING,
+      'attempt-B',
+      ''
+    ) === 'state-changed',
+    'Attempt B must block Attempt A from adopting into the newer claim'
+  );
+}
+
 function testReviewPdfProvenanceHelpers_() {
   const marker = buildReviewPdfProvenance_('CYC-1', PR.TYPE.MANAGER);
   assertFinal_(
@@ -941,25 +1093,36 @@ function testFinalizationBlockerCompensationRate_() {
     'Self Evaluation PDF ID': 's1',
     'Final Distribution Status': V31.DELIVERY.PENDING,
     'Finalization Audit Status': 'Pending',
-    'Compensation Decision': 'Approved',
+    'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
     'Manager PDF Last Error': '',
     'Self PDF Last Error': '',
     'Finalization Last Error': '',
   };
-  // Without a live CompensationRecords row, blocker should surface missing record
-  // or fall through safely when compensation helpers cannot seal.
-  const blocker = classifyFinalizationBlocker_(cycle);
-  assertFinal_(
-    blocker && blocker.component,
-    'Blocker classification must return a component'
+  const record = {
+    'CAF PDF Status': V31_COMP.PDF.COMPLETE,
+    'CAF Final PDF ID': 'caf-1',
+    'CAF PDF Last Error': '',
+    'Compensation History Status': V31_COMP.HISTORY.COMPLETE,
+    'Compensation History Last Error': '',
+    'Rate Update Status': V31_COMP.RATE_UPDATE.CONFLICT,
+    'Rate Update Last Error':
+      'Expected predecessor 46.40 but Column H is 47.00',
+  };
+  const blocker = classifyCompensationFinalizationBlockerFromRecord_(
+    cycle,
+    record
   );
   assertFinal_(
-    blocker.recommendedAction === 'openCompensationQueue' ||
-      blocker.recommendedAction === 'retryFinalization' ||
-      blocker.recommendedAction === 'recoverCaf' ||
-      blocker.recommendedAction === 'recheckRateUpdate' ||
-      blocker.recommendedAction === 'reconcileCaf',
-    'Blocker must recommend a known recovery action'
+    blocker && blocker.component === 'Compensation Rate Update',
+    'Conflict must block on Compensation Rate Update'
+  );
+  assertFinal_(
+    blocker.status === V31_COMP.RATE_UPDATE.CONFLICT,
+    'Blocker status must be Conflict'
+  );
+  assertFinal_(
+    blocker.recommendedAction === 'recheckRateUpdate',
+    'Conflict must recommend recheckRateUpdate, not generic Retry Finalization'
   );
 }
 

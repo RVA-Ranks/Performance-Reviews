@@ -3482,7 +3482,11 @@ function validateAndLoadReviewPdfCandidate_(
     file,
     cycleId,
     documentType,
-    folderId
+    folderId,
+    {
+      allowStampSelectedId: true,
+      selectedFileId: String(fileId),
+    }
   );
 
   return file;

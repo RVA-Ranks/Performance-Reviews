@@ -6,9 +6,14 @@
   0 artifacts → `Failed` (safe ordinary retry); 1 → adopt/`Sent`; >1 or scan
   failure → `Delivery Unknown` (HR reconciliation).
 - Fresh `Sending` claims run an immediate deterministic/provenance candidate
-  scan before telling HR to wait for the stale window.
-- Review PDFs store immutable Drive description provenance
-  (`AITHERAS_REVIEW_PDF`); recovery accepts filename **or** provenance.
+  scan before telling HR to wait for the stale window; self-heal binds the
+  exact PDF Attempt ID.
+- Review PDF recovery identity is provenance-authoritative: accept
+  `AITHERAS_REVIEW_PDF` **or** legacy Cycle-ID filenames only. Human-readable
+  display names are UX, not proof. Pre-provenance stored/selected IDs can be
+  stamped safely.
+- Candidate scans no longer silently stop at 400 files; incomplete/errored
+  searches classify as `Delivery Unknown`, never `Failed`.
 - `retryReviewFinalization` returns structured `{ ok, partial, blocker,
   components }` on later-stage failure instead of an opaque throw; retries are
   audited either way.

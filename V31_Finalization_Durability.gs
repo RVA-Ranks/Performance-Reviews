@@ -407,9 +407,9 @@ function buildHumanReadableDocumentFileName_(cycleId, documentLabel) {
 }
 
 /**
- * Human-readable final PDF name:
+ * Human-readable final PDF name (UX only — not recovery identity):
  *   Jane Doe - 2026-08-07 - Annual Review - Manager Review.pdf
- * Recovery still recognizes legacy AITHERAS_<cycleId>_ names.
+ * Recovery identity is provenance or a legacy filename that embeds Cycle ID.
  */
 function buildReviewPdfFileName_(cycleId, documentType) {
   const docLabel =
@@ -435,15 +435,32 @@ function buildLegacyReviewPdfFileNames_(cycleId, documentType) {
   ].filter(Boolean);
 }
 
+/**
+ * Filenames that embed the exact Cycle ID (safe for filename-only recovery).
+ * Does not include the current human-readable display name.
+ */
+function getLegacyCycleIdReviewPdfNames_(cycleId, documentType) {
+  return buildLegacyReviewPdfFileNames_(cycleId, documentType);
+}
+
+function isLegacyCycleIdReviewPdfName_(fileName, cycleId, documentType) {
+  const names = getLegacyCycleIdReviewPdfNames_(cycleId, documentType);
+  return names.indexOf(String(fileName || '')) >= 0;
+}
+
+/**
+ * UX listing: human-readable + legacy. Never use this alone as recovery proof.
+ */
 function getRecognizedReviewPdfNames_(cycleId, documentType) {
   return [buildReviewPdfFileName_(cycleId, documentType)].concat(
-    buildLegacyReviewPdfFileNames_(cycleId, documentType)
+    getLegacyCycleIdReviewPdfNames_(cycleId, documentType)
   );
 }
 
 /**
  * Deterministic provenance marker for Manager/Self final PDFs.
  * Primary recovery identity is folder + MIME + provenance; filename is UX.
+ * Filename-only recovery is limited to legacy Cycle-ID-embedded names.
  */
 function buildReviewPdfProvenance_(cycleId, documentType) {
   return (
@@ -477,12 +494,64 @@ function reviewPdfProvenanceMatches_(description, cycleId, documentType) {
   );
 }
 
+/**
+ * Stamp provenance onto an already-authoritative stored/selected PDF.
+ * Refuses to overwrite provenance that belongs to a different cycle.
+ */
+function stampReviewPdfProvenanceIfMissing_(file, cycleId, documentType) {
+  if (!file || typeof file.setDescription !== 'function') {
+    throw new Error('Cannot stamp review PDF provenance.');
+  }
+  const description =
+    typeof file.getDescription === 'function' ? file.getDescription() : '';
+  if (reviewPdfProvenanceMatches_(description, cycleId, documentType)) {
+    return { stamped: false, alreadyMatched: true };
+  }
+  const parsed = parseReviewPdfProvenance_(description);
+  if (
+    parsed &&
+    String(parsed.cycleId || '') &&
+    String(parsed.cycleId) !== String(cycleId || '')
+  ) {
+    throw new Error(
+      'PDF already carries AITHERAS_REVIEW_PDF provenance for a different cycle.'
+    );
+  }
+  if (
+    parsed &&
+    String(parsed.documentType || '') &&
+    String(parsed.documentType) !== String(documentType || '')
+  ) {
+    throw new Error(
+      'PDF already carries AITHERAS_REVIEW_PDF provenance for a different document type.'
+    );
+  }
+  file.setDescription(buildReviewPdfProvenance_(cycleId, documentType));
+  return { stamped: true, alreadyMatched: false };
+}
+
+function reviewPdfDurableIdentityOk_(file, cycleId, documentType) {
+  const provenanceOk = reviewPdfProvenanceMatches_(
+    typeof file.getDescription === 'function' ? file.getDescription() : '',
+    cycleId,
+    documentType
+  );
+  const legacyOk = isLegacyCycleIdReviewPdfName_(
+    typeof file.getName === 'function' ? file.getName() : '',
+    cycleId,
+    documentType
+  );
+  return provenanceOk || legacyOk;
+}
+
 function assertValidReviewPdfFile_(
   file,
   cycleId,
   documentType,
-  folderId
+  folderId,
+  options
 ) {
+  const opts = options || {};
   if (!file) throw new Error('Drive file was not found.');
   if (typeof file.isTrashed === 'function' && file.isTrashed()) {
     throw new Error('Reconciled PDF must not be trashed.');
@@ -496,27 +565,62 @@ function assertValidReviewPdfFile_(
       'Reconciled PDF must live in the restricted review folder.'
     );
   }
-  const names = getRecognizedReviewPdfNames_(cycleId, documentType);
-  const nameOk = names.indexOf(String(file.getName() || '')) >= 0;
-  const provenanceOk = reviewPdfProvenanceMatches_(
-    typeof file.getDescription === 'function' ? file.getDescription() : '',
-    cycleId,
-    documentType
+
+  const authoritativeId = String(
+    opts.authoritativeFileId || opts.storedFileId || opts.selectedFileId || ''
   );
-  if (!nameOk && !provenanceOk) {
-    throw new Error(
-      'Reconciled PDF is not recognized by filename or provenance for this cycle.'
-    );
+  const allowStamp =
+    opts.allowStampAuthoritativeId === true ||
+    opts.allowStampStoredId === true ||
+    opts.allowStampSelectedId === true;
+
+  if (reviewPdfDurableIdentityOk_(file, cycleId, documentType)) {
+    if (allowStamp) {
+      try {
+        stampReviewPdfProvenanceIfMissing_(file, cycleId, documentType);
+      } catch (stampError) {
+        Logger.log(
+          'Review PDF provenance stamp skipped: ' +
+            String(stampError.message || stampError)
+        );
+      }
+    }
+    return;
   }
+
+  if (
+    allowStamp &&
+    authoritativeId &&
+    String(file.getId()) === authoritativeId
+  ) {
+    stampReviewPdfProvenanceIfMissing_(file, cycleId, documentType);
+    return;
+  }
+
+  throw new Error(
+    'Reconciled PDF is not recognized by provenance or legacy Cycle-ID filename for this cycle.'
+  );
 }
 
 /**
- * Soft candidate collection (CAF-style): invalid peers are skipped, not fatal.
+ * Soft candidate collection with explicit completeness.
+ * Incomplete / errored searches must never be treated as "zero artifacts → Failed".
  */
-function collectReviewPdfArtifacts_(cycleId, documentType) {
+function collectReviewPdfArtifactsDetailed_(cycleId, documentType) {
   const settings = getSettings_();
   const folderId = String(settings.REVIEW_FOLDER_ID || '');
-  const folder = DriveApp.getFolderById(folderId);
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(folderId);
+  } catch (error) {
+    return {
+      matches: [],
+      complete: false,
+      truncated: false,
+      error: String(error.message || error),
+    };
+  }
+
   const matches = [];
   const seen = {};
   const consider = function (file) {
@@ -547,20 +651,30 @@ function collectReviewPdfArtifacts_(cycleId, documentType) {
     }
   };
 
-  getRecognizedReviewPdfNames_(cycleId, documentType).forEach(function (name) {
-    const files = folder.getFilesByName(name);
-    while (files.hasNext()) {
-      consider(files.next());
-    }
-  });
+  try {
+    getLegacyCycleIdReviewPdfNames_(cycleId, documentType).forEach(
+      function (name) {
+        const files = folder.getFilesByName(name);
+        while (files.hasNext()) {
+          consider(files.next());
+        }
+      }
+    );
+  } catch (error) {
+    return {
+      matches: matches,
+      complete: false,
+      truncated: false,
+      error: String(error.message || error),
+    };
+  }
 
-  // Also surface provenance-marked files whose display name changed.
+  // Full folder scan for provenance-marked files (including renamed display names).
+  // Rare recovery path — do not silently truncate.
   try {
     const all = folder.getFiles();
-    let scanned = 0;
-    while (all.hasNext() && scanned < 400) {
+    while (all.hasNext()) {
       const file = all.next();
-      scanned += 1;
       if (
         reviewPdfProvenanceMatches_(
           typeof file.getDescription === 'function'
@@ -574,10 +688,34 @@ function collectReviewPdfArtifacts_(cycleId, documentType) {
       }
     }
   } catch (error) {
-    // Folder enumeration is best-effort after named matches.
+    return {
+      matches: matches,
+      complete: false,
+      truncated: false,
+      error: String(error.message || error),
+    };
   }
 
-  return matches;
+  return {
+    matches: matches,
+    complete: true,
+    truncated: false,
+    error: null,
+  };
+}
+
+function collectReviewPdfArtifacts_(cycleId, documentType) {
+  const result = collectReviewPdfArtifactsDetailed_(cycleId, documentType);
+  if (!result.complete || result.error) {
+    const error = new Error(
+      result.error ||
+        'Review PDF candidate search did not complete; refusing Failed classification.'
+    );
+    error.code = 'INCOMPLETE_PDF_SEARCH';
+    error.matches = result.matches || [];
+    throw error;
+  }
+  return result.matches;
 }
 
 function listMatchingReviewPdfArtifacts_(cycleId, documentType) {
@@ -588,12 +726,16 @@ function classifyReviewPdfGenerationFailure_(
   generationError,
   pdfId,
   candidates,
-  scanError
+  scanError,
+  options
 ) {
-  if (scanError) {
+  const opts = options || {};
+  if (scanError || opts.scanIncomplete) {
     return {
       status: V31.DELIVERY.UNKNOWN,
-      resolution: 'recovery-search-failed',
+      resolution: scanError
+        ? 'recovery-search-failed'
+        : 'incomplete-search',
       fileId: '',
       clearClaim: false,
     };
@@ -629,6 +771,74 @@ function classifyReviewPdfGenerationFailure_(
     fileId: String(pdfId),
     clearClaim: true,
   };
+}
+
+/**
+ * Pure compensation seal blocker once disposition is already "require".
+ */
+function classifyCompensationFinalizationBlockerFromRecord_(cycle, record) {
+  if (!record) {
+    return {
+      component: 'Compensation Record',
+      status: 'Missing',
+      message: 'Approved adjustment requires a CompensationRecords row.',
+      recommendedAction: 'openCompensationQueue',
+    };
+  }
+  const cafStatus = String(record['CAF PDF Status'] || '');
+  if (
+    cafStatus === V31_COMP.PDF.FAILED ||
+    cafStatus === V31_COMP.PDF.UNKNOWN ||
+    cafStatus === V31_COMP.PDF.PENDING ||
+    cafStatus === V31_COMP.PDF.GENERATING ||
+    !String(record['CAF Final PDF ID'] || '')
+  ) {
+    return {
+      component: 'Compensation CAF',
+      status: cafStatus || 'Pending',
+      message: String(record['CAF PDF Last Error'] || ''),
+      recommendedAction:
+        cafStatus === V31_COMP.PDF.UNKNOWN ? 'reconcileCaf' : 'recoverCaf',
+    };
+  }
+  const historyStatus = String(record['Compensation History Status'] || '');
+  if (historyStatus && historyStatus !== V31_COMP.HISTORY.COMPLETE) {
+    return {
+      component: 'Compensation History',
+      status: historyStatus,
+      message: String(record['Compensation History Last Error'] || ''),
+      recommendedAction: 'retryFinalization',
+    };
+  }
+  const rateStatus = String(record['Rate Update Status'] || '');
+  if (
+    rateStatus === V31_COMP.RATE_UPDATE.CONFLICT ||
+    rateStatus === V31_COMP.RATE_UPDATE.FAILED ||
+    rateStatus === V31_COMP.RATE_UPDATE.UNKNOWN ||
+    rateStatus === V31_COMP.RATE_UPDATE.UPDATING
+  ) {
+    return {
+      component: 'Compensation Rate Update',
+      status: rateStatus,
+      message: String(record['Rate Update Last Error'] || ''),
+      recommendedAction:
+        rateStatus === V31_COMP.RATE_UPDATE.UPDATING
+          ? 'openCompensationQueue'
+          : 'recheckRateUpdate',
+    };
+  }
+  if (
+    typeof isCompensationSealedForFinalization_ === 'function' &&
+    !isCompensationSealedForFinalization_(cycle)
+  ) {
+    return {
+      component: 'Compensation Seal',
+      status: rateStatus || cafStatus || 'Incomplete',
+      message: String(cycle['Finalization Last Error'] || ''),
+      recommendedAction: 'openCompensationQueue',
+    };
+  }
+  return null;
 }
 
 function classifyFinalizationBlocker_(cycle) {
@@ -675,67 +885,11 @@ function classifyFinalizationBlocker_(cycle) {
       const recordLoc = findCompensationRecordByCycleOptional_(
         cycle['Cycle ID']
       );
-      if (!recordLoc) {
-        return {
-          component: 'Compensation Record',
-          status: 'Missing',
-          message: 'Approved adjustment requires a CompensationRecords row.',
-          recommendedAction: 'openCompensationQueue',
-        };
-      }
-      const record = recordLoc.object;
-      const cafStatus = String(record['CAF PDF Status'] || '');
-      if (
-        cafStatus === V31_COMP.PDF.FAILED ||
-        cafStatus === V31_COMP.PDF.UNKNOWN ||
-        cafStatus === V31_COMP.PDF.PENDING ||
-        cafStatus === V31_COMP.PDF.GENERATING ||
-        !String(record['CAF Final PDF ID'] || '')
-      ) {
-        return {
-          component: 'Compensation CAF',
-          status: cafStatus || 'Pending',
-          message: String(record['CAF PDF Last Error'] || ''),
-          recommendedAction:
-            cafStatus === V31_COMP.PDF.UNKNOWN
-              ? 'reconcileCaf'
-              : 'recoverCaf',
-        };
-      }
-      const historyStatus = String(record['Compensation History Status'] || '');
-      if (historyStatus && historyStatus !== V31_COMP.HISTORY.COMPLETE) {
-        return {
-          component: 'Compensation History',
-          status: historyStatus,
-          message: String(record['Compensation History Last Error'] || ''),
-          recommendedAction: 'retryFinalization',
-        };
-      }
-      const rateStatus = String(record['Rate Update Status'] || '');
-      if (
-        rateStatus === V31_COMP.RATE_UPDATE.CONFLICT ||
-        rateStatus === V31_COMP.RATE_UPDATE.FAILED ||
-        rateStatus === V31_COMP.RATE_UPDATE.UNKNOWN ||
-        rateStatus === V31_COMP.RATE_UPDATE.UPDATING
-      ) {
-        return {
-          component: 'Compensation Rate Update',
-          status: rateStatus,
-          message: String(record['Rate Update Last Error'] || ''),
-          recommendedAction:
-            rateStatus === V31_COMP.RATE_UPDATE.UPDATING
-              ? 'openCompensationQueue'
-              : 'recheckRateUpdate',
-        };
-      }
-      if (!isCompensationSealedForFinalization_(cycle)) {
-        return {
-          component: 'Compensation Seal',
-          status: rateStatus || cafStatus || 'Incomplete',
-          message: String(cycle['Finalization Last Error'] || ''),
-          recommendedAction: 'openCompensationQueue',
-        };
-      }
+      const blocker = classifyCompensationFinalizationBlockerFromRecord_(
+        cycle,
+        recordLoc && recordLoc.object ? recordLoc.object : null
+      );
+      if (blocker) return blocker;
     }
   } catch (error) {
     // Compensation helpers may be unavailable in pure unit tests.
@@ -832,7 +986,11 @@ function validateAuthoritativeFinalPdfId_(
     DriveApp.getFileById(id),
     cycleId,
     documentType,
-    folderId
+    folderId,
+    {
+      allowStampAuthoritativeId: true,
+      authoritativeFileId: id,
+    }
   );
   return id;
 }
@@ -906,7 +1064,15 @@ function ensureFinalPdfComponent_(
           getPdfGenerationStaleMinutes_()
         )
       ) {
-        return { action: 'in-progress' };
+        return {
+          action: 'in-progress',
+          expectedAttemptId: String(cycle[fields.attemptField] || ''),
+          expectedStartedAt: cycle[fields.startedField]
+            ? String(cycle[fields.startedField])
+            : '',
+          expectedStatus: V31.DELIVERY.SENDING,
+          expectedFileId: String(cycle[fields.idField] || ''),
+        };
       }
       cycle[fields.statusField] = V31.DELIVERY.UNKNOWN;
       cycle[fields.errorField] =
@@ -954,7 +1120,11 @@ function ensureFinalPdfComponent_(
         DriveApp.getFileById(claim.fileId),
         cycleId,
         documentType,
-        String(settings.REVIEW_FOLDER_ID || '')
+        String(settings.REVIEW_FOLDER_ID || ''),
+        {
+          allowStampAuthoritativeId: true,
+          authoritativeFileId: claim.fileId,
+        }
       );
     } catch (error) {
       validationError = error;
@@ -1006,20 +1176,42 @@ function ensureFinalPdfComponent_(
   }
   if (claim.action === 'in-progress') {
     // Fresh Sending: safe deterministic scan before asking HR to wait.
-    let earlyMatches = [];
-    let earlyScanError = null;
+    let earlyResult = {
+      matches: [],
+      complete: false,
+      error: 'scan-not-run',
+    };
     try {
-      earlyMatches = collectReviewPdfArtifacts_(cycleId, documentType);
+      earlyResult = collectReviewPdfArtifactsDetailed_(
+        cycleId,
+        documentType
+      );
     } catch (error) {
-      earlyScanError = error;
+      earlyResult = {
+        matches: [],
+        complete: false,
+        error: String(error.message || error),
+      };
     }
-    if (!earlyScanError && earlyMatches.length === 1) {
+    const earlyMatches = earlyResult.matches || [];
+    const earlyScanUsable =
+      earlyResult.complete && !earlyResult.error;
+
+    if (earlyScanUsable && earlyMatches.length === 1) {
       const healed = withLock_(function () {
         const location = findCycle_(cycleId);
         const cycle = location.object;
         if (
-          String(cycle[fields.statusField] || '') !== V31.DELIVERY.SENDING ||
-          !!cycle[fields.idField]
+          decideRecoveredPdfCommit_(
+            {
+              expectedStatus: V31.DELIVERY.SENDING,
+              expectedAttemptId: claim.expectedAttemptId,
+              expectedFileId: '',
+            },
+            cycle[fields.statusField],
+            cycle[fields.attemptField],
+            cycle[fields.idField]
+          ) === 'state-changed'
         ) {
           return { action: 'state-changed' };
         }
@@ -1031,7 +1223,7 @@ function ensureFinalPdfComponent_(
         cycle[fields.errorField] = '';
         cycle[fields.recoveryField] = buildPdfRecoveryDetails_(
           'fresh-sending-self-heal',
-          '',
+          claim.expectedAttemptId,
           earlyMatches,
           null
         );
@@ -1043,11 +1235,22 @@ function ensureFinalPdfComponent_(
         return;
       }
     }
-    if (!earlyScanError && earlyMatches.length > 1) {
+    if (earlyScanUsable && earlyMatches.length > 1) {
       withLock_(function () {
         const location = findCycle_(cycleId);
         const cycle = location.object;
-        if (String(cycle[fields.statusField] || '') !== V31.DELIVERY.SENDING) {
+        if (
+          decideRecoveredPdfCommit_(
+            {
+              expectedStatus: V31.DELIVERY.SENDING,
+              expectedAttemptId: claim.expectedAttemptId,
+              expectedFileId: '',
+            },
+            cycle[fields.statusField],
+            cycle[fields.attemptField],
+            cycle[fields.idField]
+          ) === 'state-changed'
+        ) {
           return;
         }
         cycle[fields.statusField] = V31.DELIVERY.UNKNOWN;
@@ -1055,7 +1258,7 @@ function ensureFinalPdfComponent_(
           'Multiple deterministic PDF artifacts were found during an in-progress claim.';
         cycle[fields.recoveryField] = buildPdfRecoveryDetails_(
           'ambiguous',
-          cycle[fields.attemptField],
+          claim.expectedAttemptId || cycle[fields.attemptField],
           earlyMatches,
           cycle[fields.errorField]
         );
@@ -1070,6 +1273,20 @@ function ensureFinalPdfComponent_(
       throw new Error(
         fields.label +
           ' PDF has multiple deterministic candidates. HR reconciliation is required.'
+      );
+    }
+    if (!earlyScanUsable) {
+      const startedAt = findCycle_(cycleId).object[fields.startedField];
+      const staleMinutes = getPdfGenerationStaleMinutes_();
+      throw new Error(
+        fields.label +
+          ' PDF generation is already in progress' +
+          (startedAt
+            ? ' (claimed ' + formatDateTime_(startedAt) + ')'
+            : '') +
+          '. Candidate search could not be completed, so the claim was not treated as empty. Automatic stale recovery becomes available after ' +
+          staleMinutes +
+          ' minutes.'
       );
     }
     const startedAt = findCycle_(cycleId).object[fields.startedField];
@@ -1254,18 +1471,32 @@ function ensureFinalPdfComponent_(
 
   let postCandidates = [];
   let postScanError = null;
+  let postScanIncomplete = false;
   if (generationError || !pdfId) {
     try {
-      postCandidates = collectReviewPdfArtifacts_(cycleId, documentType);
+      const postResult = collectReviewPdfArtifactsDetailed_(
+        cycleId,
+        documentType
+      );
+      postCandidates = postResult.matches || [];
+      if (!postResult.complete || postResult.error) {
+        postScanIncomplete = true;
+        postScanError = new Error(
+          postResult.error ||
+            'Review PDF candidate search did not complete.'
+        );
+      }
     } catch (error) {
       postScanError = error;
+      postScanIncomplete = true;
     }
   }
   const classification = classifyReviewPdfGenerationFailure_(
     generationError,
     pdfId,
     postCandidates,
-    postScanError
+    postScanError,
+    { scanIncomplete: postScanIncomplete }
   );
 
   const committed = withLock_(function () {

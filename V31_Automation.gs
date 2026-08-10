@@ -3274,17 +3274,47 @@ function probeCompletedPdfsInSandbox_(settings, reviewFolderId) {
           facts.folderId = String(parents.next().getId() || '');
         }
         const expectedNames =
-          typeof getRecognizedReviewPdfNames_ === 'function'
-            ? getRecognizedReviewPdfNames_(
+          typeof getLegacyCycleIdReviewPdfNames_ === 'function'
+            ? getLegacyCycleIdReviewPdfNames_(
                 cycleId,
                 entry.documentType
               )
             : [];
+        let provenanceOk =
+          typeof reviewPdfProvenanceMatches_ === 'function' &&
+          reviewPdfProvenanceMatches_(
+            typeof file.getDescription === 'function'
+              ? file.getDescription()
+              : '',
+            cycleId,
+            entry.documentType
+          );
+        const legacyNameOk =
+          expectedNames.length > 0 &&
+          expectedNames.indexOf(String(file.getName() || '')) >= 0;
+        facts.identityOk = provenanceOk || legacyNameOk;
         if (
-          expectedNames.length &&
-          expectedNames.indexOf(String(file.getName() || '')) < 0
+          !facts.identityOk &&
+          typeof stampReviewPdfProvenanceIfMissing_ === 'function'
         ) {
-          facts.identityOk = false;
+          // Pre-provenance authoritative stored IDs: stamp then re-check.
+          try {
+            stampReviewPdfProvenanceIfMissing_(
+              file,
+              cycleId,
+              entry.documentType
+            );
+            provenanceOk = reviewPdfProvenanceMatches_(
+              typeof file.getDescription === 'function'
+                ? file.getDescription()
+                : '',
+              cycleId,
+              entry.documentType
+            );
+            facts.identityOk = provenanceOk;
+          } catch (stampError) {
+            facts.identityOk = false;
+          }
         }
       } catch (error) {
         facts.exists = false;
