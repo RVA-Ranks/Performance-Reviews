@@ -1,5 +1,19 @@
 # V3.1 Changelog
 
+## Live review handoff + Google Meet
+
+- `releaseReviewSignatures` commits durable release and returns a compact live
+  state immediately; Manager Signature opens without `refreshApplication`.
+- Signature request emails accelerate via
+  `accelerateSignatureReleaseNotifications` (durable outbox) off the UI path.
+- `getLiveReviewState` provides a tiny authorized poll DTO (no compensation,
+  answers, PDFs, or Drive).
+- Client polls Meeting / Awaiting Signatures with non-overlapping `setTimeout`,
+  backs off when hidden, and auto-opens Employee Signatures on release (with
+  dirty-draft protection).
+- Sidebar Meeting Tools → Google Meet (`https://meet.google.com/`, new tab).
+  No Calendar architecture changes.
+
 ## Finalization recovery closure
 
 - Manager/Self PDF generation failures now use the CAF classification model:

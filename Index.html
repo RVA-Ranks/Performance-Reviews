@@ -184,6 +184,15 @@
 
     .nav-button:hover { background: rgba(255,255,255,.10); color: #fff; }
     .nav-button.active { background: #fff; color: var(--brand-dark); }
+    a.nav-button {
+      text-decoration: none;
+      box-sizing: border-box;
+    }
+    a.nav-button .nav-external {
+      margin-left: auto;
+      font-size: 12px;
+      opacity: .75;
+    }
     .nav-icon {
       width: 22px;
       display: inline-grid;
@@ -642,6 +651,17 @@
     }
     .privacy-banner, .info-banner { color: var(--info); background: var(--info-soft); border-color: #c8dff3; }
     .warning-banner { color: var(--warning); background: var(--warning-soft); border-color: #efd79d; }
+    .live-release-banner {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .live-release-banner .button-row { margin: 0; }
     .success-banner { color: var(--success); background: var(--success-soft); border-color: #bfe4cf; }
     .error-banner { color: var(--danger); background: var(--danger-soft); border-color: #efc6c6; }
 
@@ -1474,6 +1494,17 @@
         <button id="adminNavButton" class="nav-button hidden" data-view="admin" onclick="navigate('admin')"><span class="nav-icon">⚙</span><span>Administration</span></button>
       </nav>
 
+      <div class="nav-section-label">Meeting Tools</div>
+      <nav>
+        <a
+          class="nav-button meet-link"
+          href="https://meet.google.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open Google Meet in a new tab"
+        ><span class="nav-icon">▣</span><span>Google Meet</span><span class="nav-external" aria-hidden="true">↗</span></a>
+      </nav>
+
       <div class="sidebar-footer">
         <div class="sidebar-user">
           <div id="sidebarAvatar" class="avatar">AU</div>
@@ -1577,6 +1608,14 @@ let clientRequestSeq = 0;
 let adminHeavyDataLoaded = false;
 let appLoadingMessageTimer = null;
 let appLoadingStartedAt = 0;
+let liveReviewPollTimer = null;
+let liveReviewPollInFlight = false;
+let liveReviewPollGeneration = 0;
+let liveReviewRequestToken = 0;
+let liveReleaseBannerVisible = false;
+let defaultDocumentTitle = 'AITHERAS Performance Reviews';
+const LIVE_REVIEW_POLL_VISIBLE_MS = 2500;
+const LIVE_REVIEW_POLL_HIDDEN_MS = 9000;
 
 const editorState = {
   manager: createEditorState(),
@@ -1597,9 +1636,12 @@ function createEditorState() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+  defaultDocumentTitle = document.title || defaultDocumentTitle;
   window.addEventListener('online', handleOnlineStatus);
   window.addEventListener('offline', handleOnlineStatus);
   window.addEventListener('beforeunload', handleBeforeUnload);
+  document.addEventListener('visibilitychange', handleLiveReviewVisibilityChange_);
+  window.addEventListener('pagehide', stopLiveReviewPolling_);
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
       closeNotifications();
@@ -1793,12 +1835,17 @@ function renderUserChrome() {
 }
 
 function navigate(view) {
+  if (view !== 'cycle') {
+    stopLiveReviewPolling_();
+    liveReleaseBannerVisible = false;
+    restoreDocumentTitle_();
+    currentCycle = null;
+  }
   currentView = view;
-  currentCycle = view === 'cycle' ? currentCycle : null;
   document.querySelectorAll('.app-view').forEach(function(section) {
     section.classList.toggle('hidden', section.id !== view + 'View');
   });
-  document.querySelectorAll('.nav-button').forEach(function(button) {
+  document.querySelectorAll('.nav-button[data-view]').forEach(function(button) {
     button.classList.toggle('active', button.dataset.view === view);
   });
 
@@ -3477,9 +3524,12 @@ function openCycle(cycle, action) {
   initializeMeetingDraft(cycle);
   preferredCycleAction = action || (cycle.primaryAction && cycle.primaryAction.key) || 'overview';
   currentCycleTab = actionToTab(preferredCycleAction, cycle);
+  liveReleaseBannerVisible = false;
+  restoreDocumentTitle_();
   renderCycleWorkspace();
   navigate('cycle');
   setTopbar(cycle.employeeName + ' — ' + cycle.reviewType, humanStatus(cycle.status));
+  startLiveReviewPolling_();
 
   if (preferredCycleAction === 'compensation' && !cycle.historicalPreviousReview) {
     setTimeout(function() {
@@ -3503,6 +3553,9 @@ function renderCycleWorkspace() {
       (cycle.sameReviewType === false ? ' · Different review type' : '') +
       '</div>'
     : '';
+  const liveBanner = liveReleaseBannerVisible
+    ? '<div class="warning-banner live-release-banner" role="status"><div><strong>Signatures have been released.</strong><br>You have unsaved text still visible on this screen. Copy anything you need before continuing.</div><div class="button-row"><button type="button" class="button primary" onclick="openSignaturesAfterLiveRelease_()">Open Signatures</button></div></div>'
+    : '';
   const backLabel = cycle.historicalPreviousReview
     ? '‹ Back to current review'
     : '‹ Back to reviews';
@@ -3511,7 +3564,7 @@ function renderCycleWorkspace() {
     : 'navigate(\'reviews\')';
   document.getElementById('cycleView').innerHTML =
     '<div class="cycle-hero"><div class="cycle-hero-top"><div><button class="breadcrumb-button" onclick="' + backAction + '">' + backLabel + '</button><h1>' + escapeHtml(cycle.employeeName) + ' — ' + escapeHtml(cycle.reviewType) + '</h1><p>' + escapeHtml(cycle.employeeJobTitle || '') + ' · ' + escapeHtml(cycle.departmentProject || '') + ' · Meeting ' + escapeHtml(cycle.reviewMeetingDate || '') + '</p></div>' +
-    '<div class="cycle-hero-actions button-row">' + statusPill(cycle.status) + renderCycleHeaderActions(cycle) + '</div></div>' + historicalBanner + (cycle.lifecycle ? renderTimeline(cycle.lifecycle) : '') + '</div>' +
+    '<div class="cycle-hero-actions button-row">' + statusPill(cycle.status) + renderCycleHeaderActions(cycle) + '</div></div>' + historicalBanner + liveBanner + (cycle.lifecycle ? renderTimeline(cycle.lifecycle) : '') + '</div>' +
     (cycle.historicalPreviousReview ? '' : renderSignatureRecoveryWarning(cycle)) +
     '<div class="cycle-tabs">' + tabs.map(function(tab) { return '<button class="cycle-tab ' + (tab.key === currentCycleTab ? 'active' : '') + '" onclick="activateCycleTab(\'' + tab.key + '\')">' + escapeHtml(tab.label) + (tab.attention ? '<span class="tab-dot"></span>' : '') + '</button>'; }).join('') + '</div>' +
     '<div id="cycleTabContent"></div>';
@@ -5161,6 +5214,273 @@ function openReleaseModal() {
   });
 }
 
+function restoreDocumentTitle_() {
+  if (document.title.indexOf('Signature Ready') === 0) {
+    document.title = defaultDocumentTitle;
+  }
+}
+
+function shouldPollLiveReview_() {
+  if (!currentCycle || currentView !== 'cycle') return false;
+  if (currentCycle.historicalPreviousReview) return false;
+  const status = String(currentCycle.status || '');
+  return (
+    status === 'Review Meeting Open' || status === 'Awaiting Signatures'
+  );
+}
+
+function stopLiveReviewPolling_() {
+  liveReviewPollGeneration += 1;
+  liveReviewPollInFlight = false;
+  liveReviewRequestToken += 1;
+  if (liveReviewPollTimer) {
+    clearTimeout(liveReviewPollTimer);
+    liveReviewPollTimer = null;
+  }
+}
+
+function startLiveReviewPolling_() {
+  stopLiveReviewPolling_();
+  if (!shouldPollLiveReview_()) return;
+  scheduleNextLiveReviewPoll_();
+}
+
+function handleLiveReviewVisibilityChange_() {
+  if (!shouldPollLiveReview_()) return;
+  if (liveReviewPollTimer) {
+    clearTimeout(liveReviewPollTimer);
+    liveReviewPollTimer = null;
+  }
+  scheduleNextLiveReviewPoll_();
+}
+
+function scheduleNextLiveReviewPoll_() {
+  if (liveReviewPollTimer) {
+    clearTimeout(liveReviewPollTimer);
+    liveReviewPollTimer = null;
+  }
+  if (!shouldPollLiveReview_()) return;
+  const gen = liveReviewPollGeneration;
+  const delay = document.hidden
+    ? LIVE_REVIEW_POLL_HIDDEN_MS
+    : LIVE_REVIEW_POLL_VISIBLE_MS;
+  liveReviewPollTimer = setTimeout(function() {
+    if (gen !== liveReviewPollGeneration) return;
+    pollLiveReviewState_();
+  }, delay);
+}
+
+async function pollLiveReviewState_() {
+  if (liveReviewPollInFlight) {
+    scheduleNextLiveReviewPoll_();
+    return;
+  }
+  if (!shouldPollLiveReview_()) return;
+
+  liveReviewPollInFlight = true;
+  const cycleId = currentCycle.cycleId;
+  const gen = liveReviewPollGeneration;
+  const token = ++liveReviewRequestToken;
+
+  try {
+    const live = await server('getLiveReviewState', cycleId);
+    if (gen !== liveReviewPollGeneration) return;
+    if (token !== liveReviewRequestToken) return;
+    if (!currentCycle || String(currentCycle.cycleId) !== String(cycleId)) return;
+    applyLiveReviewState_(live);
+  } catch (error) {
+    // Quiet on poll failures; release/signing remain available offline of poll.
+  } finally {
+    liveReviewPollInFlight = false;
+    if (gen === liveReviewPollGeneration) {
+      scheduleNextLiveReviewPoll_();
+    }
+  }
+}
+
+function patchCycleFromLiveState_(live) {
+  if (!currentCycle || !live) return;
+  if (String(live.cycleId) !== String(currentCycle.cycleId)) return;
+
+  currentCycle.status = live.status || currentCycle.status;
+  if (typeof live.signaturesReleasedAt !== 'undefined') {
+    currentCycle.signaturesReleasedAt = live.signaturesReleasedAt;
+  }
+  if (live.updatedAtIso) currentCycle.updatedAtIso = live.updatedAtIso;
+  if (live.signatureState) {
+    currentCycle.signatureState = live.signatureState;
+  }
+  if (live.signatureTasks) {
+    currentCycle.signatureTasks = live.signatureTasks;
+  }
+  if (String(live.status) === 'Awaiting Signatures') {
+    currentCycle.canReleaseSignatures = false;
+    currentCycle.canEditManagerMeeting = false;
+    currentCycle.canEditEmployeeMeeting = false;
+  }
+  if (live.signatureTaskReady) {
+    currentCycle.actionKey = 'signature';
+  }
+  if (String(live.status) === 'Finalizing' || String(live.status) === 'Complete') {
+    stopLiveReviewPolling_();
+  }
+
+  // Keep Home/Reviews list badges roughly in sync when the cycle is visible there.
+  if (state && Array.isArray(state.cycles)) {
+    state.cycles.forEach(function(row) {
+      if (String(row.cycleId) !== String(live.cycleId)) return;
+      row.status = live.status || row.status;
+      if (live.signatureState) row.signatureState = live.signatureState;
+      if (typeof live.signaturesReleasedAt !== 'undefined') {
+        row.signaturesReleasedAt = live.signaturesReleasedAt;
+      }
+      if (live.signatureTaskReady) {
+        row.actionKey = 'signature';
+      }
+    });
+    try {
+      updateSignatureNavCount_();
+    } catch (error) {
+      // Optional UI sync.
+    }
+  }
+}
+
+function updateSignatureNavCount_() {
+  const badge = document.getElementById('signatureNavCount');
+  if (!badge || !state || !Array.isArray(state.cycles)) return;
+  const count = state.cycles.filter(function(cycle) {
+    return cycle.actionKey === 'signature';
+  }).length;
+  badge.textContent = String(count);
+  badge.classList.toggle('hidden', !count);
+}
+
+function applyReleaseLiveState_(live) {
+  if (!currentCycle || !live) return;
+  patchCycleFromLiveState_(live);
+  liveReleaseBannerVisible = false;
+  meetingDirty = false;
+  currentCycleTab = 'signatures';
+  preferredCycleAction = 'signatures';
+  restoreDocumentTitle_();
+  renderCycleWorkspace();
+  setTopbar(
+    currentCycle.employeeName + ' — ' + currentCycle.reviewType,
+    humanStatus(currentCycle.status)
+  );
+  startLiveReviewPolling_();
+}
+
+function refreshLiveSignatureStatusDisplay_() {
+  const stateSig = (currentCycle && currentCycle.signatureState) || {};
+  const rows = document.querySelectorAll('[data-live-sig-role]');
+  if (!rows || !rows.length) return false;
+  rows.forEach(function(row) {
+    const role = row.getAttribute('data-live-sig-role');
+    let label = 'Pending';
+    let tone = '';
+    if (role === 'Manager') {
+      label = stateSig.managerSigned ? 'Signed' : 'Pending';
+    } else if (role === 'Employee') {
+      label = stateSig.employeeSigned ? 'Signed' : 'Pending';
+    } else if (role === 'HR') {
+      label = stateSig.hrSigned
+        ? 'Signed'
+        : stateSig.managerSigned && stateSig.employeeSigned
+          ? 'Ready to sign'
+          : 'Waiting for participants';
+    }
+    if (label === 'Signed') tone = 'green';
+    else if (label === 'Ready to sign') tone = 'amber';
+    row.innerHTML = statusPill(label, tone);
+  });
+  return true;
+}
+
+function applyLiveReviewState_(live) {
+  if (!currentCycle || !live) return;
+  if (String(live.cycleId) !== String(currentCycle.cycleId)) return;
+
+  const previousStatus = String(currentCycle.status || '');
+  const previousReleased = String(currentCycle.signaturesReleasedAt || '');
+  const previousSig = JSON.stringify(currentCycle.signatureState || {});
+  patchCycleFromLiveState_(live);
+
+  const releasedTransition =
+    (previousStatus === 'Review Meeting Open' &&
+      String(live.status) === 'Awaiting Signatures') ||
+    (!previousReleased && !!live.signaturesReleasedAt);
+
+  if (releasedTransition) {
+    handleEmployeeSignatureReleaseDetection_(live);
+  } else if (currentCycleTab === 'signatures') {
+    const pad = signaturePads.packetSignature;
+    const padBusy = pad && pad.isEmpty === false;
+    if (padBusy) {
+      refreshLiveSignatureStatusDisplay_();
+    } else if (previousSig !== JSON.stringify(currentCycle.signatureState || {})) {
+      if (!refreshLiveSignatureStatusDisplay_()) {
+        renderActiveCycleTab();
+      }
+    }
+  } else {
+    const pillHost = document.querySelector('.cycle-hero-actions');
+    if (pillHost) {
+      const actions = renderCycleHeaderActions(currentCycle);
+      pillHost.innerHTML = statusPill(currentCycle.status) + actions;
+    }
+  }
+
+  if (
+    String(live.status) === 'Finalizing' ||
+    String(live.status) === 'Complete' ||
+    String(live.status) === 'Cancelled'
+  ) {
+    stopLiveReviewPolling_();
+  }
+}
+
+function handleEmployeeSignatureReleaseDetection_(live) {
+  const isEmployee = !!(currentCycle && currentCycle.isEmployee);
+  if (!isEmployee) {
+    if (currentCycleTab === 'signatures') renderActiveCycleTab();
+    return;
+  }
+
+  if (document.hidden) {
+    document.title = 'Signature Ready — AITHERAS Review';
+  }
+
+  if (meetingDirty) {
+    liveReleaseBannerVisible = true;
+    renderCycleWorkspace();
+    showToast(
+      'info',
+      'Signatures are ready',
+      'The review meeting has been finalized. Open Signatures when you are ready.'
+    );
+    return;
+  }
+
+  liveReleaseBannerVisible = false;
+  showToast(
+    'success',
+    'Signatures are ready',
+    'The review meeting has been finalized. Please review the acknowledgement and sign when ready.'
+  );
+  // One-time targeted cycle load so signature pads / acknowledgement hydrate.
+  // Not a Home bootstrap; not used for polling.
+  loadCycle(currentCycle.cycleId, 'signatures');
+}
+
+function openSignaturesAfterLiveRelease_() {
+  liveReleaseBannerVisible = false;
+  restoreDocumentTitle_();
+  if (!currentCycle) return;
+  loadCycle(currentCycle.cycleId, 'signatures');
+}
+
 async function releaseSignatures() {
   closeModal();
   try {
@@ -5171,10 +5491,19 @@ async function releaseSignatures() {
       localStorage.removeItem(meetingStorageKey());
     }
     const result = await server('releaseReviewSignatures', currentCycle.cycleId);
-    showToast('success','Review packet released',result.message);
-    await refreshApplication(currentCycle.cycleId,'signatures');
+    showToast('success', 'Review packet released', result.message || 'Signatures are ready.');
+    applyReleaseLiveState_(result);
+    // Durable emails — fire and forget; do not block Signature UI.
+    server('accelerateSignatureReleaseNotifications', currentCycle.cycleId).catch(function(error) {
+      showToast(
+        'warning',
+        'Signature emails',
+        'Release succeeded. Signature emails will retry via the durable outbox. ' +
+          errorMessage(error)
+      );
+    });
   } catch (error) {
-    showToast('error','Could not release review packet',errorMessage(error));
+    showToast('error', 'Could not release review packet', errorMessage(error));
   }
 }
 
@@ -5183,7 +5512,16 @@ function renderSignaturesTab(target) {
   const stateSig = cycle.signatureState || {};
   const tasks = cycle.signatureTasks || [];
   const statusRows = [
-    ['Manager', stateSig.managerSigned ? 'Signed' : 'Pending'], ['Employee', stateSig.employeeSigned ? 'Signed' : 'Pending'], ['HR', stateSig.hrSigned ? 'Signed' : (stateSig.managerSigned && stateSig.employeeSigned ? 'Ready to sign' : 'Waiting for participants')]
+    ['Manager', stateSig.managerSigned ? 'Signed' : 'Pending'],
+    ['Employee', stateSig.employeeSigned ? 'Signed' : 'Pending'],
+    [
+      'HR',
+      stateSig.hrSigned
+        ? 'Signed'
+        : stateSig.managerSigned && stateSig.employeeSigned
+          ? 'Ready to sign'
+          : 'Waiting for participants'
+    ]
   ];
   const ack =
     cycle.isEmployee &&
@@ -5237,7 +5575,9 @@ function renderSignaturesTab(target) {
         return (
           '<div class="summary-label">' +
           row[0] +
-          '</div><div>' +
+          '</div><div data-live-sig-role="' +
+          escapeAttr(row[0]) +
+          '">' +
           statusPill(
             row[1],
             row[1] === 'Signed'

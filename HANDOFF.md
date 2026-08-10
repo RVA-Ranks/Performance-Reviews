@@ -5,7 +5,15 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
-## Active work — Finalization recovery closure
+## Active work — Live review handoff
+
+Branch: `feat/live-review-handoff` (from frozen finalization tip `58a5d98`)  
+Backup: `backup/pre-live-review-handoff`
+
+Finalization/recovery remains frozen at 99%. This branch adds instant signature
+handoff, lightweight live polling, and a Google Meet sidebar shortcut only.
+
+## Active work — Finalization recovery closure (frozen 99%)
 
 Branch: `fix/finalization-recovery-closure` (from `perf/application-responsiveness`)  
 Backup: `backup/pre-finalization-recovery-closure`
@@ -13,9 +21,9 @@ Backup: `backup/pre-finalization-recovery-closure`
 Closes Finalizing “purgatory”: Manager/Self PDF Failed vs Delivery Unknown
 classification (CAF model), structured partial `retryReviewFinalization`
 results, UI `finally` refresh, System Health compensation blockers, review PDF
-provenance. **Do not** resume live-signature / Meet polish until Coach clears
-this gate. Preserve live failed-cycle Sheet/Drive evidence before hand-editing
-statuses. Performance web-app manager evidence remains a separate open item.
+provenance. **Do not** redesign finalization while live-handoff is in flight.
+Preserve live failed-cycle Sheet/Drive evidence before hand-editing statuses.
+Performance web-app manager evidence remains a separate open item.
 
 ## Previous Review Context (post-v3.1 — separate branch)
 
