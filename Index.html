@@ -1573,6 +1573,10 @@ let deepLinkConsumed = false;
 let previousReviewContext = null;
 let previousReviewContextCycleId = '';
 let previousReviewContextLoading = false;
+let clientRequestSeq = 0;
+let adminHeavyDataLoaded = false;
+let appLoadingMessageTimer = null;
+let appLoadingStartedAt = 0;
 
 const editorState = {
   manager: createEditorState(),
@@ -1626,6 +1630,26 @@ function showAppLoading_(options) {
   if (!overlay) return;
   overlay.classList.remove('hidden');
   updateAppLoading_(opts);
+  if (appLoadingDepth === 1) {
+    appLoadingStartedAt = Date.now();
+    if (appLoadingMessageTimer) clearInterval(appLoadingMessageTimer);
+    if (!opts.stages || !opts.stages.length) {
+      appLoadingMessageTimer = setInterval(function() {
+        const elapsed = Date.now() - appLoadingStartedAt;
+        if (elapsed >= 8000) {
+          updateAppLoading_({
+            title: opts.title || 'Still working',
+            message: 'This is taking longer than usual. The request is still processing. Please don’t submit this action again.'
+          });
+        } else if (elapsed >= 2000) {
+          updateAppLoading_({
+            title: opts.title || 'Loading',
+            message: opts.slowMessage || 'Loading the latest review information…'
+          });
+        }
+      }, 500);
+    }
+  }
 }
 
 function updateAppLoading_(options) {
@@ -1660,6 +1684,10 @@ function updateAppLoading_(options) {
 function hideAppLoading_() {
   appLoadingDepth = Math.max(0, appLoadingDepth - 1);
   if (appLoadingDepth > 0) return;
+  if (appLoadingMessageTimer) {
+    clearInterval(appLoadingMessageTimer);
+    appLoadingMessageTimer = null;
+  }
   const overlay = document.getElementById('appLoadingOverlay');
   if (overlay) overlay.classList.add('hidden');
   const actions = document.getElementById('appLoadingActions');
@@ -1689,17 +1717,41 @@ function withAppLoading_(options, work) {
     });
 }
 
+function clientPerfLog_(label, durationMs, details) {
+  if (!(state && state.perfDiagnostics)) return;
+  try {
+    console.log(JSON.stringify({
+      type: 'PERF',
+      label: label,
+      durationMs: Math.round(durationMs),
+      details: details || {}
+    }));
+  } catch (error) {}
+}
+
 async function refreshApplication(cycleId, action) {
-  showBootScreen();
+  const requestId = ++clientRequestSeq;
+  const started = performance.now();
+  const alreadyBooted = !!(state && document.getElementById('appShell') &&
+    !document.getElementById('appShell').classList.contains('hidden'));
+  if (!alreadyBooted) showBootScreen();
   try {
     const data = await withAppLoading_({
-      title: 'Loading Review',
-      message: 'Retrieving the latest review information…'
+      title: alreadyBooted ? 'Refreshing' : 'Opening AITHERAS',
+      message: alreadyBooted ? 'Updating your workspace…' : 'Loading your workspace…',
+      slowMessage: 'Loading the latest review information…'
     }, function() {
       return server('getReviewBootstrapData', cycleId || '');
     });
+    if (requestId !== clientRequestSeq) return;
+    const renderStarted = performance.now();
     renderApplication(data, action || '');
+    clientPerfLog_('client renderApplication', performance.now() - renderStarted);
+    clientPerfLog_('client refreshApplication', performance.now() - started, {
+      cycleCount: (data.cycles || []).length
+    });
   } catch (error) {
+    if (requestId !== clientRequestSeq) return;
     forceHideAppLoading_();
     showFatalError(error);
   }
@@ -1707,12 +1759,13 @@ async function refreshApplication(cycleId, action) {
 
 function renderApplication(data, action) {
   state = data;
+  adminHeavyDataLoaded = false;
   autosaveDelayMs = Math.max(Number(data.autosaveDelaySeconds || 5), 2) * 1000;
   document.getElementById('bootScreen').classList.add('hidden');
   document.getElementById('appShell').classList.remove('hidden');
 
   renderUserChrome();
-  renderAdminView();
+  renderAdminView(false);
   renderDashboard();
   renderReviewsView();
   renderSignaturesView();
@@ -1762,6 +1815,9 @@ function navigate(view) {
   if (view !== 'cycle') document.getElementById('saveIndicator').classList.add('hidden');
   closeSidebar();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (view === 'admin') {
+    ensureAdminHeavyDataLoaded_();
+  }
 }
 
 function setTopbar(title, subtitle) {
@@ -2011,7 +2067,7 @@ function maybeShowWelcomeGuide() {
   });
 }
 
-function renderAdminView() {
+function renderAdminView(loadHeavyData) {
   if (!state || !state.isHr) {
     document.getElementById('adminView').innerHTML = '';
     return;
@@ -2024,7 +2080,9 @@ function renderAdminView() {
   document.getElementById('adminView').innerHTML =
     '<div class="page-header"><div><h1>Administration</h1><p>Monitor review automation, system health, recovery items, and compensation decisions.</p></div></div>' +
     '<div id="systemHealthPanel">' + renderSystemHealthPanel(health) + '</div>' +
-    '<div id="compensationQueuePanel"><div class="card"><div class="card-header"><div><h2>Compensation Queue</h2><p>Review manager compensation recommendations, record owner decisions, and monitor finalized pay updates.</p></div><button class="button outline" onclick="refreshCompensationQueue()">Refresh Queue</button></div><div id="compensationQueueBody"><div class="field-help">Loading compensation queue…</div></div></div></div>' +
+    '<div id="compensationQueuePanel"><div class="card"><div class="card-header"><div><h2>Compensation Queue</h2><p>Review manager compensation recommendations, record owner decisions, and monitor finalized pay updates.</p></div><button class="button outline" onclick="refreshCompensationQueue()">Refresh Queue</button></div><div id="compensationQueueBody"><div class="field-help">' +
+    (loadHeavyData ? 'Loading compensation queue…' : 'Open Administration to load the compensation queue.') +
+    '</div></div></div></div>' +
     renderAutomationPanel(automation) +
     '<div id="systemAlertsPanel">' + renderSystemAlertsPanel((state.v31 && state.v31.systemAlerts) || (health && health.alerts) || null) + '</div>' +
     '<div class="card"><div class="card-header"><div><h2>Create Review Cycle Manually</h2><p>This sends the full launch package: HR notice, manager instructions, employee instructions, and one shared calendar event.</p></div></div>' +
@@ -2049,6 +2107,18 @@ function renderAdminView() {
     '</div>';
 
   populateAssignments();
+  if (loadHeavyData) {
+    ensureAdminHeavyDataLoaded_();
+  }
+}
+
+function ensureAdminHeavyDataLoaded_() {
+  if (!state || !state.isHr || adminHeavyDataLoaded) return;
+  adminHeavyDataLoaded = true;
+  const queueBody = document.getElementById('compensationQueueBody');
+  if (queueBody && /Open Administration/.test(queueBody.textContent || '')) {
+    queueBody.innerHTML = '<div class="field-help">Loading compensation queue…</div>';
+  }
   refreshSystemHealth(false);
   refreshCompensationQueue();
 }
@@ -3086,7 +3156,7 @@ async function saveAutomationSettings(event) {
     state.v31.compensationAdjustmentUrl = result.automation.compensationAdjustmentUrl;
     state.v31.compensationDecisionRequired = result.automation.compensationDecisionRequired;
     showToast(result.partial ? 'warning' : result.ok ? 'success' : 'error', 'Automation settings saved', result.message);
-    renderAdminView();
+    renderAdminView(currentView === 'admin');
   } catch (error) {
     showToast('error', 'Could not save settings', errorMessage(error));
     setButtonBusy(button, false, 'Save Automation Settings');
@@ -3125,7 +3195,7 @@ async function changeAutomationMode(mode) {
     const result = await server('setReviewAutomationMode', mode);
     state.v31.automation = result.automation;
     showToast(result.partial ? 'warning' : result.ok ? (mode === 'Live' ? 'success' : 'warning') : 'error', 'Automation updated', result.message);
-    renderAdminView();
+    renderAdminView(currentView === 'admin');
   } catch (error) {
     showToast('error', 'Could not update automation', errorMessage(error));
   }
@@ -3135,7 +3205,7 @@ async function refreshTriggerHealth() {
   try {
     const result = await server('refreshReviewAutomationHealth');
     state.v31.automation.triggerHealth = result.triggerHealth;
-    renderAdminView();
+    renderAdminView(currentView === 'admin');
     showToast(
       result.triggerHealth.healthy ? 'success' : 'warning',
       'Trigger health refreshed',
@@ -3247,19 +3317,23 @@ function openCycleFromSummary(cycleId, action) {
 }
 
 async function loadCycle(cycleId, action) {
+  const requestId = ++clientRequestSeq;
   preferredCycleAction = action || 'overview';
   currentView = 'cycle';
   showCycleSkeleton();
   navigate('cycle');
   try {
     const result = await withAppLoading_({
-      title: 'Loading Review',
-      message: 'Retrieving the latest review information…'
+      title: 'Opening Review',
+      message: 'Opening review…',
+      slowMessage: 'Loading the latest review information…'
     }, function() {
       return server('getReviewCycle', cycleId);
     });
+    if (requestId !== clientRequestSeq) return;
     openCycle(result.cycle, action || 'overview');
   } catch (error) {
+    if (requestId !== clientRequestSeq) return;
     forceHideAppLoading_();
     renderCycleError(error, cycleId, action);
   }

@@ -1,5 +1,22 @@
 # V3.1 Changelog
 
+## Performance & responsiveness (interactive paths)
+
+- Added `V31_Performance.gs` with optional PERF logging
+  (`ENABLE_PERFORMANCE_DIAGNOSTICS`, default off) and request-scoped Sheet /
+  CompensationRecords caches.
+- Manager/Employee Home no longer runs `ensureV31DataModel_` on every
+  bootstrap; schema ensure remains on upgrade/setup/mutations.
+- Cycle lists load CompensationRecords once per request (not once per cycle).
+- Home cycle summaries use a lighter `summaryOnly` V31 DTO; full compensation /
+  guidance / HR recovery blocks load when a cycle is opened.
+- HR System Health and Compensation Queue load only when Administration is
+  opened, not on every app paint.
+- Loading overlay: staged slow-path messaging, stale-response protection on
+  bootstrap/open-cycle, keep shell visible on refresh when already booted.
+- Profile template: `PERFORMANCE_PROFILE.md`. Tests:
+  `runV31PerformanceTests_()`.
+
 ## Meeting compensation placement + scoring regressions
 
 - Compensation Decision details now render on the **Meeting** tab immediately

@@ -266,12 +266,14 @@ The current V3.1 package contains:
 | File | Purpose |
 |---|---|
 | `Code.gs` | Main server-side review workflow, data access, permissions, PDFs, signatures, autosave, and general email logic |
+| `V31_Performance.gs` | Interactive PERF diagnostics + request-scoped Sheet/Compensation caches |
 | `V31_Automation.gs` | Hire-date automation, Calendar events, automation settings, compensation task, guidance, and automation logging |
 | `Index.html` | Entire client application: HTML, CSS, navigation, dashboards, editors, notifications, autosave UX, meeting UX, signatures, help center, and administration |
 | `appsscript.json` | Apps Script manifest and OAuth scopes |
 | `README.md` | V3.1 installation and operational overview |
 | `V31_TEST_PLAN.md` | Test checklist for automation and workflow |
 | `CHANGELOG.md` | Version history |
+| `PERFORMANCE_PROFILE.md` | Interactive latency BEFORE/AFTER profile and capture instructions |
 | `AUTOMATION_WORKFLOW.md` | Summary of scheduling and automation behavior |
 | `RATING_SCALE.txt` | Approved 1–7 rating definitions |
 

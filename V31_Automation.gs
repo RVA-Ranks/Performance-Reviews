@@ -349,6 +349,7 @@ function ensureConfirmedAdminSettings_() {
 }
 
 function ensureV31DataModel_() {
+  const timer = perfStart_('ensureV31DataModel');
   const ss = getSpreadsheet_();
   const settingsSheet = ss.getSheetByName(PR.SHEETS.SETTINGS);
   const assignments = ss.getSheetByName(PR.SHEETS.ASSIGNMENTS);
@@ -448,6 +449,7 @@ function ensureV31DataModel_() {
 
   formatSingleSheet_(log);
   protectV31Sheet_(log);
+  perfEnd_(timer);
 }
 
 function validateSignatureRecoveryFolder_(
@@ -457,6 +459,7 @@ function validateSignatureRecoveryFolder_(
 ) {
   let folder;
   try {
+    perfCountDriveCall_('getFolderById');
     folder = DriveApp.getFolderById(String(folderId || ''));
   } catch (error) {
     throw new Error(
@@ -1143,7 +1146,8 @@ function protectV31Sheet_(sheet, description) {
 /* ============================= BOOTSTRAP ================================= */
 
 function getV31BootstrapData_(email, isHr) {
-  ensureV31DataModel_();
+  // Do not run ensureV31DataModel_ on interactive bootstrap.
+  // Schema/migrate belongs to upgrade/setup/admin/mutations.
 
   const settings = getSettings_();
   const normalized = normalizeEmail_(email);
@@ -1180,7 +1184,9 @@ function getV31BootstrapData_(email, isHr) {
   };
 }
 
-function getV31CycleData_(cycle, email, isHr) {
+function getV31CycleData_(cycle, email, isHr, options) {
+  options = options || {};
+  const summaryOnly = !!options.summaryOnly;
   const settings = getSettings_();
   const isManager =
     normalizeEmail_(cycle['Manager Email']) ===
@@ -1198,9 +1204,10 @@ function getV31CycleData_(cycle, email, isHr) {
     cycle['Compensation Decision']
   );
   const compensationComplete = isV31CompensationComplete_(cycle);
-  const compensationRecord = findCompensationRecordByCycleOptional_(
-    cycle['Cycle ID']
-  );
+  const compensationByCycleId =
+    options.compensationByCycleId || getCompensationRecordsByCycleId_();
+  const compensationRecord =
+    compensationByCycleId[String(cycle['Cycle ID'] || '')] || null;
 
   const meetingDate = v31Date_(
     cycle['Review Meeting Date']
@@ -1249,9 +1256,10 @@ function getV31CycleData_(cycle, email, isHr) {
       ? Number(cycle['Launch Attempt Count'] || 0)
       : 0,
     launchComplete: isReviewLaunchComplete_(cycle),
-    launchComponents: isHr
-      ? getReviewLaunchComponentSummary_(cycle)
-      : null,
+    launchComponents:
+      isHr && !summaryOnly
+        ? getReviewLaunchComponentSummary_(cycle)
+        : null,
     launchHasUnknownDelivery: isHr
       ? getReviewLaunchComponentSummary_(cycle).hasUnknown
       : false,
@@ -1263,16 +1271,19 @@ function getV31CycleData_(cycle, email, isHr) {
           'Calendar event missing or inaccessible:'
         ) === 0
       : false,
-    finalization: isHr
-      ? getFinalizationSummary_(cycle)
-      : null,
+    finalization:
+      isHr && !summaryOnly
+        ? getFinalizationSummary_(cycle)
+        : null,
     needsFinalizationRetry:
       isHr &&
       String(cycle['Status']) === PR.CYCLE.FINALIZING,
-    notifications: isHr
-      ? getWorkflowNotificationSummary_(cycle)
-      : null,
-    signatureClaims: isHr
+    notifications:
+      isHr && !summaryOnly
+        ? getWorkflowNotificationSummary_(cycle)
+        : null,
+    signatureClaims:
+      isHr && !summaryOnly
       ? {
           manager: String(
             cycle['Manager Signature Status'] || ''
@@ -1427,7 +1438,9 @@ function getV31CycleData_(cycle, email, isHr) {
       (isManager || isHr) &&
       String(cycle['Status']) !== PR.CYCLE.COMPLETE,
     compensationRecord:
-      (isManager || isHr) && compensationRecord
+      !summaryOnly &&
+      (isManager || isHr) &&
+      compensationRecord
         ? (function () {
             const view = toCompensationRecordView_(
               compensationRecord.object,
@@ -1443,19 +1456,22 @@ function getV31CycleData_(cycle, email, isHr) {
             return view;
           })()
         : null,
-    employeeCompensationAcknowledgement: isEmployee
-      ? getEmployeeCompensationAcknowledgement_(cycle)
-      : null,
+    employeeCompensationAcknowledgement:
+      !summaryOnly && isEmployee
+        ? getEmployeeCompensationAcknowledgement_(cycle)
+        : null,
     compensationAdjustmentUrl: '',
 
-    guidance: buildV31Guidance_(
-      cycle,
-      email,
-      isHr,
-      isManager,
-      isEmployee,
-      compensationComplete
-    ),
+    guidance: summaryOnly
+      ? []
+      : buildV31Guidance_(
+          cycle,
+          email,
+          isHr,
+          isManager,
+          isEmployee,
+          compensationComplete
+        ),
   };
 }
 

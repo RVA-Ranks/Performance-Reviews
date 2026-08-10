@@ -306,35 +306,15 @@ function getAssignmentPayRate_(employeeEmail) {
   return { found: false, rate: null };
 }
 
-function findCompensationRecordByCycle_(cycleId) {
-  const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
-  if (!sheet) {
-    throw new Error('CompensationRecords sheet is missing.');
-  }
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) {
-    throw new Error('Compensation record not found.');
-  }
-  const headers = values[0].map(String);
-  const cycleIndex = headers.indexOf('Review Cycle ID');
-  for (let row = 1; row < values.length; row++) {
-    if (String(values[row][cycleIndex]) === String(cycleId)) {
-      const object = {};
-      headers.forEach(function (header, index) {
-        object[header] = values[row][index];
-      });
-      return { rowNumber: row + 1, object: object };
-    }
-  }
-  throw new Error('Compensation record not found.');
+function findCompensationRecordByCycleOptional_(cycleId) {
+  const map = getCompensationRecordsByCycleId_();
+  return map[String(cycleId || '')] || null;
 }
 
-function findCompensationRecordByCycleOptional_(cycleId) {
-  try {
-    return findCompensationRecordByCycle_(cycleId);
-  } catch (error) {
-    return null;
-  }
+function findCompensationRecordByCycle_(cycleId) {
+  const found = findCompensationRecordByCycleOptional_(cycleId);
+  if (found) return found;
+  throw new Error('Compensation record not found.');
 }
 
 function writeCompensationRecord_(rowNumber, object) {

@@ -359,43 +359,96 @@ function doGet(e) {
 /* ============================= BOOTSTRAP ================================= */
 
 function getReviewBootstrapData(initialCycleId) {
-  const email = getCurrentUserEmail_();
-  const settings = getSettings_();
+  perfBeginRequest_('managerBootstrap');
+  const total = perfStart_('bootstrap total');
+  try {
+    const authTimer = perfStart_('auth');
+    const email = getCurrentUserEmail_();
+    const settings = getSettings_();
+    assertDomain_(email, settings.ALLOWED_DOMAIN);
+    const isHr = isHrUser_(email);
+    perfEnd_(authTimer, { isHr: isHr });
 
-  assertDomain_(email, settings.ALLOWED_DOMAIN);
+    const profileTimer = perfStart_('userProfile');
+    const user = getUserProfile_(email, isHr);
+    perfEnd_(profileTimer);
 
-  const isHr = isHrUser_(email);
-  const cycles = listVisibleCycles_(email, isHr);
+    const cyclesTimer = perfStart_('cycles');
+    const cycles = listVisibleCycles_(email, isHr);
+    perfEnd_(cyclesTimer, { cycleCount: cycles.length });
 
-  return {
-    appVersion: APP_VERSION,
-    environment: String(settings.ENVIRONMENT || 'Production'),
-    currentUserEmail: email,
-    isHr: isHr,
-    user: getUserProfile_(email, isHr),
-    appName: settings.APP_NAME,
-    autosaveDelaySeconds:
-      Math.max(Number(settings.AUTOSAVE_DELAY_SECONDS || 5), 2),
-    factors: PR.FACTORS,
-    ratings: PR.RATINGS,
-    assignments: isHr ? getActiveAssignments_() : [],
-    cycles: cycles,
-    v31: getV31BootstrapData_(email, isHr),
-    selectedCycle: initialCycleId
-      ? getCycleView_(initialCycleId, email, isHr)
-      : null,
-  };
+    const assignTimer = perfStart_('assignments');
+    const assignments = isHr ? getActiveAssignments_() : [];
+    perfEnd_(assignTimer, { assignmentCount: assignments.length });
+
+    const v31Timer = perfStart_('v31Bootstrap');
+    const v31 = getV31BootstrapData_(email, isHr);
+    perfEnd_(v31Timer);
+
+    let selectedCycle = null;
+    if (initialCycleId) {
+      const selectedTimer = perfStart_('selectedCycle');
+      selectedCycle = getCycleView_(initialCycleId, email, isHr);
+      perfEnd_(selectedTimer);
+    }
+
+    const payload = {
+      appVersion: APP_VERSION,
+      environment: String(settings.ENVIRONMENT || 'Production'),
+      currentUserEmail: email,
+      isHr: isHr,
+      user: user,
+      appName: settings.APP_NAME,
+      autosaveDelaySeconds:
+        Math.max(Number(settings.AUTOSAVE_DELAY_SECONDS || 5), 2),
+      factors: PR.FACTORS,
+      ratings: PR.RATINGS,
+      assignments: assignments,
+      cycles: cycles,
+      v31: v31,
+      selectedCycle: selectedCycle,
+      perfDiagnostics: isPerfDiagnosticsEnabled_(),
+    };
+
+    const serializeTimer = perfStart_('serialization');
+    perfLogPayloadBytes_('bootstrap', payload);
+    perfEnd_(serializeTimer);
+    perfEnd_(total, {
+      cycleCount: cycles.length,
+      isHr: isHr,
+    });
+    const req = perfGetRequest_();
+    perfEndRequest_({
+      cycleCount: cycles.length,
+      isHr: isHr,
+      sheetReads: req ? req.sheetReads : null,
+      driveCalls: req ? req.driveCalls : null,
+    });
+    return payload;
+  } catch (error) {
+    perfEndRequest_({ error: String(error.message || error) });
+    throw error;
+  }
 }
 
 function getReviewCycle(cycleId) {
-  const email = getCurrentUserEmail_();
-  const settings = getSettings_();
-
-  assertDomain_(email, settings.ALLOWED_DOMAIN);
-
-  return {
-    cycle: getCycleView_(cycleId, email, isHrUser_(email)),
-  };
+  perfBeginRequest_('openReview');
+  const total = perfStart_('openReview total');
+  try {
+    const email = getCurrentUserEmail_();
+    const settings = getSettings_();
+    assertDomain_(email, settings.ALLOWED_DOMAIN);
+    const isHr = isHrUser_(email);
+    const cycle = getCycleView_(cycleId, email, isHr);
+    const payload = { cycle: cycle };
+    perfLogPayloadBytes_('openReview', payload);
+    perfEnd_(total);
+    perfEndRequest_();
+    return payload;
+  } catch (error) {
+    perfEndRequest_({ error: String(error.message || error) });
+    throw error;
+  }
 }
 
 /* ============================= CYCLE CRUD ================================ */
@@ -2127,7 +2180,10 @@ function getSignatureTasks_(cycle, email) {
 /* ============================= VIEW MODELS =============================== */
 
 function listVisibleCycles_(email, isHr) {
-  return getAllObjects_(PR.SHEETS.CYCLES)
+  const enrichmentTimer = perfStart_('review summaries');
+  // One CompensationRecords scan for the whole list (not once per cycle).
+  const compensationByCycleId = getCompensationRecordsByCycleId_();
+  const rows = getAllObjects_(PR.SHEETS.CYCLES)
     .filter(function (cycle) {
       return (
         isHr ||
@@ -2206,7 +2262,10 @@ function listVisibleCycles_(email, isHr) {
         actionLabel: action.label,
         actionTone: action.tone,
         actionRequired: action.required,
-        v31: getV31CycleData_(cycle, email, isHr),
+        v31: getV31CycleData_(cycle, email, isHr, {
+          compensationByCycleId: compensationByCycleId,
+          summaryOnly: true,
+        }),
         updatedAt: formatDateTime_(cycle['Updated At']),
         updatedAtIso: toIsoString_(cycle['Updated At']),
       };
@@ -2214,6 +2273,8 @@ function listVisibleCycles_(email, isHr) {
     .sort(function (a, b) {
       return new Date(b.updatedAtIso) - new Date(a.updatedAtIso);
     });
+  perfEnd_(enrichmentTimer, { cycleCount: rows.length });
+  return rows;
 }
 
 function getCycleView_(cycleId, email, isHr) {
@@ -5611,6 +5672,10 @@ function getReviewPdf(cycleId, documentType) {
 /* ============================= SHEETS ==================================== */
 
 function getSpreadsheet_() {
+  const req = perfGetRequest_();
+  if (req && req.cache.spreadsheet !== undefined) {
+    return req.cache.spreadsheet;
+  }
   const id = PropertiesService.getScriptProperties().getProperty(
     'REVIEW_SPREADSHEET_ID'
   );
@@ -5621,13 +5686,22 @@ function getSpreadsheet_() {
     );
   }
 
-  return SpreadsheetApp.openById(id);
+  const ss = SpreadsheetApp.openById(id);
+  if (req) req.cache.spreadsheet = ss;
+  return ss;
 }
 
 function getSettings_() {
-  return readSettings_(
+  const req = perfGetRequest_();
+  if (req && req.cache.settings !== undefined) {
+    return req.cache.settings;
+  }
+  const settings = readSettings_(
     getSpreadsheet_().getSheetByName(PR.SHEETS.SETTINGS)
   );
+  perfCountSheetRead_(PR.SHEETS.SETTINGS);
+  if (req) req.cache.settings = settings;
+  return settings;
 }
 
 function findCycle_(cycleId) {
@@ -5647,14 +5721,27 @@ function writeCycle_(rowNumber, cycle) {
 }
 
 function getAllObjects_(sheetName) {
+  const req = perfGetRequest_();
+  if (
+    req &&
+    req.cache.sheets &&
+    Object.prototype.hasOwnProperty.call(req.cache.sheets, sheetName)
+  ) {
+    return req.cache.sheets[sheetName];
+  }
+
   const sheet = getSpreadsheet_().getSheetByName(sheetName);
   const values = sheet.getDataRange().getValues();
+  perfCountSheetRead_(sheetName);
 
-  if (values.length < 2) return [];
+  if (values.length < 2) {
+    if (req && req.cache.sheets) req.cache.sheets[sheetName] = [];
+    return [];
+  }
 
   const headers = values[0].map(String);
 
-  return values.slice(1).map(function (row) {
+  const objects = values.slice(1).map(function (row) {
     const object = {};
 
     headers.forEach(function (header, index) {
@@ -5663,25 +5750,18 @@ function getAllObjects_(sheetName) {
 
     return object;
   });
+
+  if (req && req.cache.sheets) req.cache.sheets[sheetName] = objects;
+  return objects;
 }
 
 function findObject_(sheetName, idHeader, idValue) {
-  const sheet = getSpreadsheet_().getSheetByName(sheetName);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0].map(String);
-  const idIndex = headers.indexOf(idHeader);
-
-  for (let row = 1; row < values.length; row++) {
-    if (String(values[row][idIndex]) === String(idValue)) {
-      const object = {};
-
-      headers.forEach(function (header, index) {
-        object[header] = values[row][index];
-      });
-
+  const objects = getAllObjects_(sheetName);
+  for (let i = 0; i < objects.length; i++) {
+    if (String(objects[i][idHeader]) === String(idValue)) {
       return {
-        rowNumber: row + 1,
-        object: object,
+        rowNumber: i + 2,
+        object: objects[i],
       };
     }
   }
@@ -5702,6 +5782,7 @@ function appendObject_(sheetName, requiredHeaders, object) {
         : '';
     })
   );
+  invalidatePerfSheetCache_(sheetName);
 }
 
 function writeObject_(sheetName, rowNumber, object) {
@@ -5717,6 +5798,7 @@ function writeObject_(sheetName, rowNumber, object) {
           : '';
       }),
     ]);
+  invalidatePerfSheetCache_(sheetName);
 }
 
 function audit_(

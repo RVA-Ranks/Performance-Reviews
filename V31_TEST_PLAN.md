@@ -2,6 +2,23 @@
 
 Use fake employee names and AITHERAS test accounts.
 
+## Interactive performance
+
+Branch: `perf/application-responsiveness`. See [`PERFORMANCE_PROFILE.md`](PERFORMANCE_PROFILE.md).
+
+```javascript
+runV31PerformanceTests_();
+```
+
+Live (Preview), five runs each as Manager / Employee / HR:
+
+- [ ] Home cold / warm within targets (warm <2s, cold <5s for Manager)
+- [ ] Open Review / Open Meeting <3s
+- [ ] Click shows loader before server round-trip
+- [ ] Administration System Health / Comp Queue do **not** load until Admin opened
+- [ ] Diagnostics off by default (`ENABLE_PERFORMANCE_DIAGNOSTICS === false`)
+- [ ] Permissions, compensation privacy, CAF, finalization, scoring unchanged
+
 ## Previous Review Context (post-v3.1)
 
 Branch: `feat/previous-review-context` (do not mix into frozen Delivery F RC).
