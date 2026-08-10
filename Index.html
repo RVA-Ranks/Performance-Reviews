@@ -5638,45 +5638,31 @@ async function submitSignature() {
   const stages = [
     { label: 'Validating signature', state: 'active' },
     { label: 'Recording signature', state: 'pending' },
-    { label: 'Updating review documents', state: 'pending' },
-    { label: 'Refreshing review status', state: 'pending' }
+    { label: 'Updating signature status', state: 'pending' }
   ];
   showAppLoading_({
-    title: 'Finalizing Signature',
+    title: 'Recording Signature',
     message: 'Please keep this window open while the signature is recorded.',
     stages: stages
   });
+
+  let result = null;
   try {
     updateAppLoading_({
-      title: 'Finalizing Signature',
+      title: 'Recording Signature',
       message: 'Recording your signature…',
       stages: [
         { label: 'Validating signature', state: 'done' },
         { label: 'Recording signature', state: 'active' },
-        { label: 'Updating review documents', state: 'pending' },
-        { label: 'Refreshing review status', state: 'pending' }
+        { label: 'Updating signature status', state: 'pending' }
       ]
     });
-    const result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature'));
-    updateAppLoading_({
-      title: 'Signature Recorded',
-      message: 'Refreshing the review workspace…',
-      hideSpinner: false,
-      stages: [
-        { label: 'Validating signature', state: 'done' },
-        { label: 'Recording signature', state: 'done' },
-        { label: 'Updating review documents', state: 'done' },
-        { label: 'Refreshing review status', state: 'active' }
-      ]
-    });
-    showToast(result.ok === false || result.partial ? 'warning' : 'success', result.signatureRecorded ? 'Signature recorded' : 'Signature recovery required', result.message);
-    await refreshApplication(currentCycle.cycleId,'signatures');
-    forceHideAppLoading_();
+    result = await server('signReviewCycle', currentCycle.cycleId, croppedSignature('packetSignature'));
   } catch (error) {
     forceHideAppLoading_();
     setButtonBusy(button,false,'Sign Both Review Documents');
     showAppLoading_({
-      title: 'Signature could not be finalized',
+      title: 'Signature could not be recorded',
       message: 'Your review has not been lost. ' + errorMessage(error),
       hideSpinner: true,
       stages: []
@@ -5690,7 +5676,90 @@ async function submitSignature() {
         submitSignature();
       };
     }
+    return;
   }
+
+  if (result && result.recoveryRequired) {
+    forceHideAppLoading_();
+    setButtonBusy(button,false,'Sign Both Review Documents');
+    showToast('warning', 'Signature recovery required', result.message || 'HR must reconcile the preserved signature artifact.');
+    return;
+  }
+
+  if (!(result && result.signatureRecorded)) {
+    forceHideAppLoading_();
+    setButtonBusy(button,false,'Sign Both Review Documents');
+    showToast('error', 'Signature could not be recorded', result && result.message ? result.message : 'Unknown signature result.');
+    return;
+  }
+
+  try {
+    updateAppLoading_({
+      title: 'Signature Recorded',
+      message: 'Updating signature status…',
+      hideSpinner: false,
+      stages: [
+        { label: 'Validating signature', state: 'done' },
+        { label: 'Recording signature', state: 'done' },
+        { label: 'Updating signature status', state: 'active' }
+      ]
+    });
+    applySignatureCommitLiveState_(result);
+    showToast(
+      result.partial ? 'warning' : 'success',
+      'Signature recorded',
+      result.message || 'Signature recorded.'
+    );
+    if (result.accelerateHrNotification) {
+      server('accelerateHrSignatureNotification', currentCycle.cycleId)
+        .then(function(emailResult) {
+          if (emailResult && emailResult.ok === false) {
+            showToast(
+              'warning',
+              'HR notification',
+              'Your signature is recorded. The HR signature notice is still pending and will retry automatically.'
+            );
+          }
+        })
+        .catch(function() {
+          showToast(
+            'warning',
+            'HR notification',
+            'Your signature is recorded. The HR signature notice is still pending and will retry automatically.'
+          );
+        });
+    }
+    if (result.finalization || String(result.status) === 'Finalizing' || String(result.status) === 'Complete') {
+      // One-time targeted cycle hydrate for finalization UI — not a Home bootstrap.
+      loadCycle(currentCycle.cycleId, 'signatures');
+    }
+    forceHideAppLoading_();
+  } catch (uiError) {
+    forceHideAppLoading_();
+    setButtonBusy(button, false, 'Sign Both Review Documents');
+    showToast(
+      'warning',
+      'Signature recorded',
+      'Signature recorded. Status refresh is delayed. ' + errorMessage(uiError)
+    );
+    // Do not offer Try Again for an authoritative commit.
+  }
+}
+
+function applySignatureCommitLiveState_(result) {
+  if (!currentCycle || !result) return;
+  if (result.cycleId && String(result.cycleId) !== String(currentCycle.cycleId)) {
+    return;
+  }
+  patchCycleFromLiveState_(result);
+  currentCycleTab = 'signatures';
+  preferredCycleAction = 'signatures';
+  renderCycleWorkspace();
+  setTopbar(
+    currentCycle.employeeName + ' — ' + currentCycle.reviewType,
+    humanStatus(currentCycle.status)
+  );
+  startLiveReviewPolling_();
 }
 
 function initializeSignaturePad(canvasId) {

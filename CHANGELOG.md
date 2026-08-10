@@ -1,5 +1,17 @@
 # V3.1 Changelog
 
+## Concurrent signature handoff
+
+- Signature artifact creation failures now use attempt-scoped scan classification:
+  0 artifacts + complete search → `Failed` (safe retry); 1 → self-heal/commit;
+  >1 or incomplete search → `Delivery Unknown`.
+- `signReviewCycle` returns compact live signature state; Manager/Employee clients
+  patch local state without `refreshApplication`.
+- UI separates “Signature could not be recorded” from “Signature recorded.
+  Status refresh is delayed.”
+- HR signature-request email accelerates via `accelerateHrSignatureNotification`
+  off the participant critical path.
+
 ## Live review handoff + Google Meet
 
 - `releaseReviewSignatures` commits durable release and returns a compact live

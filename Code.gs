@@ -1220,12 +1220,18 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       );
     }
 
+    // Pending and Failed may claim. Failed is a clean no-artifact outcome.
     const attemptId = Utilities.getUuid();
 
     cycle[fields.statusField] = V31.SIGNATURE.SIGNING;
     cycle[fields.attemptField] = attemptId;
     cycle[fields.startedField] = new Date();
     cycle[fields.errorField] = '';
+    if (currentStatus === V31.SIGNATURE.FAILED) {
+      cycle[fields.recoveryFileField] = '';
+      cycle[fields.recoveryAttemptField] = '';
+      cycle[fields.recoveryDetailsField] = '';
+    }
     cycle['Updated At'] = new Date();
     writeCycle_(location.rowNumber, cycle);
     SpreadsheetApp.flush();
@@ -1247,18 +1253,43 @@ function signReviewCycle(cycleId, signatureDataUrl) {
       cycleId
     );
   } catch (error) {
-    persistSignatureCommitUnknown_(
-      cycleId,
-      claim,
-      artifact,
-      error,
-      {
-        writeReturned: false,
-        flushSucceeded: false,
-        rereadClassification: 'artifact-creation-unconfirmed',
+    if (!(artifact && artifact.fileId)) {
+      const classification = classifySignatureArtifactCreationFailure_(
+        cycleId,
+        claim,
+        error
+      );
+      if (classification.artifact && classification.artifact.fileId) {
+        artifact = classification.artifact;
+      } else if (classification.status === V31.SIGNATURE.FAILED) {
+        persistSignatureCommitFailed_(
+          cycleId,
+          claim,
+          error,
+          classification
+        );
+        throw new Error(
+          claim.role +
+            ' signature Failed with no Drive artifact. Ordinary retry is allowed.'
+        );
+      } else {
+        persistSignatureCommitUnknown_(
+          cycleId,
+          claim,
+          null,
+          error,
+          {
+            writeReturned: false,
+            flushSucceeded: false,
+            rereadClassification:
+              classification.resolution ||
+              'artifact-creation-unconfirmed',
+          }
+        );
+        throw error;
       }
-    );
-    throw error;
+    }
+    // Artifact was created before the throw — continue to winner commit.
   }
 
   let commitResult;
@@ -1383,18 +1414,13 @@ function signReviewCycle(cycleId, signatureDataUrl) {
   );
 
   let notificationWarning = '';
-  if (
+  // HR signature-request email is accelerated off this critical path via
+  // accelerateHrSignatureNotification (durable outbox). Participant success
+  // returns as soon as the authoritative signature is committed.
+  const bothParticipantsSigned =
     commitResult.role !== PR.ROLE.HR &&
     commitResult.updatedState.managerSigned &&
-    commitResult.updatedState.employeeSigned
-  ) {
-    try {
-      sendCombinedSignatureEmail_(cycleId, PR.ROLE.HR);
-    } catch (notificationError) {
-      notificationWarning =
-        'The signature is recorded, but the durable HR signature notification requires retry.';
-    }
-  }
+    commitResult.updatedState.employeeSigned;
 
   if (commitResult.role === PR.ROLE.HR) {
     let compensationPdfResult = null;
@@ -1413,90 +1439,75 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     const finalizeResult =
       attemptFinalizationAfterSignature_(cycleId);
 
-    return {
-      ok: true,
-      partial:
-        !!auditWarning ||
-        !!canonicalWarning ||
-        !!notificationWarning ||
-        !!(compensationPdfResult && compensationPdfResult.error),
-      signatureRecorded: true,
-      outcome: commitResult.outcome,
-      warning: [
-        auditWarning,
-        canonicalWarning,
-        notificationWarning,
-        compensationPdfResult && compensationPdfResult.error
-          ? 'HR signature recorded, but compensation CAF PDF needs recovery: ' +
-            compensationPdfResult.error
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' '),
-      message:
-        finalizeResult.message +
-        ([
-          auditWarning,
-          canonicalWarning,
-          notificationWarning,
-          compensationPdfResult && compensationPdfResult.error
-            ? 'Compensation CAF PDF needs recovery.'
-            : '',
-        ].filter(Boolean).length
-          ? ' ' +
-            [
-              auditWarning,
-              canonicalWarning,
-              notificationWarning,
-              compensationPdfResult && compensationPdfResult.error
-                ? 'Compensation CAF PDF needs recovery.'
-                : '',
-            ]
-              .filter(Boolean)
-              .join(' ')
-          : ''),
-      finalization: finalizeResult,
-      compensationPdf: compensationPdfResult,
-    };
-  }
-
-  return {
-    ok: true,
-    partial:
-      !!auditWarning ||
-      !!canonicalWarning ||
-      !!notificationWarning,
-    signatureRecorded: true,
-    outcome: commitResult.outcome,
-    warning: [
-      auditWarning,
-      canonicalWarning,
-      notificationWarning,
-    ]
-      .filter(Boolean)
-      .join(' '),
-    message:
-      commitResult.role +
-      ' signature recorded for both review documents.' +
-      (commitResult.updatedState.managerSigned &&
-      commitResult.updatedState.employeeSigned
-        ? ' HR has been notified to sign last.'
-        : ' The other participant may now sign from the same review cycle.') +
+    const hrLive = buildParticipantSignatureLiveResult_(
+      cycleId,
+      email,
+      claim.role,
+      commitResult,
+      {
+        auditWarning: auditWarning,
+        canonicalWarning: canonicalWarning,
+        notificationWarning: notificationWarning,
+      }
+    );
+    hrLive.finalization = finalizeResult;
+    hrLive.compensationPdf = compensationPdfResult;
+    hrLive.partial =
+      hrLive.partial ||
+      !!(compensationPdfResult && compensationPdfResult.error) ||
+      !!(finalizeResult && finalizeResult.ok === false);
+    hrLive.message =
+      finalizeResult.message +
       ([
         auditWarning,
         canonicalWarning,
         notificationWarning,
+        compensationPdfResult && compensationPdfResult.error
+          ? 'Compensation CAF PDF needs recovery.'
+          : '',
       ].filter(Boolean).length
         ? ' ' +
           [
             auditWarning,
             canonicalWarning,
             notificationWarning,
+            compensationPdfResult && compensationPdfResult.error
+              ? 'Compensation CAF PDF needs recovery.'
+              : '',
           ]
             .filter(Boolean)
             .join(' ')
-        : ''),
-  };
+        : '');
+    return hrLive;
+  }
+
+  const live = buildParticipantSignatureLiveResult_(
+    cycleId,
+    email,
+    claim.role,
+    commitResult,
+    {
+      auditWarning: auditWarning,
+      canonicalWarning: canonicalWarning,
+      notificationWarning: notificationWarning,
+    }
+  );
+  live.accelerateHrNotification = bothParticipantsSigned;
+  live.message =
+    commitResult.role +
+    ' signature recorded for both review documents.' +
+    (bothParticipantsSigned
+      ? ' HR can now sign last.'
+      : ' The other participant may now sign from the same review cycle.') +
+    ([auditWarning, canonicalWarning, notificationWarning].filter(
+      Boolean
+    ).length
+      ? ' ' +
+        [auditWarning, canonicalWarning, notificationWarning]
+          .filter(Boolean)
+          .join(' ')
+      : '');
+  return live;
 }
 
 function commitSignatureWinner_(cycleId, claim, artifact) {
@@ -1781,6 +1792,272 @@ function classifySignatureCommitAfterFailure_(
     recovery: recovery,
     commitError: String(error.message || error),
   };
+}
+
+/**
+ * Compact post-sign live state for Manager/Employee/HR clients.
+ * Reuses live-review DTO shape so polling can reconcile the other browser.
+ */
+function buildParticipantSignatureLiveResult_(
+  cycleId,
+  email,
+  role,
+  commitResult,
+  warnings
+) {
+  const warn = warnings || {};
+  const cycle =
+    commitResult.cycle || findCycle_(cycleId).object;
+  let viewerRole = '';
+  try {
+    viewerRole = assertLiveReviewAccess_(cycle, email);
+  } catch (accessError) {
+    viewerRole = String(role || '');
+  }
+  const live = buildLiveReviewStatePayload_(
+    cycle,
+    email,
+    viewerRole
+  );
+  return {
+    ok: true,
+    signatureRecorded: true,
+    role: String(role || ''),
+    outcome: commitResult.outcome,
+    cycleId: live.cycleId,
+    status: live.status,
+    signaturesReleasedAt: live.signaturesReleasedAt,
+    updatedAtIso: live.updatedAtIso,
+    signatureState: live.signatureState,
+    signatureTaskReady: live.signatureTaskReady,
+    signatureTasks: live.signatureTasks,
+    viewerRole: live.viewerRole,
+    partial: !!(
+      warn.auditWarning ||
+      warn.canonicalWarning ||
+      warn.notificationWarning
+    ),
+    warning: [
+      warn.auditWarning,
+      warn.canonicalWarning,
+      warn.notificationWarning,
+    ]
+      .filter(Boolean)
+      .join(' '),
+    message: '',
+  };
+}
+
+/**
+ * Exact attempt-scoped signature artifact search (no silent truncation).
+ */
+function collectSignatureAttemptArtifactsDetailed_(
+  cycleId,
+  role,
+  attemptId
+) {
+  const settings = getSettings_();
+  const fileName = buildSignatureAttemptFileName_(
+    cycleId,
+    role,
+    attemptId
+  );
+  const folderIds = [
+    String(settings.REVIEW_FOLDER_ID || ''),
+    String(settings.SIGNATURE_RECOVERY_FOLDER_ID || ''),
+  ].filter(Boolean);
+  const matches = [];
+  const seen = {};
+  let complete = true;
+  let error = null;
+
+  folderIds.forEach(function (folderId) {
+    try {
+      const folder = DriveApp.getFolderById(folderId);
+      const files = folder.getFilesByName(fileName);
+      while (files.hasNext()) {
+        const file = files.next();
+        try {
+          assertValidSignatureAttemptFile_(
+            file,
+            cycleId,
+            role,
+            attemptId,
+            folderId
+          );
+          const id = String(file.getId());
+          if (!seen[id]) {
+            seen[id] = true;
+            matches.push({
+              fileId: id,
+              fileName: fileName,
+              role: role,
+              attemptId: attemptId,
+              origin: 'recovered',
+              createdByCurrentAttempt: false,
+              recoveredCandidate: true,
+              folderId: folderId,
+            });
+          }
+        } catch (rejectError) {
+          // Soft reject invalid peers.
+        }
+      }
+    } catch (folderError) {
+      complete = false;
+      error = String(folderError.message || folderError);
+    }
+  });
+
+  return {
+    matches: matches,
+    complete: complete,
+    error: error,
+  };
+}
+
+/**
+ * Classify saveSignature_ failures: Failed (retryable) vs Unknown vs recover.
+ */
+function classifySignatureArtifactCreationFailure_(
+  cycleId,
+  claim,
+  generationError
+) {
+  let scan;
+  try {
+    scan = collectSignatureAttemptArtifactsDetailed_(
+      cycleId,
+      claim.role,
+      claim.attemptId
+    );
+  } catch (scanError) {
+    return classifySignatureAttemptScanResult_(
+      {
+        matches: [],
+        complete: false,
+        error: String(scanError.message || scanError),
+      },
+      generationError
+    );
+  }
+  return classifySignatureAttemptScanResult_(scan, generationError);
+}
+
+/**
+ * Pure helper: classify an exact-attempt artifact scan after creation error.
+ */
+function classifySignatureAttemptScanResult_(scan, generationError) {
+  const result = scan || {};
+  if (!result.complete || result.error) {
+    return {
+      status: V31.SIGNATURE.UNKNOWN,
+      resolution: result.error
+        ? 'recovery-search-failed'
+        : 'incomplete-search',
+      artifact: null,
+      clearClaim: false,
+      error:
+        result.error ||
+        'Signature artifact search incomplete.',
+    };
+  }
+
+  const matches = result.matches || [];
+  if (matches.length === 1) {
+    return {
+      status: V31.SIGNATURE.SIGNED,
+      resolution: 'post-creation-self-heal',
+      artifact: matches[0],
+      clearClaim: false,
+      error: '',
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      status: V31.SIGNATURE.UNKNOWN,
+      resolution: 'ambiguous',
+      artifact: null,
+      clearClaim: false,
+      error: String(
+        (generationError &&
+          (generationError.message || generationError)) ||
+          'Multiple signature attempt artifacts exist.'
+      ),
+    };
+  }
+
+  return {
+    status: V31.SIGNATURE.FAILED,
+    resolution: 'generation-failed-no-artifact',
+    artifact: null,
+    clearClaim: true,
+    error: String(
+      (generationError &&
+        (generationError.message || generationError)) ||
+        'Signature artifact was not created.'
+    ),
+  };
+}
+
+function persistSignatureCommitFailed_(
+  cycleId,
+  claim,
+  error,
+  classification
+) {
+  const details = {
+    schemaVersion: 1,
+    outcome: 'Failed',
+    resolution:
+      (classification && classification.resolution) ||
+      'generation-failed-no-artifact',
+    attemptId: claim.attemptId,
+    error: String(error.message || error),
+    recoveryRecommendation:
+      'Ordinary retry is allowed. No Drive artifact was found for this attempt.',
+  };
+
+  withLock_(function () {
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const fields = claim.fields;
+    const currentAttempt = String(cycle[fields.attemptField] || '');
+    if (
+      currentAttempt &&
+      currentAttempt !== String(claim.attemptId)
+    ) {
+      details.persistenceSkipped =
+        'A different active signature claim is authoritative.';
+      return;
+    }
+    if (
+      String(cycle[fields.statusField] || '') ===
+        V31.SIGNATURE.SIGNED ||
+      String(cycle[fields.fileField] || '')
+    ) {
+      details.persistenceSkipped =
+        'Signature already recorded; Failed classification skipped.';
+      return;
+    }
+    cycle[fields.statusField] = V31.SIGNATURE.FAILED;
+    cycle[fields.fileField] = '';
+    cycle[fields.signedAtField] = '';
+    cycle[fields.winningAttemptField] = '';
+    cycle[fields.attemptField] = '';
+    cycle[fields.startedField] = '';
+    cycle[fields.errorField] = details.error;
+    cycle[fields.recoveryFileField] = '';
+    cycle[fields.recoveryAttemptField] = '';
+    cycle[fields.recoveryDetailsField] = JSON.stringify(details);
+    cycle[fields.recoveryRecordedAtField] = new Date();
+    cycle['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, cycle);
+    SpreadsheetApp.flush();
+  });
+
+  return details;
 }
 
 function persistSignatureCommitUnknown_(

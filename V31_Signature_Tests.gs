@@ -267,8 +267,61 @@ function runV31SignatureTests_() {
       name: 'True concurrent identical and different submissions',
       severity: 'Blocking',
       skip: true,
-      skipMessage: 'Requires Daniel Sandbox',
+      skipMessage:
+        'Requires Daniel Sandbox live two-account evidence on fix/concurrent-signature-handoff',
     },
+    sigCase_('Zero attempt artifacts classify as Failed retryable', function () {
+      const classified = classifySignatureAttemptScanResult_(
+        { matches: [], complete: true, error: null },
+        new Error('createFile failed')
+      );
+      assertSig_(
+        classified.status === V31.SIGNATURE.FAILED,
+        'Clean zero-artifact failure must be Failed'
+      );
+      assertSig_(
+        classified.clearClaim === true,
+        'Failed must clear claim for ordinary retry'
+      );
+    }),
+    sigCase_('Exactly one attempt artifact self-heals', function () {
+      const classified = classifySignatureAttemptScanResult_(
+        {
+          matches: [{ fileId: 'sig-1', attemptId: 'a1' }],
+          complete: true,
+          error: null,
+        },
+        new Error('persist died')
+      );
+      assertSig_(
+        classified.artifact && classified.artifact.fileId === 'sig-1',
+        'Single candidate must be adopted'
+      );
+    }),
+    sigCase_('Multiple attempt artifacts are Delivery Unknown', function () {
+      const classified = classifySignatureAttemptScanResult_(
+        {
+          matches: [{ fileId: 'a' }, { fileId: 'b' }],
+          complete: true,
+          error: null,
+        },
+        new Error('ambiguous')
+      );
+      assertSig_(
+        classified.status === V31.SIGNATURE.UNKNOWN,
+        'Ambiguous artifacts must be Unknown'
+      );
+    }),
+    sigCase_('Incomplete attempt search is Delivery Unknown not Failed', function () {
+      const classified = classifySignatureAttemptScanResult_(
+        { matches: [], complete: false, error: 'Drive down' },
+        new Error('create failed')
+      );
+      assertSig_(
+        classified.status === V31.SIGNATURE.UNKNOWN,
+        'Incomplete search must not be Failed'
+      );
+    }),
     {
       name: 'Audit failure after authoritative signature commit',
       severity: 'Blocking',

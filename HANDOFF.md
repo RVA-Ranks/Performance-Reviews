@@ -5,6 +5,17 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Active work — Concurrent signature handoff
+
+Branch: `fix/concurrent-signature-handoff` (from `feat/live-review-handoff` @ `323ac03`)  
+Backup: `backup/pre-concurrent-signature-handoff`
+
+Makes simultaneous Manager + Employee signing retry-safe: Failed vs Unknown
+artifact classification, compact post-sign live state (no full bootstrap),
+separated sign vs refresh errors, HR notification off the critical path.
+Preserve failed-cycle Sheet/Drive evidence before resetting. Finalization and
+compensation remain frozen.
+
 ## Active work — Live review handoff
 
 Branch: `feat/live-review-handoff` (from frozen finalization tip `58a5d98`)  

@@ -134,6 +134,61 @@ function accelerateSignatureReleaseNotifications(cycleId) {
 }
 
 /**
+ * Accelerate HR signature-request email after both participants have signed.
+ * Must never roll back participant signatures.
+ */
+function accelerateHrSignatureNotification(cycleId) {
+  const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
+
+  const id = String(cycleId || '').trim();
+  if (!id) {
+    throw new Error('Cycle ID is required.');
+  }
+
+  const cycle = findCycle_(id).object;
+  assertLiveReviewAccess_(cycle, email);
+
+  if (String(cycle['Status'] || '') !== PR.CYCLE.SIGNATURES) {
+    throw new Error(
+      'HR signature notification can only be accelerated while Awaiting Signatures.'
+    );
+  }
+
+  const state = getCombinedSignatureState_(cycle);
+  if (!state.managerSigned || !state.employeeSigned) {
+    throw new Error(
+      'HR signature notification requires both manager and employee signatures.'
+    );
+  }
+  if (state.hrSigned) {
+    return {
+      ok: true,
+      skipped: true,
+      cycleId: id,
+      message: 'HR has already signed; notification skipped.',
+    };
+  }
+
+  try {
+    sendCombinedSignatureEmail_(id, PR.ROLE.HR);
+    return {
+      ok: true,
+      cycleId: id,
+      message: 'HR signature notification accelerated.',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      cycleId: id,
+      message:
+        'HR signature notification is pending retry through the durable outbox.',
+      error: String(error.message || error),
+    };
+  }
+}
+
+/**
  * Pure policy helpers mirrored by Index.html client behavior.
  */
 function shouldRestoreLiveReviewDocumentTitle_(isDocumentHidden) {
