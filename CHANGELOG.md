@@ -1,5 +1,25 @@
 # V3.1 Changelog
 
+## Lifecycle transactional closure
+
+- `releaseReviewSignatures` is idempotent: `Awaiting Signatures` /
+  Finalizing / Complete returns current live state (`alreadyReleased`) and
+  never re-clears signature fields on retry.
+- `startReviewMeeting` is idempotent (`alreadyOpen`) when the meeting is
+  already open or the cycle has progressed past Meeting.
+- Post-commit `audit_()` failures no longer overturn a successful business
+  write on create / submit / start meeting / save meeting / release. Audit
+  failure returns `auditWarning` and raises a System Health alert outside
+  the cycle lock.
+- Meeting notes seal on first release (`sealedAt` / `sealedBy`). Later
+  `saveMeetingOutcomes` returns `alreadySealed` instead of a hard failure.
+- Live release detection opens Signatures for Manager, Employee, and HR.
+  Release client errors reconcile via `getLiveReviewState` before offering
+  another mutation. Release UX shows an in-flight guard.
+- Live poll in-flight ownership no longer clears mid-request; resume after
+  supersede is explicit.
+- Tests: `runV31LifecycleTests_()`.
+
 ## Concurrent signature handoff
 
 - Signature artifact creation failures now use attempt-scoped scan classification:

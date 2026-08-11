@@ -5,6 +5,19 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Active work — Lifecycle transactional closure
+
+Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
+Backup: `backup/pre-lifecycle-transactional-closure`
+
+Closes Coach P0–P3 blockers from the Meeting Open + Release error:
+idempotent `releaseReviewSignatures` / `startReviewMeeting`, post-commit
+audit non-fatal contract, Manager/Employee/HR live release convergence,
+client reconcile after release error, meeting-note seal on release.
+Preserve finalization, compensation architecture, Attempt-ID signing, and
+live-poll performance work. Run `runV31LifecycleTests_()` in Apps Script.
+Stop for Coach after SHA delivery — no new feature work.
+
 ## Active work — Concurrent signature handoff
 
 Branch: `fix/concurrent-signature-handoff` (from `feat/live-review-handoff` @ `323ac03`)  

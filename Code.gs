@@ -557,7 +557,7 @@ function createReviewCycle(payload) {
       created
     );
 
-    audit_(
+    const auditResult = tryAuditAfterCommit_(
       cycleId,
       'Review cycle created',
       email,
@@ -569,15 +569,26 @@ function createReviewCycle(payload) {
       })
     );
 
-    return created;
+    return {
+      cycle: created,
+      auditWarning: auditResult.ok ? '' : auditResult.warning,
+    };
   });
+
+  if (row.auditWarning) {
+    raisePostCommitAuditAlert_(
+      cycleId,
+      'Review cycle created',
+      row.auditWarning
+    );
+  }
 
   // After the row is committed, never present creation as a total failure.
   let launchError = '';
-  let launched = row;
+  let launched = row.cycle;
 
   try {
-    launched = launchReviewCycleCommunications_(row, false);
+    launched = launchReviewCycleCommunications_(row.cycle, false);
   } catch (error) {
     launchError = String(error.message || error);
     launched = findCycle_(cycleId).object;
@@ -595,6 +606,7 @@ function createReviewCycle(payload) {
       : 'Review created, but launch requires attention.' +
         (launchError ? ' ' + launchError : ' ' + describeReviewLaunchStatus_(launched)),
     launchComponents: getReviewLaunchComponentSummary_(launched),
+    auditWarning: row.auditWarning || '',
   };
 }
 
@@ -756,8 +768,9 @@ function saveIndependentReview_(
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
 
+    let auditWarning = '';
     if (source !== 'autosave') {
-      audit_(
+      const auditResult = tryAuditAfterCommit_(
         cycleId,
         type +
           (submit ? ' submitted and sealed' : ' draft saved'),
@@ -766,6 +779,9 @@ function saveIndependentReview_(
         newStatus,
         ''
       );
+      if (!auditResult.ok) {
+        auditWarning = auditResult.warning;
+      }
     }
 
     return {
@@ -780,8 +796,17 @@ function saveIndependentReview_(
         : type + ' draft saved.',
       notifyReady:
         submit && String(cycle['Status']) === PR.CYCLE.READY,
+      auditWarning: auditWarning,
     };
   });
+
+  if (saved.auditWarning) {
+    raisePostCommitAuditAlert_(
+      cycleId,
+      type + (submit ? ' submitted and sealed' : ' draft saved'),
+      saved.auditWarning
+    );
+  }
 
   if (saved.notifyReady) {
     deliverWorkflowNotification_(
@@ -812,6 +837,7 @@ function saveIndependentReview_(
     savedAt: saved.savedAt,
     savedAtIso: saved.savedAtIso,
     message: saved.message,
+    auditWarning: saved.auditWarning || '',
     compensationDecisionRequired:
       type === PR.TYPE.MANAGER &&
       !!submit &&
@@ -831,8 +857,53 @@ function saveIndependentReview_(
   };
 }
 
+/**
+ * Pure planner for startReviewMeeting — testable without Sheets I/O.
+ * Returns action: open | alreadyOpen | reject.
+ */
+function planStartReviewMeeting_(cycle) {
+  const status = String((cycle && cycle['Status']) || '');
+  const openedAt = cycle && cycle['Meeting Opened At'];
+  const hasOpenedMarker =
+    openedAt !== '' &&
+    openedAt !== null &&
+    typeof openedAt !== 'undefined';
+
+  if (status === PR.CYCLE.MEETING && hasOpenedMarker) {
+    return {
+      action: 'alreadyOpen',
+      message:
+        'The review meeting is already open. Both reviews are visible to the manager and employee.',
+    };
+  }
+
+  if (
+    status === PR.CYCLE.SIGNATURES ||
+    status === PR.CYCLE.FINALIZING ||
+    status === PR.CYCLE.COMPLETE
+  ) {
+    return {
+      action: 'alreadyOpen',
+      message:
+        'The review meeting was already opened. The cycle has progressed past the meeting stage.',
+    };
+  }
+
+  if (status !== PR.CYCLE.READY) {
+    return {
+      action: 'reject',
+      message:
+        'Both reviews must be submitted before the meeting can be opened.',
+    };
+  }
+
+  return { action: 'open' };
+}
+
 function startReviewMeeting(cycleId) {
   const email = getCurrentUserEmail_();
+  let auditWarning = '';
+  let alreadyOpen = false;
   const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
     const stored = location.object;
@@ -847,10 +918,13 @@ function startReviewMeeting(cycleId) {
       );
     }
 
-    if (String(stored['Status']) !== PR.CYCLE.READY) {
-      throw new Error(
-        'Both reviews must be submitted before the meeting can be opened.'
-      );
+    const plan = planStartReviewMeeting_(stored);
+    if (plan.action === 'alreadyOpen') {
+      alreadyOpen = true;
+      return stored;
+    }
+    if (plan.action === 'reject') {
+      throw new Error(plan.message);
     }
 
     if (!isV31CompensationComplete_(stored)) {
@@ -866,7 +940,7 @@ function startReviewMeeting(cycleId) {
 
     writeCycle_(location.rowNumber, stored);
 
-    audit_(
+    const auditResult = tryAuditAfterCommit_(
       cycleId,
       'Review meeting opened',
       email,
@@ -874,17 +948,34 @@ function startReviewMeeting(cycleId) {
       PR.CYCLE.MEETING,
       ''
     );
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
 
     return stored;
   });
 
-  sendMeetingOpenedEmails_(cycleId);
-  dispatchPendingWorkflowNotifications_(cycleId);
+  if (auditWarning) {
+    raisePostCommitAuditAlert_(
+      cycleId,
+      'Review meeting opened',
+      auditWarning
+    );
+  }
+
+  if (!alreadyOpen) {
+    sendMeetingOpenedEmails_(cycleId);
+    dispatchPendingWorkflowNotifications_(cycleId);
+  }
 
   return {
     ok: true,
-    message:
-      'The meeting is open. Both reviews are now visible to the manager and employee.',
+    alreadyOpen: alreadyOpen,
+    status: String(cycle['Status'] || ''),
+    message: alreadyOpen
+      ? 'The review meeting is already open. Both reviews are visible to the manager and employee.'
+      : 'The meeting is open. Both reviews are now visible to the manager and employee.',
+    auditWarning: auditWarning || '',
   };
 }
 
@@ -896,17 +987,51 @@ function autosaveMeetingOutcomes(cycleId, payload) {
   return saveMeetingOutcomes_(cycleId, payload, true);
 }
 
+function sealMeetingJsonOnRelease_(cycle, actorEmail, sealedAt) {
+  const meeting = parseJson_(
+    cycle['Meeting JSON'],
+    emptyMeeting_()
+  );
+  if (!meeting.sealedAt) {
+    const when =
+      sealedAt instanceof Date
+        ? sealedAt
+        : new Date(sealedAt || Date.now());
+    meeting.sealedAt = isNaN(when.getTime())
+      ? new Date().toISOString()
+      : when.toISOString();
+    meeting.sealedBy = normalizeEmail_(actorEmail);
+  }
+  cycle['Meeting JSON'] = JSON.stringify(meeting);
+  return meeting;
+}
+
+function meetingNotesAlreadySealedResponse_(cycle) {
+  const meeting = parseJson_(
+    cycle['Meeting JSON'],
+    emptyMeeting_()
+  );
+  const savedAtIso = String(
+    meeting.lastSavedAt || meeting.sealedAt || ''
+  );
+  return {
+    ok: true,
+    alreadySealed: true,
+    sealed: true,
+    savedAt: savedAtIso ? formatDateTime_(new Date(savedAtIso)) : '',
+    savedAtIso: savedAtIso,
+    message:
+      'Meeting notes are sealed because signatures were released. Unsaved draft text on this device was not applied.',
+  };
+}
+
 function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
-  return withLock_(function () {
+  let auditWarning = '';
+  const result = withLock_(function () {
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
     const cycle = location.object;
-
-    if (String(cycle['Status']) !== PR.CYCLE.MEETING) {
-      throw new Error(
-        'Meeting outcomes may only be edited while the review meeting is open.'
-      );
-    }
+    const status = String(cycle['Status'] || '');
 
     const isHr = isHrUser_(email);
     const isManager =
@@ -918,10 +1043,27 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
       throw new Error('You are not authorized to update this cycle.');
     }
 
+    if (status !== PR.CYCLE.MEETING) {
+      if (
+        status === PR.CYCLE.SIGNATURES ||
+        status === PR.CYCLE.FINALIZING ||
+        status === PR.CYCLE.COMPLETE
+      ) {
+        return meetingNotesAlreadySealedResponse_(cycle);
+      }
+      throw new Error(
+        'Meeting outcomes may only be edited while the review meeting is open.'
+      );
+    }
+
     const meeting = parseJson_(
       cycle['Meeting JSON'],
       emptyMeeting_()
     );
+
+    if (meeting.sealedAt) {
+      return meetingNotesAlreadySealedResponse_(cycle);
+    }
 
     if (isHr || isManager) {
       meeting.managerFinalComments = cleanText_(
@@ -947,7 +1089,7 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
     writeCycle_(location.rowNumber, cycle);
 
     if (!isAutosave) {
-      audit_(
+      const auditResult = tryAuditAfterCommit_(
         cycleId,
         'Meeting outcomes updated',
         email,
@@ -955,21 +1097,82 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
         PR.CYCLE.MEETING,
         ''
       );
+      if (!auditResult.ok) {
+        auditWarning = auditResult.warning;
+      }
     }
 
     return {
       ok: true,
+      alreadySealed: false,
       savedAt: formatDateTime_(now),
       savedAtIso: now.toISOString(),
       message: isAutosave
         ? 'Meeting notes autosaved.'
         : 'Meeting outcomes saved.',
+      auditWarning: '',
     };
   });
+
+  if (auditWarning) {
+    raisePostCommitAuditAlert_(
+      cycleId,
+      'Meeting outcomes updated',
+      auditWarning
+    );
+    result.auditWarning = auditWarning;
+  }
+
+  return result;
+}
+
+/**
+ * Pure planner for releaseReviewSignatures — testable without Sheets I/O.
+ * Returns action: release | alreadyReleased | returnCurrent | reject.
+ */
+function planReleaseReviewSignatures_(cycle) {
+  const status = String((cycle && cycle['Status']) || '');
+  const releasedAt = cycle && cycle['Signatures Released At'];
+  const hasReleasedMarker =
+    releasedAt !== '' &&
+    releasedAt !== null &&
+    typeof releasedAt !== 'undefined';
+
+  if (status === PR.CYCLE.SIGNATURES) {
+    return {
+      action: 'alreadyReleased',
+      message:
+        'Signatures were already released. The manager and employee may each sign once, in either order. HR will sign last.',
+      hasReleasedMarker: hasReleasedMarker,
+    };
+  }
+
+  if (
+    status === PR.CYCLE.FINALIZING ||
+    status === PR.CYCLE.COMPLETE
+  ) {
+    return {
+      action: 'returnCurrent',
+      message:
+        'This review has already progressed past signature release.',
+    };
+  }
+
+  if (status !== PR.CYCLE.MEETING) {
+    return {
+      action: 'reject',
+      message:
+        'The review meeting must be open before signatures are released.',
+    };
+  }
+
+  return { action: 'release' };
 }
 
 function releaseReviewSignatures(cycleId) {
   const email = getCurrentUserEmail_();
+  let auditWarning = '';
+  let alreadyReleased = false;
   const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
     const stored = location.object;
@@ -984,10 +1187,16 @@ function releaseReviewSignatures(cycleId) {
       );
     }
 
-    if (String(stored['Status']) !== PR.CYCLE.MEETING) {
-      throw new Error(
-        'The review meeting must be open before signatures are released.'
-      );
+    const plan = planReleaseReviewSignatures_(stored);
+    if (
+      plan.action === 'alreadyReleased' ||
+      plan.action === 'returnCurrent'
+    ) {
+      alreadyReleased = true;
+      return stored;
+    }
+    if (plan.action === 'reject') {
+      throw new Error(plan.message);
     }
 
     if (!isV31CompensationComplete_(stored)) {
@@ -996,7 +1205,9 @@ function releaseReviewSignatures(cycleId) {
       );
     }
 
+    // First successful release only — never re-clear signatures on retry.
     clearCombinedSignatureFields_(stored);
+    sealMeetingJsonOnRelease_(stored, email, new Date());
 
     stored['Status'] = PR.CYCLE.SIGNATURES;
     stored['Manager Review Status'] =
@@ -1009,7 +1220,7 @@ function releaseReviewSignatures(cycleId) {
 
     writeCycle_(location.rowNumber, stored);
 
-    audit_(
+    const auditResult = tryAuditAfterCommit_(
       cycleId,
       'Review packet released for combined signatures',
       email,
@@ -1017,9 +1228,20 @@ function releaseReviewSignatures(cycleId) {
       PR.CYCLE.SIGNATURES,
       ''
     );
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
 
     return stored;
   });
+
+  if (auditWarning) {
+    raisePostCommitAuditAlert_(
+      cycleId,
+      'Review packet released for combined signatures',
+      auditWarning
+    );
+  }
 
   // Signature request emails are accelerated off the UI critical path via
   // accelerateSignatureReleaseNotifications (durable outbox). Release itself
@@ -1029,8 +1251,11 @@ function releaseReviewSignatures(cycleId) {
     email,
     assertLiveReviewAccess_(cycle, email)
   );
-  live.message =
-    'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.';
+  live.alreadyReleased = alreadyReleased;
+  live.auditWarning = auditWarning || '';
+  live.message = alreadyReleased
+    ? 'Signatures were already released. The manager and employee may each sign once, in either order. HR will sign last.'
+    : 'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.';
   return live;
 }
 
@@ -3274,6 +3499,8 @@ function emptyMeeting_() {
     actionSteps: '',
     employeeComments: '',
     lastSavedAt: '',
+    sealedAt: '',
+    sealedBy: '',
   };
 }
 
@@ -6230,6 +6457,85 @@ function audit_(
       Details: details || '',
     }
   );
+}
+
+/**
+ * Post-commit audit must never overturn an already-written business state.
+ * Callers hold the cycle lock; this helper must not take LockService again.
+ */
+function tryAuditAfterCommit_(
+  cycleId,
+  action,
+  actorEmail,
+  previousStatus,
+  newStatus,
+  details,
+  eventId
+) {
+  try {
+    audit_(
+      cycleId,
+      action,
+      actorEmail,
+      previousStatus,
+      newStatus,
+      details,
+      eventId
+    );
+    return { ok: true, warning: '' };
+  } catch (error) {
+    const message = String(
+      (error && error.message) || error || 'Audit write failed'
+    );
+    Logger.log(
+      'Post-commit audit failed for ' +
+        String(cycleId || '') +
+        ' / ' +
+        String(action || '') +
+        ': ' +
+        message
+    );
+    return {
+      ok: false,
+      warning:
+        'The change was saved, but the audit trail write failed. System Health has been notified.',
+      error: message,
+    };
+  }
+}
+
+/**
+ * Raise a System Alert for a failed post-commit audit. Must run outside
+ * withLock_ — upsertSystemAlert_ acquires the script lock.
+ */
+function raisePostCommitAuditAlert_(cycleId, action, warningOrError) {
+  try {
+    upsertSystemAlert_({
+      alertKey: buildSystemAlertKey_(
+        cycleId,
+        'Audit',
+        'post_commit_failure'
+      ),
+      cycleId: cycleId,
+      severity: 'Warning',
+      component: 'Audit',
+      subject:
+        'AITHERAS post-commit audit failure — ' +
+        String(cycleId || 'unknown'),
+      lastError: String(warningOrError || ''),
+      details: {
+        action: String(action || ''),
+        error: String(warningOrError || ''),
+      },
+    });
+  } catch (alertError) {
+    Logger.log(
+      'Post-commit audit System Alert failed: ' +
+        String(
+          (alertError && alertError.message) || alertError
+        )
+    );
+  }
 }
 
 function getActiveAssignments_() {
