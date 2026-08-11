@@ -1614,9 +1614,12 @@ let liveReviewPollResumeAfterInFlight = false;
 let liveReviewPollGeneration = 0;
 let liveReviewRequestToken = 0;
 let liveReleaseBannerVisible = false;
+let meetingDraftPreserveAfterSeal = false;
+let meetingReleaseFlushInFlight = false;
 let defaultDocumentTitle = 'AITHERAS Performance Reviews';
 const LIVE_REVIEW_POLL_VISIBLE_MS = 2500;
 const LIVE_REVIEW_POLL_HIDDEN_MS = 9000;
+const MEETING_RELEASE_CLIENT_SYNC_MS = 7000;
 
 const editorState = {
   manager: createEditorState(),
@@ -2812,6 +2815,34 @@ async function runHealthRecoveryAction(index) {
     return;
   }
   const action = String(item.action || '');
+  if (action === 'retryPendingAudit') {
+    openModal({
+      title: 'Retry Missing Audit?',
+      body: '<p>This writes the durable pending audit event <strong>' +
+        escapeHtml(item.eventId || (item.details && item.details.eventId) || '') +
+        '</strong> exactly once.</p><p>Business state is already committed; this only repairs the audit trail.</p>',
+      confirmLabel: 'Retry Audit',
+      tone: 'warning',
+      onConfirm: async function() {
+        closeModal();
+        try {
+          const result = await server(
+            'retryPendingAudit',
+            item.eventId || (item.details && item.details.eventId) || ''
+          );
+          showToast(
+            'success',
+            'Audit recovery',
+            result.message || 'Audit event recovered.'
+          );
+          await refreshSystemHealth(true);
+        } catch (error) {
+          showToast('error', 'Audit recovery', friendlyErrorMessage(error));
+        }
+      }
+    });
+    return;
+  }
   if (action === 'resolveAlert') {
     openSystemAlertResolution(item.alertId, item.severity || 'Warning');
     return;
@@ -3557,7 +3588,15 @@ function renderCycleWorkspace() {
       '</div>'
     : '';
   const liveBanner = liveReleaseBannerVisible
-    ? '<div class="warning-banner live-release-banner" role="status"><div><strong>Signatures have been released.</strong><br>You have unsaved text still visible on this screen. Copy anything you need before continuing.</div><div class="button-row"><button type="button" class="button primary" onclick="openSignaturesAfterLiveRelease_()">Open Signatures</button></div></div>'
+    ? '<div class="warning-banner live-release-banner" role="status"><div><strong>' +
+      (meetingDirty || meetingDraftPreserveAfterSeal
+        ? 'Keep your meeting notes.'
+        : 'Signatures have been released.') +
+      '</strong><br>' +
+      (meetingDirty || meetingDraftPreserveAfterSeal
+        ? 'Unsaved or unconfirmed meeting text is still on this device. Copy anything you need before opening Signatures.'
+        : 'You have unsaved text still visible on this screen. Copy anything you need before continuing.') +
+      '</div><div class="button-row"><button type="button" class="button primary" onclick="openSignaturesAfterLiveRelease_()">Open Signatures</button></div></div>'
     : '';
   const backLabel = cycle.historicalPreviousReview
     ? '‹ Back to current review'
@@ -5179,13 +5218,21 @@ async function autosaveMeeting() {
   setSaveIndicator('saving', 'Saving meeting notes…');
   try {
     const result = await server('autosaveMeetingOutcomes', currentCycle.cycleId, deepClone(meetingDraft));
+    if (result.alreadySealed || result.preserveLocalDraft) {
+      meetingDraftPreserveAfterSeal = true;
+      liveReleaseBannerVisible = true;
+      setSaveIndicator('error', 'Notes not sealed on server');
+      showToast(
+        'warning',
+        'Keep your meeting notes',
+        'Signatures were released before this device finished saving. Copy your text before continuing — it was not deleted from this browser.'
+      );
+      renderCycleWorkspace();
+      return;
+    }
     meetingDirty = false;
     meetingDraft.lastSavedAt = result.savedAtIso;
     localStorage.removeItem(meetingStorageKey());
-    if (result.alreadySealed) {
-      setSaveIndicator('saved', 'Sealed');
-      return;
-    }
     setSaveIndicator('saved', 'Saved ' + result.savedAt);
   } catch (error) {
     setSaveIndicator('error', 'Meeting notes not synced');
@@ -5197,17 +5244,22 @@ async function autosaveMeeting() {
 async function manualSaveMeeting() {
   try {
     const result = await server('saveMeetingOutcomes', currentCycle.cycleId, deepClone(meetingDraft));
+    if (result.alreadySealed || result.preserveLocalDraft) {
+      meetingDraftPreserveAfterSeal = true;
+      liveReleaseBannerVisible = true;
+      setSaveIndicator('error', 'Notes not sealed on server');
+      showToast(
+        'warning',
+        'Keep your meeting notes',
+        result.message ||
+          'Meeting notes are sealed on the server. Your local text was preserved so you can copy it.'
+      );
+      renderCycleWorkspace();
+      return;
+    }
     meetingDirty = false;
     meetingDraft.lastSavedAt = result.savedAtIso;
     localStorage.removeItem(meetingStorageKey());
-    if (result.alreadySealed) {
-      setSaveIndicator('saved', 'Sealed');
-      showToast('info', 'Meeting notes sealed', result.message);
-      if (String(currentCycle.status) === 'Awaiting Signatures') {
-        loadCycle(currentCycle.cycleId, 'signatures');
-      }
-      return;
-    }
     setSaveIndicator('saved', 'Saved ' + result.savedAt);
     showToast('success', 'Meeting notes saved', result.message);
     if (result.auditWarning) {
@@ -5216,6 +5268,61 @@ async function manualSaveMeeting() {
   } catch (error) {
     showToast('error', 'Could not save meeting notes', errorMessage(error));
   }
+}
+
+/**
+ * Flush dirty meeting drafts to authority. Never clears localStorage unless
+ * the server accepts the write while the meeting is still open.
+ */
+async function flushMeetingDraftForRelease_() {
+  if (!currentCycle || !meetingDirty) {
+    return { ok: true, flushed: false };
+  }
+  if (meetingReleaseFlushInFlight) {
+    return { ok: false, flushed: false, inFlight: true };
+  }
+  meetingReleaseFlushInFlight = true;
+  setSaveIndicator('saving', 'Saving meeting notes before release…');
+  try {
+    const result = await server(
+      'saveMeetingOutcomes',
+      currentCycle.cycleId,
+      deepClone(meetingDraft)
+    );
+    if (result.alreadySealed || result.preserveLocalDraft) {
+      meetingDraftPreserveAfterSeal = true;
+      liveReleaseBannerVisible = true;
+      setSaveIndicator('error', 'Notes not sealed on server');
+      return {
+        ok: false,
+        flushed: false,
+        alreadySealed: true,
+        preserveLocalDraft: true,
+        message: result.message,
+      };
+    }
+    meetingDirty = false;
+    meetingDraftPreserveAfterSeal = false;
+    meetingDraft.lastSavedAt = result.savedAtIso;
+    localStorage.removeItem(meetingStorageKey());
+    setSaveIndicator('saved', 'Saved ' + result.savedAt);
+    return { ok: true, flushed: true, result: result };
+  } catch (error) {
+    setSaveIndicator('error', 'Meeting notes not synced');
+    return {
+      ok: false,
+      flushed: false,
+      error: errorMessage(error),
+    };
+  } finally {
+    meetingReleaseFlushInFlight = false;
+  }
+}
+
+function sleepMs_(ms) {
+  return new Promise(function(resolve) {
+    setTimeout(resolve, ms);
+  });
 }
 
 function meetingStorageKey() { return currentCycle ? 'aitheras-meeting-draft:' + currentCycle.cycleId : ''; }
@@ -5488,7 +5595,20 @@ function applyLiveReviewState_(live) {
   const previousStatus = String(currentCycle.status || '');
   const previousReleased = String(currentCycle.signaturesReleasedAt || '');
   const previousSig = JSON.stringify(currentCycle.signatureState || {});
+  const wasReleasePending = !!currentCycle.meetingReleasePending;
   patchCycleFromLiveState_(live);
+  currentCycle.meetingReleasePending = !!live.meetingReleasePending;
+  currentCycle.meetingReleaseRequestedAtIso = live.meetingReleaseRequestedAtIso || '';
+  currentCycle.meetingContentRevision = live.meetingContentRevision;
+
+  // Manager began release sync — flush any dirty draft while Meeting is still open.
+  if (live.meetingReleasePending && meetingDirty) {
+    flushMeetingDraftForRelease_().then(function(flushResult) {
+      if (flushResult && flushResult.preserveLocalDraft) {
+        renderCycleWorkspace();
+      }
+    });
+  }
 
   const releasedTransition =
     (previousStatus === 'Review Meeting Open' &&
@@ -5497,6 +5617,26 @@ function applyLiveReviewState_(live) {
 
   if (releasedTransition) {
     handleSignatureReleaseDetection_(live);
+  } else if (
+    live.meetingReleasePending &&
+    !wasReleasePending &&
+    String(live.status) === 'Review Meeting Open'
+  ) {
+    showToast(
+      'info',
+      'Saving meeting notes',
+      'Signature release is waiting for open browsers to save meeting notes.'
+    );
+    if (meetingDirty) {
+      liveReleaseBannerVisible = true;
+      renderCycleWorkspace();
+    } else {
+      const pillHost = document.querySelector('.cycle-hero-actions');
+      if (pillHost) {
+        const actions = renderCycleHeaderActions(currentCycle);
+        pillHost.innerHTML = statusPill(currentCycle.status) + actions;
+      }
+    }
   } else if (currentCycleTab === 'signatures') {
     const pad = signaturePads.packetSignature;
     const padBusy = pad && pad.isEmpty === false;
@@ -5533,21 +5673,18 @@ function handleSignatureReleaseDetection_(live) {
     document.title = 'Signature Ready — AITHERAS Review';
   }
 
-  // Unsaved meeting drafts cannot be written after release — seal locally.
-  if (meetingDirty) {
-    meetingDirty = false;
-    try {
-      localStorage.removeItem(meetingStorageKey());
-    } catch (error) {
-      // Optional local draft cleanup.
-    }
+  // Never destroy participant text. If still dirty after seal, preserve it.
+  if (meetingDirty || meetingDraftPreserveAfterSeal) {
+    meetingDraftPreserveAfterSeal = true;
     liveReleaseBannerVisible = true;
     renderCycleWorkspace();
     showToast(
-      'info',
-      'Signatures are ready',
-      'The review meeting has been finalized. Unsaved meeting-note edits on this device were not applied. Open Signatures when you are ready.'
+      'warning',
+      'Keep your meeting notes',
+      'Signatures are ready, but this browser still has meeting text that may not be on the sealed packet. Copy anything you need before continuing.'
     );
+    // Still try one authoritative save; if sealed, preserveLocalDraft stays true.
+    flushMeetingDraftForRelease_();
     return;
   }
 
@@ -5561,7 +5698,6 @@ function handleSignatureReleaseDetection_(live) {
         ? 'The review meeting has been finalized. Please review the acknowledgement and sign when ready.'
         : 'The review packet is ready for signatures.'
     );
-    // Targeted cycle load hydrates signature pads / acknowledgement.
     loadCycle(currentCycle.cycleId, 'signatures');
     return;
   }
@@ -5585,21 +5721,69 @@ async function releaseSignatures() {
   if (!currentCycle || !currentCycle.cycleId) return;
   if (window.__releaseSignaturesInFlight) return;
   window.__releaseSignaturesInFlight = true;
-  setSaveIndicator('saving', 'Releasing signatures…');
+  setSaveIndicator('saving', 'Syncing meeting notes…');
   try {
+    // 1) Flush the releaser's own dirty notes first.
     if (meetingDirty) {
-      const saved = await server('saveMeetingOutcomes', currentCycle.cycleId, deepClone(meetingDraft));
-      if (saved && saved.alreadySealed) {
-        meetingDirty = false;
-        try { localStorage.removeItem(meetingStorageKey()); } catch (e) {}
-        showToast('info', 'Meeting notes sealed', saved.message || 'Meeting notes are sealed.');
-      } else {
-        meetingDirty = false;
-        meetingDraft.lastSavedAt = saved.savedAtIso;
-        localStorage.removeItem(meetingStorageKey());
+      const flushed = await flushMeetingDraftForRelease_();
+      if (flushed.preserveLocalDraft) {
+        showToast(
+          'warning',
+          'Keep your meeting notes',
+          flushed.message ||
+            'The packet may already be sealed. Local text was preserved.'
+        );
       }
     }
-    const result = await server('releaseReviewSignatures', currentCycle.cycleId);
+
+    // 2) Ask other open browsers to flush during the sync window.
+    let prep = await server('prepareReleaseReviewSignatures', currentCycle.cycleId);
+    if (prep.alreadyReleased || String(prep.status) === 'Awaiting Signatures') {
+      showToast('success', 'Signatures already released', prep.message || 'Signatures are ready.');
+      applyReleaseLiveState_(prep);
+      return;
+    }
+
+    const deadline = Date.now() + MEETING_RELEASE_CLIENT_SYNC_MS;
+    setSaveIndicator('saving', 'Waiting for participant notes…');
+    while (Date.now() < deadline) {
+      if (meetingDirty) {
+        await flushMeetingDraftForRelease_();
+      }
+      await sleepMs_(500);
+      try {
+        const live = await server('getLiveReviewState', currentCycle.cycleId);
+        if (
+          live &&
+          (String(live.status) === 'Awaiting Signatures' ||
+            String(live.status) === 'Finalizing' ||
+            String(live.status) === 'Complete')
+        ) {
+          applyReleaseLiveState_(live);
+          showToast('success', 'Signatures already released', 'The packet was already released.');
+          return;
+        }
+      } catch (pollError) {
+        // Continue sync wait.
+      }
+    }
+
+    // 3) Commit seal only after the draft-sync barrier.
+    setSaveIndicator('saving', 'Releasing signatures…');
+    const result = await server('releaseReviewSignatures', currentCycle.cycleId, {
+      commit: true
+    });
+    if (result.releasePending) {
+      // Server still waiting — force one commit retry after a short beat.
+      await sleepMs_(Math.max(250, Number(result.syncRemainingMs || 0)));
+      const committed = await server('releaseReviewSignatures', currentCycle.cycleId, {
+        commit: true
+      });
+      Object.keys(committed).forEach(function(key) {
+        result[key] = committed[key];
+      });
+    }
+
     showToast(
       'success',
       result.alreadyReleased ? 'Signatures already released' : 'Review packet released',
@@ -5609,7 +5793,6 @@ async function releaseSignatures() {
       showToast('warning', 'Audit trail', result.auditWarning);
     }
     applyReleaseLiveState_(result);
-    // Durable emails — fire and forget; do not block Signature UI.
     server('accelerateSignatureReleaseNotifications', currentCycle.cycleId)
       .then(function(emailResult) {
         if (shouldWarnSignatureReleaseEmailAcceleration_(emailResult)) {
@@ -5629,7 +5812,6 @@ async function releaseSignatures() {
         );
       });
   } catch (error) {
-    // Reconcile before offering another mutation — first release may have committed.
     let reconciled = false;
     try {
       const live = await server('getLiveReviewState', currentCycle.cycleId);

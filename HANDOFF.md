@@ -8,15 +8,21 @@ highest-priority source of truth.
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
-Backup: `backup/pre-lifecycle-transactional-closure`
+Backup: `backup/pre-lifecycle-transactional-closure`  
+Tip: see latest commit SHA on this branch (meeting handshake + audit recovery)
 
-Closes Coach P0–P3 blockers from the Meeting Open + Release error:
-idempotent `releaseReviewSignatures` / `startReviewMeeting`, post-commit
-audit non-fatal contract, Manager/Employee/HR live release convergence,
-client reconcile after release error, meeting-note seal on release.
-Preserve finalization, compensation architecture, Attempt-ID signing, and
-live-poll performance work. Run `runV31LifecycleTests_()` in Apps Script.
-Stop for Coach after SHA delivery — no new feature work.
+Closes Coach P0–P3 plus the 78% blocker (employee meeting-note data loss):
+meeting-close draft-sync handshake before seal, preserve local drafts when
+already sealed, durable pending-audit recovery with Retry Audit, audit append
+outside the lifecycle lock, `getReviewPdf` provenance validation, deep-link
+sanitization, and period chronology validation. Preserve finalization,
+compensation architecture, Attempt-ID signing, and live-poll performance work.
+
+**Still open (compensation module):** orphan relink, reset→replacement,
+gating policy consistency, No Adjustment manager-submit guard, reset during
+Meeting, employee acknowledgement stage gating.
+
+Run `runV31LifecycleTests_()` in Apps Script. Stop for Coach before merge.
 
 ## Active work — Concurrent signature handoff
 

@@ -20,6 +20,7 @@ const PR = Object.freeze({
     ASSIGNMENTS: 'EmployeeAssignments',
     CYCLES: 'ReviewCycles',
     AUDIT: 'ReviewAuditLog',
+    PENDING_AUDIT: 'ReviewPendingAudits',
   },
 
   CYCLE: {
@@ -134,6 +135,21 @@ const PR = Object.freeze({
     'Previous Status',
     'New Status',
     'Details',
+  ],
+
+  PENDING_AUDIT_HEADERS: [
+    'Event ID',
+    'Created At',
+    'Updated At',
+    'Cycle ID',
+    'Action',
+    'Actor Email',
+    'Previous Status',
+    'New Status',
+    'Details',
+    'Status',
+    'Last Error',
+    'Completed At',
   ],
 
   FACTORS: [
@@ -280,6 +296,7 @@ function setupReviewSystem_() {
   ]);
   ensureHeaders_(cycles, PR.CYCLE_HEADERS);
   ensureReviewAuditEventIdHeader_(audit);
+  ensurePendingAuditSheet_();
 
   // V3.1 adds automation, calendar, compensation-task, and guidance fields.
   ensureV31DataModel_();
@@ -345,15 +362,47 @@ function setupReviewSystem_() {
 
 function doGet(e) {
   const template = HtmlService.createTemplateFromFile('Index');
-  template.initialCycleId =
-    (e && e.parameter && e.parameter.cycleId) || '';
-  template.initialAction =
-    (e && e.parameter && e.parameter.action) || '';
+  template.initialCycleId = sanitizeDeepLinkCycleId_(
+    e && e.parameter && e.parameter.cycleId
+  );
+  template.initialAction = sanitizeDeepLinkAction_(
+    e && e.parameter && e.parameter.action
+  );
 
   return template
     .evaluate()
     .setTitle('AITHERAS Performance Reviews')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
+}
+
+/**
+ * Deep-link cycle IDs must be strict opaque identifiers (UUID / token shape).
+ */
+function sanitizeDeepLinkCycleId_(value) {
+  const id = String(value == null ? '' : value).trim();
+  if (!id) return '';
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) return '';
+  return id;
+}
+
+/**
+ * Deep-link actions are allow-listed. Unknown values are dropped.
+ */
+function sanitizeDeepLinkAction_(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const allowed = {
+    overview: true,
+    manager: true,
+    'manager-review': true,
+    self: true,
+    'self-evaluation': true,
+    meeting: true,
+    signature: true,
+    signatures: true,
+    compensation: true,
+  };
+  return allowed[raw] ? raw : '';
 }
 
 /* ============================= BOOTSTRAP ================================= */
@@ -557,30 +606,30 @@ function createReviewCycle(payload) {
       created
     );
 
-    const auditResult = tryAuditAfterCommit_(
-      cycleId,
-      'Review cycle created',
-      email,
-      '',
-      PR.CYCLE.OPEN,
-      JSON.stringify({
-        employeeEmail: clean.employeeEmail,
-        managerEmail: clean.managerEmail,
-      })
-    );
-
     return {
       cycle: created,
-      auditWarning: auditResult.ok ? '' : auditResult.warning,
+      pendingAuditEvent: buildPendingAuditEvent_(
+        cycleId,
+        'Review cycle created',
+        email,
+        '',
+        PR.CYCLE.OPEN,
+        JSON.stringify({
+          employeeEmail: clean.employeeEmail,
+          managerEmail: clean.managerEmail,
+        })
+      ),
     };
   });
 
-  if (row.auditWarning) {
-    raisePostCommitAuditAlert_(
-      cycleId,
-      'Review cycle created',
-      row.auditWarning
+  let auditWarning = '';
+  if (row.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      row.pendingAuditEvent
     );
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
   }
 
   // After the row is committed, never present creation as a total failure.
@@ -606,7 +655,7 @@ function createReviewCycle(payload) {
       : 'Review created, but launch requires attention.' +
         (launchError ? ' ' + launchError : ' ' + describeReviewLaunchStatus_(launched)),
     launchComponents: getReviewLaunchComponentSummary_(launched),
-    auditWarning: row.auditWarning || '',
+    auditWarning: auditWarning || '',
   };
 }
 
@@ -768,9 +817,9 @@ function saveIndependentReview_(
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
 
-    let auditWarning = '';
+    let pendingAuditEvent = null;
     if (source !== 'autosave') {
-      const auditResult = tryAuditAfterCommit_(
+      pendingAuditEvent = buildPendingAuditEvent_(
         cycleId,
         type +
           (submit ? ' submitted and sealed' : ' draft saved'),
@@ -779,9 +828,6 @@ function saveIndependentReview_(
         newStatus,
         ''
       );
-      if (!auditResult.ok) {
-        auditWarning = auditResult.warning;
-      }
     }
 
     return {
@@ -796,17 +842,20 @@ function saveIndependentReview_(
         : type + ' draft saved.',
       notifyReady:
         submit && String(cycle['Status']) === PR.CYCLE.READY,
-      auditWarning: auditWarning,
+      pendingAuditEvent: pendingAuditEvent,
     };
   });
 
-  if (saved.auditWarning) {
-    raisePostCommitAuditAlert_(
-      cycleId,
-      type + (submit ? ' submitted and sealed' : ' draft saved'),
-      saved.auditWarning
+  let auditWarning = '';
+  if (saved.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      saved.pendingAuditEvent
     );
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
   }
+  saved.auditWarning = auditWarning;
 
   if (saved.notifyReady) {
     deliverWorkflowNotification_(
@@ -902,7 +951,7 @@ function planStartReviewMeeting_(cycle) {
 
 function startReviewMeeting(cycleId) {
   const email = getCurrentUserEmail_();
-  let auditWarning = '';
+  let pendingAuditEvent = null;
   let alreadyOpen = false;
   const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
@@ -940,7 +989,7 @@ function startReviewMeeting(cycleId) {
 
     writeCycle_(location.rowNumber, stored);
 
-    const auditResult = tryAuditAfterCommit_(
+    pendingAuditEvent = buildPendingAuditEvent_(
       cycleId,
       'Review meeting opened',
       email,
@@ -948,19 +997,16 @@ function startReviewMeeting(cycleId) {
       PR.CYCLE.MEETING,
       ''
     );
-    if (!auditResult.ok) {
-      auditWarning = auditResult.warning;
-    }
 
     return stored;
   });
 
-  if (auditWarning) {
-    raisePostCommitAuditAlert_(
-      cycleId,
-      'Review meeting opened',
-      auditWarning
-    );
+  let auditWarning = '';
+  if (pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(pendingAuditEvent);
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
   }
 
   if (!alreadyOpen) {
@@ -987,11 +1033,69 @@ function autosaveMeetingOutcomes(cycleId, payload) {
   return saveMeetingOutcomes_(cycleId, payload, true);
 }
 
-function sealMeetingJsonOnRelease_(cycle, actorEmail, sealedAt) {
+/** Client waits this long after prepare so open browsers can flush drafts. */
+var MEETING_RELEASE_DRAFT_SYNC_MS = 7000;
+
+function emptyMeeting_() {
+  return {
+    managerFinalComments: '',
+    developmentGoals: '',
+    actionSteps: '',
+    employeeComments: '',
+    lastSavedAt: '',
+    contentRevision: 0,
+    releaseRequestedAt: '',
+    releaseRequestedBy: '',
+    sealedAt: '',
+    sealedBy: '',
+  };
+}
+
+function parseMeetingJson_(cycle) {
   const meeting = parseJson_(
-    cycle['Meeting JSON'],
+    cycle && cycle['Meeting JSON'],
     emptyMeeting_()
   );
+  if (!Number.isFinite(Number(meeting.contentRevision))) {
+    meeting.contentRevision = 0;
+  }
+  meeting.releaseRequestedAt = String(
+    meeting.releaseRequestedAt || ''
+  );
+  meeting.releaseRequestedBy = String(
+    meeting.releaseRequestedBy || ''
+  );
+  meeting.sealedAt = String(meeting.sealedAt || '');
+  meeting.sealedBy = String(meeting.sealedBy || '');
+  return meeting;
+}
+
+function meetingReleaseSyncAgeMs_(meeting, nowMs) {
+  const requested = meeting && meeting.releaseRequestedAt
+    ? new Date(meeting.releaseRequestedAt)
+    : null;
+  if (!requested || isNaN(requested.getTime())) return null;
+  return Math.max(0, Number(nowMs || Date.now()) - requested.getTime());
+}
+
+function isMeetingReleaseSyncReady_(meeting, nowMs) {
+  const age = meetingReleaseSyncAgeMs_(meeting, nowMs);
+  if (age === null) return false;
+  return age >= MEETING_RELEASE_DRAFT_SYNC_MS;
+}
+
+function requestMeetingReleaseOnMeetingJson_(meeting, actorEmail, now) {
+  if (meeting.releaseRequestedAt) {
+    return { meeting: meeting, created: false };
+  }
+  const when = now instanceof Date ? now : new Date();
+  meeting.releaseRequestedAt = when.toISOString();
+  meeting.releaseRequestedBy = normalizeEmail_(actorEmail);
+  return { meeting: meeting, created: true };
+}
+
+function sealMeetingJsonOnRelease_(cycle, actorEmail, sealedAt) {
+  const meeting = parseMeetingJson_(cycle);
   if (!meeting.sealedAt) {
     const when =
       sealedAt instanceof Date
@@ -1007,10 +1111,7 @@ function sealMeetingJsonOnRelease_(cycle, actorEmail, sealedAt) {
 }
 
 function meetingNotesAlreadySealedResponse_(cycle) {
-  const meeting = parseJson_(
-    cycle['Meeting JSON'],
-    emptyMeeting_()
-  );
+  const meeting = parseMeetingJson_(cycle);
   const savedAtIso = String(
     meeting.lastSavedAt || meeting.sealedAt || ''
   );
@@ -1021,12 +1122,13 @@ function meetingNotesAlreadySealedResponse_(cycle) {
     savedAt: savedAtIso ? formatDateTime_(new Date(savedAtIso)) : '',
     savedAtIso: savedAtIso,
     message:
-      'Meeting notes are sealed because signatures were released. Unsaved draft text on this device was not applied.',
+      'Meeting notes are sealed because signatures were released. Keep any unsaved device text until you copy it — it was not applied to the sealed packet.',
+    preserveLocalDraft: true,
   };
 }
 
 function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
-  let auditWarning = '';
+  let pendingAuditEvent = null;
   const result = withLock_(function () {
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
@@ -1056,10 +1158,7 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
       );
     }
 
-    const meeting = parseJson_(
-      cycle['Meeting JSON'],
-      emptyMeeting_()
-    );
+    const meeting = parseMeetingJson_(cycle);
 
     if (meeting.sealedAt) {
       return meetingNotesAlreadySealedResponse_(cycle);
@@ -1083,30 +1182,35 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
 
     const now = new Date();
     meeting.lastSavedAt = now.toISOString();
+    meeting.contentRevision =
+      Number(meeting.contentRevision || 0) + 1;
     cycle['Meeting JSON'] = JSON.stringify(meeting);
     cycle['Updated At'] = now;
 
     writeCycle_(location.rowNumber, cycle);
 
     if (!isAutosave) {
-      const auditResult = tryAuditAfterCommit_(
+      pendingAuditEvent = buildPendingAuditEvent_(
         cycleId,
         'Meeting outcomes updated',
         email,
         PR.CYCLE.MEETING,
         PR.CYCLE.MEETING,
-        ''
+        JSON.stringify({
+          contentRevision: meeting.contentRevision,
+          releaseRequested: !!meeting.releaseRequestedAt,
+        })
       );
-      if (!auditResult.ok) {
-        auditWarning = auditResult.warning;
-      }
     }
 
     return {
       ok: true,
       alreadySealed: false,
+      preserveLocalDraft: false,
       savedAt: formatDateTime_(now),
       savedAtIso: now.toISOString(),
+      contentRevision: meeting.contentRevision,
+      meetingReleasePending: !!meeting.releaseRequestedAt,
       message: isAutosave
         ? 'Meeting notes autosaved.'
         : 'Meeting outcomes saved.',
@@ -1114,13 +1218,11 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
     };
   });
 
-  if (auditWarning) {
-    raisePostCommitAuditAlert_(
-      cycleId,
-      'Meeting outcomes updated',
-      auditWarning
-    );
-    result.auditWarning = auditWarning;
+  if (pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(pendingAuditEvent);
+    if (!auditResult.ok) {
+      result.auditWarning = auditResult.warning;
+    }
   }
 
   return result;
@@ -1169,10 +1271,116 @@ function planReleaseReviewSignatures_(cycle) {
   return { action: 'release' };
 }
 
-function releaseReviewSignatures(cycleId) {
+/**
+ * In-memory first-release mutation. Tests assert this is only applied once.
+ */
+function applyFirstReleaseReviewSignaturesMutation_(
+  stored,
+  email,
+  now
+) {
+  const when = now instanceof Date ? now : new Date();
+  clearCombinedSignatureFields_(stored);
+  sealMeetingJsonOnRelease_(stored, email, when);
+  stored['Status'] = PR.CYCLE.SIGNATURES;
+  stored['Manager Review Status'] = PR.DOC.PENDING_PARTICIPANTS;
+  stored['Self Evaluation Status'] = PR.DOC.PENDING_PARTICIPANTS;
+  stored['Signatures Released At'] = when;
+  stored['Signatures Released By'] = email;
+  stored['Updated At'] = when;
+  return stored;
+}
+
+/**
+ * Ask open participant browsers to flush meeting drafts before seal.
+ * Status stays Meeting Open; Meeting JSON gains releaseRequestedAt.
+ */
+function prepareReleaseReviewSignatures(cycleId) {
   const email = getCurrentUserEmail_();
-  let auditWarning = '';
+  let pendingAuditEvent = null;
   let alreadyReleased = false;
+  let createdRequest = false;
+  const cycle = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const stored = location.object;
+    const authorized =
+      isHrUser_(email) ||
+      normalizeEmail_(stored['Manager Email']) === email;
+    if (!authorized) {
+      throw new Error(
+        'Only the assigned manager or HR may release signatures.'
+      );
+    }
+
+    const plan = planReleaseReviewSignatures_(stored);
+    if (
+      plan.action === 'alreadyReleased' ||
+      plan.action === 'returnCurrent'
+    ) {
+      alreadyReleased = true;
+      return stored;
+    }
+    if (plan.action === 'reject') {
+      throw new Error(plan.message);
+    }
+    if (!isV31CompensationComplete_(stored)) {
+      throw new Error(
+        'Resolve the compensation decision before releasing the review packet for signature.'
+      );
+    }
+
+    const meeting = parseMeetingJson_(stored);
+    const requested = requestMeetingReleaseOnMeetingJson_(
+      meeting,
+      email,
+      new Date()
+    );
+    createdRequest = requested.created;
+    stored['Meeting JSON'] = JSON.stringify(requested.meeting);
+    stored['Updated At'] = new Date();
+    writeCycle_(location.rowNumber, stored);
+
+    if (createdRequest) {
+      pendingAuditEvent = buildPendingAuditEvent_(
+        cycleId,
+        'Meeting release sync requested',
+        email,
+        PR.CYCLE.MEETING,
+        PR.CYCLE.MEETING,
+        JSON.stringify({
+          releaseRequestedAt: requested.meeting.releaseRequestedAt,
+          contentRevision: requested.meeting.contentRevision,
+        })
+      );
+    }
+    return stored;
+  });
+
+  if (pendingAuditEvent) {
+    commitAuditEventOutsideLock_(pendingAuditEvent);
+  }
+
+  const live = buildLiveReviewStatePayload_(
+    cycle,
+    email,
+    assertLiveReviewAccess_(cycle, email)
+  );
+  live.alreadyReleased = alreadyReleased;
+  live.releasePending = !alreadyReleased;
+  live.message = alreadyReleased
+    ? 'Signatures were already released.'
+    : 'Meeting release sync started. Open browsers should save meeting notes now.';
+  return live;
+}
+
+function releaseReviewSignatures(cycleId, options) {
+  const opts = options || {};
+  const forceCommit = opts.commit === true || opts.forceCommit === true;
+  const email = getCurrentUserEmail_();
+  let pendingAuditEvent = null;
+  let alreadyReleased = false;
+  let releasePending = false;
+  let syncRemainingMs = 0;
   const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
     const stored = location.object;
@@ -1205,22 +1413,48 @@ function releaseReviewSignatures(cycleId) {
       );
     }
 
+    const meeting = parseMeetingJson_(stored);
+    const now = new Date();
+    if (!meeting.releaseRequestedAt) {
+      const requested = requestMeetingReleaseOnMeetingJson_(
+        meeting,
+        email,
+        now
+      );
+      stored['Meeting JSON'] = JSON.stringify(requested.meeting);
+      stored['Updated At'] = now;
+      writeCycle_(location.rowNumber, stored);
+      releasePending = true;
+      syncRemainingMs = MEETING_RELEASE_DRAFT_SYNC_MS;
+      pendingAuditEvent = buildPendingAuditEvent_(
+        cycleId,
+        'Meeting release sync requested',
+        email,
+        PR.CYCLE.MEETING,
+        PR.CYCLE.MEETING,
+        JSON.stringify({
+          releaseRequestedAt: requested.meeting.releaseRequestedAt,
+          contentRevision: requested.meeting.contentRevision,
+        })
+      );
+      return stored;
+    }
+
+    if (!forceCommit && !isMeetingReleaseSyncReady_(meeting, now.getTime())) {
+      releasePending = true;
+      const age = meetingReleaseSyncAgeMs_(meeting, now.getTime()) || 0;
+      syncRemainingMs = Math.max(
+        0,
+        MEETING_RELEASE_DRAFT_SYNC_MS - age
+      );
+      return stored;
+    }
+
     // First successful release only — never re-clear signatures on retry.
-    clearCombinedSignatureFields_(stored);
-    sealMeetingJsonOnRelease_(stored, email, new Date());
-
-    stored['Status'] = PR.CYCLE.SIGNATURES;
-    stored['Manager Review Status'] =
-      PR.DOC.PENDING_PARTICIPANTS;
-    stored['Self Evaluation Status'] =
-      PR.DOC.PENDING_PARTICIPANTS;
-    stored['Signatures Released At'] = new Date();
-    stored['Signatures Released By'] = email;
-    stored['Updated At'] = new Date();
-
+    applyFirstReleaseReviewSignaturesMutation_(stored, email, now);
     writeCycle_(location.rowNumber, stored);
 
-    const auditResult = tryAuditAfterCommit_(
+    pendingAuditEvent = buildPendingAuditEvent_(
       cycleId,
       'Review packet released for combined signatures',
       email,
@@ -1228,34 +1462,37 @@ function releaseReviewSignatures(cycleId) {
       PR.CYCLE.SIGNATURES,
       ''
     );
-    if (!auditResult.ok) {
-      auditWarning = auditResult.warning;
-    }
 
     return stored;
   });
 
-  if (auditWarning) {
-    raisePostCommitAuditAlert_(
-      cycleId,
-      'Review packet released for combined signatures',
-      auditWarning
-    );
+  let auditWarning = '';
+  if (pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(pendingAuditEvent);
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
   }
 
-  // Signature request emails are accelerated off the UI critical path via
-  // accelerateSignatureReleaseNotifications (durable outbox). Release itself
-  // is already committed above.
   const live = buildLiveReviewStatePayload_(
     cycle,
     email,
     assertLiveReviewAccess_(cycle, email)
   );
   live.alreadyReleased = alreadyReleased;
+  live.releasePending = releasePending;
+  live.syncRemainingMs = syncRemainingMs;
   live.auditWarning = auditWarning || '';
-  live.message = alreadyReleased
-    ? 'Signatures were already released. The manager and employee may each sign once, in either order. HR will sign last.'
-    : 'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.';
+  if (alreadyReleased) {
+    live.message =
+      'Signatures were already released. The manager and employee may each sign once, in either order. HR will sign last.';
+  } else if (releasePending) {
+    live.message =
+      'Waiting for open browsers to save meeting notes before sealing the packet.';
+  } else {
+    live.message =
+      'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.';
+  }
   return live;
 }
 
@@ -3326,6 +3563,18 @@ function validateCyclePayload_(payload, domain) {
     );
   }
 
+  const periodStart = parseDateInput_(clean.reviewPeriodStart);
+  const periodEnd = parseDateInput_(clean.reviewPeriodEnd);
+  if (
+    periodStart &&
+    periodEnd &&
+    periodStart.getTime() > periodEnd.getTime()
+  ) {
+    throw new Error(
+      'Review Period Start must be on or before Review Period End.'
+    );
+  }
+
   return clean;
 }
 
@@ -3489,18 +3738,6 @@ function emptySelfEvaluation_() {
     supportNeeded: '',
     submittedAt: '',
     lastSavedAt: '',
-  };
-}
-
-function emptyMeeting_() {
-  return {
-    managerFinalComments: '',
-    developmentGoals: '',
-    actionSteps: '',
-    employeeComments: '',
-    lastSavedAt: '',
-    sealedAt: '',
-    sealedBy: '',
   };
 }
 
@@ -6283,14 +6520,23 @@ function getReviewPdf(cycleId, documentType) {
     throw new Error('You are not authorized to download this review.');
   }
 
+  const type = String(documentType || '').trim();
+  if (type !== PR.TYPE.MANAGER && type !== PR.TYPE.SELF) {
+    throw new Error(
+      'documentType must be Manager Review or Self-Evaluation.'
+    );
+  }
+
   const fileId =
-    documentType === PR.TYPE.MANAGER
+    type === PR.TYPE.MANAGER
       ? cycle['Manager Review PDF ID']
       : cycle['Self Evaluation PDF ID'];
 
   if (!fileId) {
     throw new Error('The final PDF is not available yet.');
   }
+
+  validateAuthoritativeFinalPdfId_(cycleId, type, fileId);
 
   const blob = DriveApp.getFileById(fileId).getBlob();
 
@@ -6459,9 +6705,30 @@ function audit_(
   );
 }
 
+function buildPendingAuditEvent_(
+  cycleId,
+  action,
+  actorEmail,
+  previousStatus,
+  newStatus,
+  details,
+  eventId
+) {
+  return {
+    eventId: String(eventId || Utilities.getUuid()),
+    cycleId: String(cycleId || ''),
+    action: String(action || ''),
+    actorEmail: normalizeEmail_(actorEmail),
+    previousStatus: String(previousStatus || ''),
+    newStatus: String(newStatus || ''),
+    details: details || '',
+  };
+}
+
 /**
  * Post-commit audit must never overturn an already-written business state.
- * Callers hold the cycle lock; this helper must not take LockService again.
+ * Prefer commitAuditEventOutsideLock_ after releasing the cycle lock.
+ * This helper remains for tests and legacy call sites.
  */
 function tryAuditAfterCommit_(
   cycleId,
@@ -6472,26 +6739,35 @@ function tryAuditAfterCommit_(
   details,
   eventId
 ) {
+  const event = buildPendingAuditEvent_(
+    cycleId,
+    action,
+    actorEmail,
+    previousStatus,
+    newStatus,
+    details,
+    eventId
+  );
   try {
     audit_(
-      cycleId,
-      action,
-      actorEmail,
-      previousStatus,
-      newStatus,
-      details,
-      eventId
+      event.cycleId,
+      event.action,
+      event.actorEmail,
+      event.previousStatus,
+      event.newStatus,
+      event.details,
+      event.eventId
     );
-    return { ok: true, warning: '' };
+    return { ok: true, warning: '', eventId: event.eventId };
   } catch (error) {
     const message = String(
       (error && error.message) || error || 'Audit write failed'
     );
     Logger.log(
       'Post-commit audit failed for ' +
-        String(cycleId || '') +
+        event.cycleId +
         ' / ' +
-        String(action || '') +
+        event.action +
         ': ' +
         message
     );
@@ -6500,32 +6776,317 @@ function tryAuditAfterCommit_(
       warning:
         'The change was saved, but the audit trail write failed. System Health has been notified.',
       error: message,
+      eventId: event.eventId,
+      event: event,
     };
   }
+}
+
+/**
+ * Append audit outside the lifecycle lock. On failure, persist a durable
+ * pending-audit recovery row with the deterministic Event ID.
+ */
+function commitAuditEventOutsideLock_(event) {
+  const payload = event || {};
+  const eventId = String(
+    payload.eventId || Utilities.getUuid()
+  );
+  try {
+    audit_(
+      payload.cycleId,
+      payload.action,
+      payload.actorEmail,
+      payload.previousStatus,
+      payload.newStatus,
+      payload.details,
+      eventId
+    );
+    markPendingAuditComplete_(eventId);
+    return { ok: true, warning: '', eventId: eventId };
+  } catch (error) {
+    const message = String(
+      (error && error.message) || error || 'Audit write failed'
+    );
+    Logger.log(
+      'Post-commit audit failed for ' +
+        String(payload.cycleId || '') +
+        ' / ' +
+        String(payload.action || '') +
+        ': ' +
+        message
+    );
+    const pendingEvent = {
+      eventId: eventId,
+      cycleId: payload.cycleId,
+      action: payload.action,
+      actorEmail: payload.actorEmail,
+      previousStatus: payload.previousStatus,
+      newStatus: payload.newStatus,
+      details: payload.details,
+    };
+    persistPendingAuditEvent_(pendingEvent, message);
+    raisePostCommitAuditAlert_(pendingEvent, message);
+    return {
+      ok: false,
+      warning:
+        'The change was saved, but the audit trail write failed. Use System Health → Retry Audit to recover.',
+      error: message,
+      eventId: eventId,
+      event: pendingEvent,
+    };
+  }
+}
+
+function ensurePendingAuditSheet_() {
+  const ss = getSpreadsheet_();
+  const sheet = getOrCreateSheet_(ss, PR.SHEETS.PENDING_AUDIT);
+  ensureHeaders_(sheet, PR.PENDING_AUDIT_HEADERS);
+  return sheet;
+}
+
+function persistPendingAuditEvent_(event, lastError) {
+  try {
+    ensurePendingAuditSheet_();
+    const existing = findPendingAuditByEventId_(event.eventId);
+    const now = new Date();
+    if (existing) {
+      const location = findObject_(
+        PR.SHEETS.PENDING_AUDIT,
+        'Event ID',
+        event.eventId
+      );
+      const row = location.object;
+      if (String(row.Status) === 'Complete') {
+        return row;
+      }
+      row['Updated At'] = now;
+      row['Last Error'] = String(lastError || '');
+      row.Status = 'Pending';
+      writeObject_(PR.SHEETS.PENDING_AUDIT, location.rowNumber, row);
+      return row;
+    }
+    const created = {
+      'Event ID': String(event.eventId),
+      'Created At': now,
+      'Updated At': now,
+      'Cycle ID': String(event.cycleId || ''),
+      Action: String(event.action || ''),
+      'Actor Email': normalizeEmail_(event.actorEmail),
+      'Previous Status': String(event.previousStatus || ''),
+      'New Status': String(event.newStatus || ''),
+      Details: event.details || '',
+      Status: 'Pending',
+      'Last Error': String(lastError || ''),
+      'Completed At': '',
+    };
+    appendObject_(
+      PR.SHEETS.PENDING_AUDIT,
+      PR.PENDING_AUDIT_HEADERS,
+      created
+    );
+    return created;
+  } catch (persistError) {
+    Logger.log(
+      'Pending audit persistence failed: ' +
+        String(
+          (persistError && persistError.message) || persistError
+        )
+    );
+    return null;
+  }
+}
+
+function findPendingAuditByEventId_(eventId) {
+  const id = String(eventId || '').trim();
+  if (!id) return null;
+  if (
+    !getSpreadsheet_().getSheetByName(PR.SHEETS.PENDING_AUDIT)
+  ) {
+    return null;
+  }
+  try {
+    return findObject_(PR.SHEETS.PENDING_AUDIT, 'Event ID', id)
+      .object;
+  } catch (error) {
+    return null;
+  }
+}
+
+function auditEventAlreadyRecorded_(eventId) {
+  const id = String(eventId || '').trim();
+  if (!id) return false;
+  const rows = getAllObjects_(PR.SHEETS.AUDIT);
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i]['Event ID'] || '') === id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function markPendingAuditComplete_(eventId) {
+  const existing = findPendingAuditByEventId_(eventId);
+  if (!existing) return;
+  if (String(existing.Status) === 'Complete') return;
+  try {
+    const location = findObject_(
+      PR.SHEETS.PENDING_AUDIT,
+      'Event ID',
+      eventId
+    );
+    const row = location.object;
+    row.Status = 'Complete';
+    row['Completed At'] = new Date();
+    row['Updated At'] = new Date();
+    row['Last Error'] = '';
+    writeObject_(PR.SHEETS.PENDING_AUDIT, location.rowNumber, row);
+  } catch (error) {
+    Logger.log(
+      'markPendingAuditComplete_ failed: ' +
+        String((error && error.message) || error)
+    );
+  }
+}
+
+/**
+ * HR-only: retry one durable pending audit by deterministic Event ID.
+ * Appends at most once.
+ */
+function retryPendingAudit(eventId) {
+  const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may retry missing audit events.');
+  }
+  const id = String(eventId || '').trim();
+  if (!id) {
+    throw new Error('Event ID is required.');
+  }
+
+  const pending = findPendingAuditByEventId_(id);
+  if (!pending) {
+    if (auditEventAlreadyRecorded_(id)) {
+      return {
+        ok: true,
+        alreadyComplete: true,
+        eventId: id,
+        message: 'That audit event is already present in the audit log.',
+      };
+    }
+    throw new Error('No pending audit was found for that Event ID.');
+  }
+
+  if (
+    String(pending.Status) === 'Complete' ||
+    auditEventAlreadyRecorded_(id)
+  ) {
+    markPendingAuditComplete_(id);
+    return {
+      ok: true,
+      alreadyComplete: true,
+      eventId: id,
+      message: 'That audit event is already present in the audit log.',
+    };
+  }
+
+  audit_(
+    pending['Cycle ID'],
+    pending.Action,
+    pending['Actor Email'],
+    pending['Previous Status'],
+    pending['New Status'],
+    pending.Details,
+    id
+  );
+  markPendingAuditComplete_(id);
+  try {
+    clearCachedSystemHealthSummary_();
+  } catch (cacheError) {
+    // optional
+  }
+  return {
+    ok: true,
+    alreadyComplete: false,
+    eventId: id,
+    cycleId: String(pending['Cycle ID'] || ''),
+    message: 'Missing audit event was written successfully.',
+  };
+}
+
+function listPendingAuditRecoveryItems_() {
+  if (
+    !getSpreadsheet_().getSheetByName(PR.SHEETS.PENDING_AUDIT)
+  ) {
+    return [];
+  }
+  return getAllObjects_(PR.SHEETS.PENDING_AUDIT)
+    .filter(function (row) {
+      return String(row.Status || '') === 'Pending';
+    })
+    .map(function (row) {
+      return {
+        id: 'pending-audit:' + String(row['Event ID'] || ''),
+        category: 'audit',
+        level: 'Warning',
+        cycleId: String(row['Cycle ID'] || ''),
+        component: 'Audit',
+        title: 'Missing audit event',
+        summary:
+          String(row.Action || 'Audit event') +
+          ' failed to append and can be retried safely.',
+        action: 'retryPendingAudit',
+        actionLabel: 'Retry Audit',
+        actionable: true,
+        eventId: String(row['Event ID'] || ''),
+        details: {
+          eventId: String(row['Event ID'] || ''),
+          action: String(row.Action || ''),
+          actorEmail: String(row['Actor Email'] || ''),
+          previousStatus: String(row['Previous Status'] || ''),
+          newStatus: String(row['New Status'] || ''),
+          lastError: String(row['Last Error'] || ''),
+        },
+      };
+    });
 }
 
 /**
  * Raise a System Alert for a failed post-commit audit. Must run outside
  * withLock_ — upsertSystemAlert_ acquires the script lock.
  */
-function raisePostCommitAuditAlert_(cycleId, action, warningOrError) {
+function raisePostCommitAuditAlert_(eventOrCycleId, warningOrError) {
+  let event = eventOrCycleId;
+  if (typeof eventOrCycleId === 'string') {
+    event = {
+      cycleId: eventOrCycleId,
+      action: '',
+      eventId: '',
+    };
+  }
+  event = event || {};
   try {
     upsertSystemAlert_({
       alertKey: buildSystemAlertKey_(
-        cycleId,
+        event.cycleId,
         'Audit',
-        'post_commit_failure'
+        'post_commit_failure:' + String(event.eventId || 'unknown')
       ),
-      cycleId: cycleId,
+      cycleId: event.cycleId,
       severity: 'Warning',
       component: 'Audit',
       subject:
         'AITHERAS post-commit audit failure — ' +
-        String(cycleId || 'unknown'),
+        String(event.cycleId || 'unknown'),
       lastError: String(warningOrError || ''),
       details: {
-        action: String(action || ''),
+        eventId: String(event.eventId || ''),
+        action: String(event.action || ''),
+        actorEmail: String(event.actorEmail || ''),
+        previousStatus: String(event.previousStatus || ''),
+        newStatus: String(event.newStatus || ''),
+        details: event.details || '',
         error: String(warningOrError || ''),
+        recoveryAction: 'retryPendingAudit',
       },
     });
   } catch (alertError) {

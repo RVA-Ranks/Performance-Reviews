@@ -357,6 +357,14 @@ function testSecurityPublicRecoveryApiSurface_() {
     'rebuildReviewCalendarEvent must remain a public HR API.'
   );
   assertTriggerTest_(
+    typeof retryPendingAudit === 'function',
+    'retryPendingAudit must remain a public HR API.'
+  );
+  assertTriggerTest_(
+    typeof prepareReleaseReviewSignatures === 'function',
+    'prepareReleaseReviewSignatures must remain a public release API.'
+  );
+  assertTriggerTest_(
     typeof getPreviousReviewContext === 'function',
     'getPreviousReviewContext must remain a public manager/HR API.'
   );

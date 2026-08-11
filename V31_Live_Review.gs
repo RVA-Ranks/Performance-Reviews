@@ -12,6 +12,9 @@ function buildLiveReviewStatePayload_(cycle, email, viewerRole) {
   const state = getCombinedSignatureState_(cycle);
   const status = String(cycle['Status'] || '');
   const tasks = getSignatureTasks_(cycle, email);
+  const meeting = parseMeetingJson_(cycle);
+  const releasePending =
+    status === PR.CYCLE.MEETING && !!meeting.releaseRequestedAt && !meeting.sealedAt;
 
   return {
     ok: true,
@@ -29,6 +32,11 @@ function buildLiveReviewStatePayload_(cycle, email, viewerRole) {
     signatureTaskReady: status === PR.CYCLE.SIGNATURES && tasks.length > 0,
     signatureTasks: tasks,
     viewerRole: String(viewerRole || ''),
+    meetingReleasePending: releasePending,
+    meetingReleaseRequestedAtIso: String(meeting.releaseRequestedAt || ''),
+    meetingLastSavedAtIso: String(meeting.lastSavedAt || ''),
+    meetingContentRevision: Number(meeting.contentRevision || 0),
+    meetingSealed: !!meeting.sealedAt,
   };
 }
 
@@ -214,6 +222,15 @@ function liveReviewStatePayloadIsSafe_(payload) {
     signatureTasks: true,
     viewerRole: true,
     message: true,
+    meetingReleasePending: true,
+    meetingReleaseRequestedAtIso: true,
+    meetingLastSavedAtIso: true,
+    meetingContentRevision: true,
+    meetingSealed: true,
+    alreadyReleased: true,
+    releasePending: true,
+    syncRemainingMs: true,
+    auditWarning: true,
   };
   const value = payload || {};
   const keys = Object.keys(value);

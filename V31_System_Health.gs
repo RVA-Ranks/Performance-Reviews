@@ -1549,6 +1549,26 @@ function buildSystemHealthSummaryFromRows_(
     });
   });
 
+  try {
+    listPendingAuditRecoveryItems_().forEach(function (item) {
+      recoveryItems.push(item);
+      bumpHealthCard_(
+        cardsMap,
+        'alerts',
+        V31_SYSTEM_HEALTH.LEVEL.WARNING,
+        1
+      );
+    });
+  } catch (pendingAuditError) {
+    Logger.log(
+      'Pending audit recovery items skipped: ' +
+        String(
+          (pendingAuditError && pendingAuditError.message) ||
+            pendingAuditError
+        )
+    );
+  }
+
   // Associate alerts only with actionable recovery rows so in-progress
   // (Running) rows cannot swallow an incident that HR still needs to see.
   const unresolvedAlerts = (alertsData && alertsData.alerts) || [];

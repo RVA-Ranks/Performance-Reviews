@@ -2,23 +2,26 @@
 
 ## Lifecycle transactional closure
 
-- `releaseReviewSignatures` is idempotent: `Awaiting Signatures` /
-  Finalizing / Complete returns current live state (`alreadyReleased`) and
-  never re-clears signature fields on retry.
-- `startReviewMeeting` is idempotent (`alreadyOpen`) when the meeting is
-  already open or the cycle has progressed past Meeting.
-- Post-commit `audit_()` failures no longer overturn a successful business
-  write on create / submit / start meeting / save meeting / release. Audit
-  failure returns `auditWarning` and raises a System Health alert outside
-  the cycle lock.
-- Meeting notes seal on first release (`sealedAt` / `sealedBy`). Later
-  `saveMeetingOutcomes` returns `alreadySealed` instead of a hard failure.
-- Live release detection opens Signatures for Manager, Employee, and HR.
-  Release client errors reconcile via `getLiveReviewState` before offering
-  another mutation. Release UX shows an in-flight guard.
-- Live poll in-flight ownership no longer clears mid-request; resume after
-  supersede is explicit.
-- Tests: `runV31LifecycleTests_()`.
+- Meeting-close handshake: `prepareReleaseReviewSignatures` requests draft
+  sync while status stays Meeting Open; `releaseReviewSignatures({ commit: true })`
+  seals only after the sync window (or force commit). Open browsers flush dirty
+  meeting notes during the barrier.
+- Remote release no longer deletes Employee/manager dirty drafts or
+  `localStorage`. Sealed saves return `preserveLocalDraft`; UI keeps text and
+  warns to copy.
+- `releaseReviewSignatures` remains idempotent (`alreadyReleased`) and never
+  re-clears signatures on retry.
+- `startReviewMeeting` remains idempotent (`alreadyOpen`).
+- Post-commit audits use deterministic Event IDs, run outside the cycle lock,
+  and persist durable `ReviewPendingAudits` rows with System Health
+  **Retry Audit** (`retryPendingAudit`) — business commits stay non-fatal on
+  audit failure.
+- `getReviewPdf` allow-lists document type and uses
+  `validateAuthoritativeFinalPdfId_`.
+- `doGet` deep-link `cycleId` / `action` are sanitized/allow-listed.
+- Review Period Start > End is rejected at create validation.
+- Tests: `runV31LifecycleTests_()` (planners, handshake, fault-injected audit,
+  mutation idempotency, deep-link/date gates).
 
 ## Concurrent signature handoff
 
