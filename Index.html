@@ -5891,52 +5891,45 @@ function maybeKickFinalizationContinuation_(live, options) {
 function kickFinalizationContinuationWithRetry_(cycleId, attempt) {
   const maxAttempts = 3;
   const delaysMs = [0, 4000, 5000];
-  const run = function() {
-    server('continueReviewFinalization', cycleId)
-      .then(function(result) {
-        if (result && result.status) {
-          applyLiveReviewState_({
-            cycleId: cycleId,
-            status: result.status,
-            updatedAtIso: result.updatedAtIso || '',
-            signatureState: currentCycle && currentCycle.signatureState,
-            signatureTasks: [],
-            signatureTaskReady: false
-          });
-        }
-        if (result && result.ok === false && attempt + 1 < maxAttempts) {
-          setTimeout(function() {
-            kickFinalizationContinuationWithRetry_(cycleId, attempt + 1);
-          }, delaysMs[attempt + 1] || 5000);
-          return;
-        }
-        if (result && result.ok === false) {
-          showToast(
-            'warning',
-            'Signature recorded',
-            'Final document processing needs HR recovery. Use Retry Finalization from System Health if the review stays Finalizing.'
-          );
-        }
-      })
-      .catch(function() {
-        if (attempt + 1 < maxAttempts) {
-          setTimeout(function() {
-            kickFinalizationContinuationWithRetry_(cycleId, attempt + 1);
-          }, delaysMs[attempt + 1] || 5000);
-          return;
-        }
+  server('continueReviewFinalization', cycleId)
+    .then(function(result) {
+      if (result && result.status) {
+        applyLiveReviewState_({
+          cycleId: cycleId,
+          status: result.status,
+          updatedAtIso: result.updatedAtIso || '',
+          signatureState: currentCycle && currentCycle.signatureState,
+          signatureTasks: [],
+          signatureTaskReady: false
+        });
+      }
+      if (result && result.ok === false && attempt + 1 < maxAttempts) {
+        setTimeout(function() {
+          kickFinalizationContinuationWithRetry_(cycleId, attempt + 1);
+        }, delaysMs[attempt + 1] || 5000);
+        return;
+      }
+      if (result && result.ok === false) {
         showToast(
           'warning',
           'Signature recorded',
           'Final document processing needs HR recovery. Use Retry Finalization from System Health if the review stays Finalizing.'
         );
-      });
-  };
-  if (!attempt) {
-    run();
-    return;
-  }
-  setTimeout(run, delaysMs[attempt] || 4000);
+      }
+    })
+    .catch(function() {
+      if (attempt + 1 < maxAttempts) {
+        setTimeout(function() {
+          kickFinalizationContinuationWithRetry_(cycleId, attempt + 1);
+        }, delaysMs[attempt + 1] || 5000);
+        return;
+      }
+      showToast(
+        'warning',
+        'Signature recorded',
+        'Final document processing needs HR recovery. Use Retry Finalization from System Health if the review stays Finalizing.'
+      );
+    });
 }
 
 function patchCycleFromLiveState_(live) {
