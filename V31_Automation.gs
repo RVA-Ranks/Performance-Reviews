@@ -1497,7 +1497,21 @@ function getV31CycleData_(cycle, email, isHr, options) {
 }
 
 function getEmployeeCompensationAcknowledgement_(cycle) {
-  const recordLoc = findCompensationRecordByCycleOptional_(
+  const status = String((cycle && cycle['Status']) || '');
+  const released =
+    cycle &&
+    cycle['Signatures Released At'] !== '' &&
+    cycle['Signatures Released At'] != null;
+  if (
+    status !== PR.CYCLE.SIGNATURES &&
+    status !== PR.CYCLE.FINALIZING &&
+    status !== PR.CYCLE.COMPLETE &&
+    !released
+  ) {
+    return null;
+  }
+
+  const recordLoc = findActiveCompensationRecordByCycleOptional_(
     cycle['Cycle ID']
   );
   if (!recordLoc) {

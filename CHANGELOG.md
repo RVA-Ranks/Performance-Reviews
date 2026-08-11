@@ -2,24 +2,26 @@
 
 ## Lifecycle transactional closure
 
-- Meeting-close handshake is now a **participant acknowledgement protocol**:
-  `prepareReleaseReviewSignatures` creates an immutable `releaseRequestId`;
-  Manager and Employee each ACK after saving (or confirming clean) via
-  `acknowledgeMeetingRelease`. Seal happens only when both ACKs exist.
-- `commit:true` no longer force-seals. Force override requires HR +
-  `forceCommit` + confirmation token
-  `FORCE_RELEASE_WITHOUT_PARTICIPANT_ACK`.
-- Manager flush failure aborts release. Hidden-tab polling accelerates to 1s
-  while release is pending so ACKs are not starved by the 9s hidden interval.
-- Post-submit / post-meeting-open notification acceleration is non-fatal.
-- Critical audit Event IDs are reconstructible
-  (`MEETING_OPENED:…`, `SIGNATURES_RELEASED:…`, `MEETING_RELEASE_REQUESTED:…`).
-  `retryPendingAudit` is lock-guarded; `ReviewPendingAudits` is protected and
-  ensured in `ensureV31DataModel_`.
-- Assignment checkbox formatting locates `Active` by header (never column H /
-  Current Pay Rate).
-- Invalid review period/meeting/hire dates are rejected.
-- Tests: `runV31LifecycleTests_()`.
+- Meeting saves are revision-safe: `meetingLocalRevision` + shared in-flight
+  controller; obsolete save responses never clear newer dirty drafts.
+- Release ACK requires exact nonblank `releaseRequestId` and
+  `contentRevision ===` authoritative meeting revision; waits for in-flight
+  saves and re-flushes the newest local revision.
+- Post-ACK meeting edits invalidate that role's ACK; UI locks acknowledged
+  fields during release sync.
+- Seal attribution uses `meeting.releaseRequestedBy` for
+  `Signatures Released By`, `sealedBy`, and release audit actor (not the
+  second ACK participant).
+- Manager release wait no longer force-seals; second ACK seals server-side.
+  Signature-email acceleration warnings are centralized.
+- Compensation: Failed/reset rows are historical; active-record selection
+  prefers non-Failed; reset→replacement works; orphan relink + multi-active
+  System Health; Adjustment stays gated if the global setting is disabled;
+  Manager No Adjustment requires submitted Manager Review; reset rejected
+  after Meeting Open and demotes Ready→Open; employee acknowledgement only
+  after signature release.
+- Assignment `Active` checkboxes remain header-driven.
+- Tests: `runV31LifecycleTests_()`, `runV31CompensationTests_()`.
 
 ## Concurrent signature handoff
 

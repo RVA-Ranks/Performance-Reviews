@@ -1293,12 +1293,30 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
         payload.developmentGoals
       );
       meeting.actionSteps = cleanText_(payload.actionSteps);
+      if (
+        meeting.releaseRequestId &&
+        hasMeetingReleaseAckForRole_(meeting, PR.ROLE.MANAGER)
+      ) {
+        invalidateMeetingReleaseAckForRole_(
+          meeting,
+          PR.ROLE.MANAGER
+        );
+      }
     }
 
     if (isHr || isEmployee) {
       meeting.employeeComments = cleanText_(
         payload.employeeComments
       );
+      if (
+        meeting.releaseRequestId &&
+        hasMeetingReleaseAckForRole_(meeting, PR.ROLE.EMPLOYEE)
+      ) {
+        invalidateMeetingReleaseAckForRole_(
+          meeting,
+          PR.ROLE.EMPLOYEE
+        );
+      }
     }
 
     const now = new Date();
@@ -1399,22 +1417,51 @@ function planReleaseReviewSignatures_(cycle) {
 
 /**
  * In-memory first-release mutation. Tests assert this is only applied once.
+ * releaseActorEmail must be the release initiator (releaseRequestedBy), never
+ * the participant who happened to supply the second ACK.
  */
 function applyFirstReleaseReviewSignaturesMutation_(
   stored,
-  email,
+  releaseActorEmail,
   now
 ) {
   const when = now instanceof Date ? now : new Date();
+  const meeting = parseMeetingJson_(stored);
+  const actor =
+    normalizeEmail_(meeting.releaseRequestedBy) ||
+    normalizeEmail_(releaseActorEmail);
   clearCombinedSignatureFields_(stored);
-  sealMeetingJsonOnRelease_(stored, email, when);
+  sealMeetingJsonOnRelease_(stored, actor, when);
   stored['Status'] = PR.CYCLE.SIGNATURES;
   stored['Manager Review Status'] = PR.DOC.PENDING_PARTICIPANTS;
   stored['Self Evaluation Status'] = PR.DOC.PENDING_PARTICIPANTS;
   stored['Signatures Released At'] = when;
-  stored['Signatures Released By'] = email;
+  stored['Signatures Released By'] = actor;
   stored['Updated At'] = when;
   return stored;
+}
+
+function resolveReleaseAuthorityEmail_(meeting, fallbackEmail) {
+  return (
+    normalizeEmail_(meeting && meeting.releaseRequestedBy) ||
+    normalizeEmail_(fallbackEmail)
+  );
+}
+
+/**
+ * Invalidate a role ACK when that role mutates meeting content after ACK.
+ */
+function invalidateMeetingReleaseAckForRole_(meeting, role) {
+  if (role === PR.ROLE.MANAGER) {
+    meeting.managerReleaseAckRequestId = '';
+    meeting.managerReleaseAckRevision = null;
+    meeting.managerReleaseAckAt = '';
+  } else if (role === PR.ROLE.EMPLOYEE) {
+    meeting.employeeReleaseAckRequestId = '';
+    meeting.employeeReleaseAckRevision = null;
+    meeting.employeeReleaseAckAt = '';
+  }
+  return meeting;
 }
 
 function buildReleaseWaitingMessage_(missingRoles) {
@@ -1567,9 +1614,33 @@ function acknowledgeMeetingRelease(cycleId, payload) {
       );
     }
     const claimedId = String(input.releaseRequestId || '').trim();
-    if (claimedId && claimedId !== meeting.releaseRequestId) {
+    if (!claimedId) {
+      throw new Error(
+        'releaseRequestId is required to acknowledge meeting release.'
+      );
+    }
+    if (claimedId !== meeting.releaseRequestId) {
       throw new Error(
         'This acknowledgement does not match the current release request.'
+      );
+    }
+
+    const authoritativeRevision = Number(meeting.contentRevision || 0);
+    if (
+      input.contentRevision === '' ||
+      input.contentRevision == null
+    ) {
+      throw new Error(
+        'contentRevision is required to acknowledge meeting release.'
+      );
+    }
+    const claimedRevision = Number(input.contentRevision);
+    if (
+      !Number.isFinite(claimedRevision) ||
+      claimedRevision !== authoritativeRevision
+    ) {
+      throw new Error(
+        'Stale meeting acknowledgement. Save the latest meeting notes and try again.'
       );
     }
 
@@ -1587,30 +1658,34 @@ function acknowledgeMeetingRelease(cycleId, payload) {
     recordMeetingReleaseAck_(
       meeting,
       ackRole,
-      Number.isFinite(Number(input.contentRevision))
-        ? Number(input.contentRevision)
-        : meeting.contentRevision,
+      authoritativeRevision,
       new Date()
     );
     stored['Meeting JSON'] = JSON.stringify(meeting);
     stored['Updated At'] = new Date();
 
     if (areMeetingReleaseAcksComplete_(meeting)) {
+      const releaseActor = resolveReleaseAuthorityEmail_(
+        meeting,
+        email
+      );
       applyFirstReleaseReviewSignaturesMutation_(
         stored,
-        email,
+        releaseActor,
         new Date()
       );
       sealedNow = true;
       pendingAuditEvent = buildPendingAuditEvent_(
         cycleId,
         'Review packet released for combined signatures',
-        email,
+        releaseActor,
         PR.CYCLE.MEETING,
         PR.CYCLE.SIGNATURES,
         JSON.stringify({
           releaseRequestId: meeting.releaseRequestId,
           via: 'acknowledgeMeetingRelease',
+          releaseRequestedBy: meeting.releaseRequestedBy,
+          secondAckBy: normalizeEmail_(email),
         }),
         'SIGNATURES_RELEASED:' +
           String(cycleId) +
@@ -1738,7 +1813,12 @@ function releaseReviewSignatures(cycleId, options) {
     }
 
     // First successful release only — never re-clear signatures on retry.
-    applyFirstReleaseReviewSignaturesMutation_(stored, email, now);
+    const releaseActor = resolveReleaseAuthorityEmail_(meeting, email);
+    applyFirstReleaseReviewSignaturesMutation_(
+      stored,
+      releaseActor,
+      now
+    );
     writeCycle_(location.rowNumber, stored);
 
     pendingAuditEvent = buildPendingAuditEvent_(
@@ -1746,13 +1826,14 @@ function releaseReviewSignatures(cycleId, options) {
       forceOverride && !acksComplete
         ? 'Review packet force-released without full participant acknowledgements'
         : 'Review packet released for combined signatures',
-      email,
+      releaseActor,
       PR.CYCLE.MEETING,
       PR.CYCLE.SIGNATURES,
       JSON.stringify({
         releaseRequestId: meeting.releaseRequestId,
         forceOverride: !!(forceOverride && !acksComplete),
         missingAcks: missingMeetingReleaseAckRoles_(meeting),
+        releaseRequestedBy: meeting.releaseRequestedBy,
       }),
       'SIGNATURES_RELEASED:' +
         String(cycleId) +

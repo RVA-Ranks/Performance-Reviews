@@ -9,21 +9,16 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-transactional-closure`  
-Tip SHA: `8882db2c53e3048eb05c1d0b8dc8362dd75112fb`
+Tip SHA: *(set after commit)*
 
-Closes the 79% blocker: replace timed draft-sync with Manager+Employee
-`releaseRequestId` acknowledgements before seal; non-fatal post-commit
-notifications; reconstructible audit Event IDs; locked Retry Audit; protected
-`ReviewPendingAudits`; header-driven Active checkboxes; invalid date rejection.
-Preserve finalization, compensation architecture, Attempt-ID signing.
+Closes Coach 76% blockers: revision-safe meeting save/ACK, release
+attribution via `releaseRequestedBy`, compensation reset→replacement +
+active-record selection, orphan relink, gate consistency, No Adjustment
+submit guard, reset lifecycle enforcement, employee acknowledgement stage
+gating. Preserve finalization/PDF/signature Attempt-ID architecture.
 
-**Still open (compensation module):** orphan relink, reset→replacement,
-gating policy consistency, No Adjustment manager-submit guard, reset during
-Meeting, employee acknowledgement stage gating.
-
-Run `runV31LifecycleTests_()` in Apps Script. **Do not run
-`setupReviewSystem_()` on production until this tip is deployed** (Active
-column formatting fix). Stop for Coach before merge.
+Run `runV31LifecycleTests_()` and `runV31CompensationTests_()` in Apps Script.
+Stop for Coach before merge.
 
 ## Active work — Concurrent signature handoff
 

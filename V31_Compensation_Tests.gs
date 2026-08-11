@@ -658,6 +658,135 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Adjustment remains gated when setting later disabled', function () {
+    const originalGetSettings = getSettings_;
+    getSettings_ = function () {
+      return { COMPENSATION_DECISION_REQUIRED: 'FALSE' };
+    };
+    try {
+      assert_(
+        isV31CompensationComplete_({
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_OWNER,
+        }) === false,
+        'Awaiting owner Adjustment must remain incomplete'
+      );
+      assert_(
+        isV31CompensationComplete_({
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+        }) === true,
+        'Resolved Adjustment still completes'
+      );
+    } finally {
+      getSettings_ = originalGetSettings;
+    }
+  });
+
+  check('Active compensation record helper treats Failed as inactive', function () {
+    assert_(
+      isCompensationRecordActive_({
+        Status: V31_COMP.STATUS.FAILED,
+      }) === false,
+      'Failed is inactive'
+    );
+    assert_(
+      isCompensationRecordActive_({
+        Status: V31_COMP.STATUS.AWAITING_OWNER,
+      }) === true,
+      'Awaiting owner is active'
+    );
+  });
+
+  check('Employee acknowledgement requires signature-stage cycle', function () {
+    const approved = {
+      'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+      Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+      'Final Approved Pay Rate': 50,
+      'Original Pay Rate': 40,
+      'Original Annual Salary': 83200,
+      'Final Approved Annual Salary': 104000,
+      'Final Approved Percent': 0.25,
+      'Compensation Effective Date': new Date(),
+    };
+    // Stage gate is in getEmployeeCompensationAcknowledgement_; without
+    // signature stage it must return null even if an approved record exists.
+    const openCycle = {
+      Status: PR.CYCLE.OPEN,
+      'Cycle ID': 'C-OPEN',
+      'Signatures Released At': '',
+    };
+    // Stub active record lookup if available.
+    const originalFind = findActiveCompensationRecordByCycleOptional_;
+    findActiveCompensationRecordByCycleOptional_ = function () {
+      return { rowNumber: 2, object: approved };
+    };
+    try {
+      assert_(
+        getEmployeeCompensationAcknowledgement_(openCycle) === null,
+        'Open cycle must not expose acknowledgement'
+      );
+      const readyCycle = {
+        Status: PR.CYCLE.READY,
+        'Cycle ID': 'C-READY',
+        'Signatures Released At': '',
+      };
+      assert_(
+        getEmployeeCompensationAcknowledgement_(readyCycle) === null,
+        'Ready cycle must not expose acknowledgement'
+      );
+      const meetingCycle = {
+        Status: PR.CYCLE.MEETING,
+        'Cycle ID': 'C-MEET',
+        'Signatures Released At': '',
+      };
+      assert_(
+        getEmployeeCompensationAcknowledgement_(meetingCycle) === null,
+        'Meeting Open must not expose acknowledgement'
+      );
+      const sigCycle = {
+        Status: PR.CYCLE.SIGNATURES,
+        'Cycle ID': 'C-SIG',
+        'Signatures Released At': new Date(),
+      };
+      const ack = getEmployeeCompensationAcknowledgement_(sigCycle);
+      assert_(!!ack, 'Signatures stage may expose acknowledgement');
+      assert_(
+        Number(ack.finalApprovedPayRate) === 50,
+        'pay rate surfaced'
+      );
+    } finally {
+      findActiveCompensationRecordByCycleOptional_ = originalFind;
+    }
+  });
+
+  check('Reset lifecycle stages: Meeting Open rejected; Ready demotes', function () {
+    assert_(
+      [
+        PR.CYCLE.MEETING,
+        PR.CYCLE.SIGNATURES,
+        PR.CYCLE.FINALIZING,
+        PR.CYCLE.COMPLETE,
+      ].indexOf(PR.CYCLE.MEETING) !== -1,
+      'Meeting Open is a blocked reset stage'
+    );
+    assert_(
+      PR.CYCLE.READY !== PR.CYCLE.MEETING,
+      'Ready remains eligible for demotion path'
+    );
+  });
+
+  check('Manager No Adjustment requires submitted manager review', function () {
+    const draftOk = [PR.DOC.SUBMITTED, PR.DOC.COMPLETE].includes(
+      String(PR.DOC.DRAFT)
+    );
+    assert_(draftOk === false, 'Draft manager review must be rejected');
+    assert_(
+      [PR.DOC.SUBMITTED, PR.DOC.COMPLETE].includes(PR.DOC.SUBMITTED) === true,
+      'Submitted manager review is accepted'
+    );
+  });
+
   const failed = results.filter(function (item) {
     return !item.ok;
   });

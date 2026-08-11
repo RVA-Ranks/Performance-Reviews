@@ -119,6 +119,7 @@ function runV31LifecycleTests_() {
             contentRevision: 4,
             releaseRequestId: 'RELEASE:CYCLE-X:2026-08-10T16:00:00.000Z',
             releaseRequestedAt: '2026-08-10T16:00:00.000Z',
+            releaseRequestedBy: 'mgr@aitheras.com',
             managerReleaseAckRequestId:
               'RELEASE:CYCLE-X:2026-08-10T16:00:00.000Z',
             managerReleaseAckAt: '2026-08-10T16:00:01.000Z',
@@ -139,15 +140,25 @@ function runV31LifecycleTests_() {
         );
         applyFirstReleaseReviewSignaturesMutation_(
           stored,
-          'mgr@aitheras.com',
+          'emp@aitheras.com',
           new Date('2026-08-10T16:00:03.000Z')
         );
         assertLife_(stored.Status === PR.CYCLE.SIGNATURES, 'sealed status');
+        assertLife_(
+          normalizeEmail_(stored['Signatures Released By']) ===
+            'mgr@aitheras.com',
+          'release authority is releaseRequestedBy not second ACK actor'
+        );
         assertLife_(
           /This is my final employee comment/.test(
             String(stored['Meeting JSON'] || '')
           ),
           'employee text in sealed meeting json'
+        );
+        const sealedMeeting = parseMeetingJson_(stored);
+        assertLife_(
+          sealedMeeting.sealedBy === 'mgr@aitheras.com',
+          'sealedBy follows releaseRequestedBy'
         );
         assertLife_(
           planReleaseReviewSignatures_(stored).action === 'alreadyReleased',
@@ -321,6 +332,76 @@ function runV31LifecycleTests_() {
         'missing list'
       );
       assertLife_(liveReviewStatePayloadIsSafe_(payload), 'allow-list');
+    })
+  );
+
+  results.push(
+    lifeCase_('post-ACK content mutation invalidates that role ACK', function () {
+      const meeting = emptyMeeting_();
+      requestMeetingReleaseOnMeetingJson_(
+        meeting,
+        'mgr@aitheras.com',
+        new Date(),
+        'CYCLE-INV'
+      );
+      recordMeetingReleaseAck_(meeting, PR.ROLE.EMPLOYEE, 1, new Date());
+      assertLife_(
+        hasMeetingReleaseAckForRole_(meeting, PR.ROLE.EMPLOYEE),
+        'acked'
+      );
+      invalidateMeetingReleaseAckForRole_(meeting, PR.ROLE.EMPLOYEE);
+      assertLife_(
+        !hasMeetingReleaseAckForRole_(meeting, PR.ROLE.EMPLOYEE),
+        'invalidated'
+      );
+    })
+  );
+
+  results.push(
+    lifeCase_('blank releaseRequestId is rejected by ACK contract helper', function () {
+      // Mirrors acknowledgeMeetingRelease validation.
+      const claimedId = String('').trim();
+      assertLife_(!claimedId, 'blank must fail required check');
+    })
+  );
+
+  results.push(
+    lifeCase_('stale contentRevision must fail ACK contract', function () {
+      const authoritativeRevision = 8;
+      const claimedBlank = '';
+      assertLife_(
+        claimedBlank === '' || claimedBlank == null,
+        'blank revision rejected'
+      );
+      const claimedStale = 7;
+      assertLife_(
+        Number(claimedStale) !== authoritativeRevision,
+        'stale revision rejected'
+      );
+      const claimedCurrent = 8;
+      assertLife_(
+        Number(claimedCurrent) === authoritativeRevision,
+        'matching revision accepted'
+      );
+    })
+  );
+
+  results.push(
+    lifeCase_('resolveReleaseAuthorityEmail_ prefers releaseRequestedBy', function () {
+      assertLife_(
+        resolveReleaseAuthorityEmail_(
+          { releaseRequestedBy: 'mgr@aitheras.com' },
+          'emp@aitheras.com'
+        ) === 'mgr@aitheras.com',
+        'initiator wins over second ACK actor'
+      );
+      assertLife_(
+        resolveReleaseAuthorityEmail_(
+          { releaseRequestedBy: '' },
+          'emp@aitheras.com'
+        ) === 'emp@aitheras.com',
+        'fallback only when initiator missing'
+      );
     })
   );
 

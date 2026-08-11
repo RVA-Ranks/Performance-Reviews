@@ -203,6 +203,16 @@ function ensureCompensationDataModel_() {
   protectV31Sheet_(history);
 
   migrateLegacyCompensationDecisions_();
+  try {
+    reconcileCompensationCycleLinks_();
+  } catch (reconcileError) {
+    Logger.log(
+      'Compensation orphan reconcile skipped: ' +
+        String(
+          (reconcileError && reconcileError.message) || reconcileError
+        )
+    );
+  }
 }
 
 function migrateLegacyCompensationDecisions_() {
@@ -670,32 +680,44 @@ function ensureCompensationSealedForFinalization_(cycleId) {
 }
 
 function isV31CompensationComplete_(cycle) {
+  const decision = normalizeCompensationDecision_(
+    cycle['Compensation Decision']
+  );
+
+  // An actual Adjustment always remains mandatory even if the global
+  // COMPENSATION_DECISION_REQUIRED setting is later disabled.
+  if (decision === V31.COMPENSATION.ADJUSTMENT) {
+    const status = String(
+      cycle['Compensation Status'] || V31_COMP.STATUS.PENDING
+    );
+    return (
+      status === V31_COMP.STATUS.AWAITING_SIGNATURES ||
+      status === V31_COMP.STATUS.COMPLETE ||
+      status === V31_COMP.STATUS.DENIED
+    );
+  }
+
+  const active = findActiveCompensationRecordByCycleOptional_(
+    cycle['Cycle ID']
+  );
+  if (
+    active &&
+    String(active.object['Status'] || '') ===
+      V31_COMP.STATUS.AWAITING_OWNER
+  ) {
+    return false;
+  }
+
   const settings = getSettings_();
   if (!v31Boolean_(settings.COMPENSATION_DECISION_REQUIRED, true)) {
     return true;
   }
 
-  const decision = normalizeCompensationDecision_(
-    cycle['Compensation Decision']
-  );
-
   if (decision === V31.COMPENSATION.NONE) {
     return true;
   }
 
-  if (decision !== V31.COMPENSATION.ADJUSTMENT) {
-    return false;
-  }
-
-  const status = String(
-    cycle['Compensation Status'] || V31_COMP.STATUS.PENDING
-  );
-  // Denied recommendations resolve the compensation obligation without a CAF.
-  return (
-    status === V31_COMP.STATUS.AWAITING_SIGNATURES ||
-    status === V31_COMP.STATUS.COMPLETE ||
-    status === V31_COMP.STATUS.DENIED
-  );
+  return false;
 }
 
 function syncCycleCompensationSummary_(cycle, record) {
@@ -894,12 +916,24 @@ function submitNoCompensationAdjustment(cycleId, notes) {
       );
     }
 
+    if (
+      isManager &&
+      !isHr &&
+      ![PR.DOC.SUBMITTED, PR.DOC.COMPLETE].includes(
+        String(cycle['Manager Review Status'])
+      )
+    ) {
+      throw new Error(
+        'Submit the manager review before recording No Adjustment.'
+      );
+    }
+
     const previous = normalizeCompensationDecision_(
       cycle['Compensation Decision']
     );
     if (
       previous === V31.COMPENSATION.ADJUSTMENT &&
-      findCompensationRecordByCycleOptional_(cycleId)
+      findActiveCompensationRecordByCycleOptional_(cycleId)
     ) {
       throw new Error(
         'A compensation recommendation already exists for this cycle.'
@@ -961,8 +995,16 @@ function submitCompensationRecommendation(cycleId, payload) {
       );
     }
 
-    const existing = findCompensationRecordByCycleOptional_(cycleId);
-    if (existing) {
+    const activeCount = countActiveCompensationRecordsForCycle_(cycleId);
+    if (activeCount > 1) {
+      throw new Error(
+        'Multiple active compensation records exist for this cycle. HR must reconcile before a new recommendation can be submitted.'
+      );
+    }
+    if (
+      activeCount === 1 ||
+      findActiveCompensationRecordByCycleOptional_(cycleId)
+    ) {
       throw new Error(
         'A compensation recommendation already exists for this review cycle.'
       );
@@ -1496,6 +1538,18 @@ function resetCompensationDecision(cycleId, reason) {
 
     const location = findCycle_(cycleId);
     const cycle = location.object;
+    const status = String(cycle['Status'] || '');
+    if (
+      status === PR.CYCLE.MEETING ||
+      status === PR.CYCLE.SIGNATURES ||
+      status === PR.CYCLE.FINALIZING ||
+      status === PR.CYCLE.COMPLETE
+    ) {
+      throw new Error(
+        'Compensation cannot be reset after the review meeting has opened. Use a recovery/amendment path instead.'
+      );
+    }
+
     const signatures = getCombinedSignatureState_(cycle);
     if (
       signatures.managerSigned ||
@@ -1510,13 +1564,13 @@ function resetCompensationDecision(cycleId, reason) {
     const previous = normalizeCompensationDecision_(
       cycle['Compensation Decision']
     );
-    const recordLoc = findCompensationRecordByCycleOptional_(cycleId);
+    const recordLoc = findActiveCompensationRecordByCycleOptional_(cycleId);
     if (recordLoc) {
-      const status = String(recordLoc.object['Status'] || '');
+      const recordStatus = String(recordLoc.object['Status'] || '');
       if (
-        status !== V31_COMP.STATUS.AWAITING_OWNER &&
-        status !== V31_COMP.STATUS.AWAITING_SIGNATURES &&
-        status !== V31_COMP.STATUS.DENIED
+        recordStatus !== V31_COMP.STATUS.AWAITING_OWNER &&
+        recordStatus !== V31_COMP.STATUS.AWAITING_SIGNATURES &&
+        recordStatus !== V31_COMP.STATUS.DENIED
       ) {
         throw new Error(
           'Completed compensation records cannot be reset through ordinary reset.'
@@ -1537,8 +1591,18 @@ function resetCompensationDecision(cycleId, reason) {
     cycle['Compensation Status'] = V31_COMP.STATUS.PENDING;
     cycle['Compensation Record ID'] = '';
     cycle['CAF Final PDF ID'] = '';
+    // Ready for Meeting depends on compensation complete — demote safely.
+    if (status === PR.CYCLE.READY) {
+      cycle['Status'] = PR.CYCLE.OPEN;
+    }
     cycle['Updated At'] = new Date();
     writeCycle_(location.rowNumber, cycle);
+
+    // Clear request-scoped compensation cache so Failed no longer shadows.
+    const req = typeof perfGetRequest_ === 'function' ? perfGetRequest_() : null;
+    if (req && req.cache) {
+      delete req.cache.compensationByCycleId;
+    }
 
     audit_(
       cycleId,
@@ -1552,6 +1616,7 @@ function resetCompensationDecision(cycleId, reason) {
     return {
       ok: true,
       decision: V31.COMPENSATION.PENDING,
+      cycleStatus: String(cycle['Status'] || ''),
       message: 'Compensation decision reset to Pending.',
     };
   });
