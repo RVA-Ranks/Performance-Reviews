@@ -366,6 +366,15 @@ function ensureV31DataModel_() {
   ensureHeaders_(cycles, V31.CYCLE_HEADERS);
   ensureReviewAuditEventIdHeader_(audit);
   ensureHeaders_(log, V31.LOG_HEADERS);
+  ensurePendingAuditSheet_();
+  try {
+    protectSheets_(ss);
+  } catch (protectError) {
+    Logger.log(
+      'ensureV31DataModel_ protectSheets_ skipped: ' +
+        String((protectError && protectError.message) || protectError)
+    );
+  }
 
   const current = readSettings_(settingsSheet);
 

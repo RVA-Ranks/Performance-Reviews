@@ -1619,7 +1619,8 @@ let meetingReleaseFlushInFlight = false;
 let defaultDocumentTitle = 'AITHERAS Performance Reviews';
 const LIVE_REVIEW_POLL_VISIBLE_MS = 2500;
 const LIVE_REVIEW_POLL_HIDDEN_MS = 9000;
-const MEETING_RELEASE_CLIENT_SYNC_MS = 7000;
+const LIVE_REVIEW_POLL_RELEASE_PENDING_MS = 1000;
+const MEETING_RELEASE_ACK_WAIT_MS = 120000;
 
 const editorState = {
   manager: createEditorState(),
@@ -5343,6 +5344,9 @@ async function startMeeting() {
     if (result.auditWarning) {
       showToast('warning', 'Audit trail', result.auditWarning);
     }
+    if (result.notificationWarning) {
+      showToast('warning', 'Notifications', result.notificationWarning);
+    }
     await refreshApplication(currentCycle.cycleId, 'meeting');
   } catch (error) {
     try {
@@ -5445,9 +5449,16 @@ function scheduleNextLiveReviewPoll_() {
   }
   if (!shouldPollLiveReview_()) return;
   const gen = liveReviewPollGeneration;
-  const delay = document.hidden
-    ? LIVE_REVIEW_POLL_HIDDEN_MS
-    : LIVE_REVIEW_POLL_VISIBLE_MS;
+  const releasePending = !!(
+    currentCycle &&
+    (currentCycle.meetingReleasePending ||
+      currentCycle.releaseRequestId)
+  );
+  const delay = releasePending
+    ? LIVE_REVIEW_POLL_RELEASE_PENDING_MS
+    : document.hidden
+      ? LIVE_REVIEW_POLL_HIDDEN_MS
+      : LIVE_REVIEW_POLL_VISIBLE_MS;
   liveReviewPollTimer = setTimeout(function() {
     if (gen !== liveReviewPollGeneration) return;
     pollLiveReviewState_();
@@ -5588,6 +5599,36 @@ function refreshLiveSignatureStatusDisplay_() {
   return true;
 }
 
+async function flushAndAcknowledgeMeetingRelease_() {
+  if (!currentCycle || !currentCycle.cycleId) {
+    return { ok: false, error: 'No cycle' };
+  }
+  let contentRevision = Number(currentCycle.meetingContentRevision || 0);
+  if (meetingDirty) {
+    const flushed = await flushMeetingDraftForRelease_();
+    if (!flushed.ok) {
+      return {
+        ok: false,
+        flushFailed: true,
+        preserveLocalDraft: !!flushed.preserveLocalDraft,
+        error: flushed.error || flushed.message || 'Meeting notes could not be saved.'
+      };
+    }
+    if (flushed.result && flushed.result.contentRevision != null) {
+      contentRevision = Number(flushed.result.contentRevision);
+    }
+  }
+  try {
+    const live = await server('acknowledgeMeetingRelease', currentCycle.cycleId, {
+      releaseRequestId: currentCycle.releaseRequestId || '',
+      contentRevision: contentRevision
+    });
+    return { ok: true, live: live };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
 function applyLiveReviewState_(live) {
   if (!currentCycle || !live) return;
   if (String(live.cycleId) !== String(currentCycle.cycleId)) return;
@@ -5598,16 +5639,46 @@ function applyLiveReviewState_(live) {
   const wasReleasePending = !!currentCycle.meetingReleasePending;
   patchCycleFromLiveState_(live);
   currentCycle.meetingReleasePending = !!live.meetingReleasePending;
+  currentCycle.releaseRequestId = live.releaseRequestId || '';
   currentCycle.meetingReleaseRequestedAtIso = live.meetingReleaseRequestedAtIso || '';
   currentCycle.meetingContentRevision = live.meetingContentRevision;
+  currentCycle.missingReleaseAcks = live.missingReleaseAcks || [];
 
-  // Manager began release sync — flush any dirty draft while Meeting is still open.
-  if (live.meetingReleasePending && meetingDirty) {
-    flushMeetingDraftForRelease_().then(function(flushResult) {
-      if (flushResult && flushResult.preserveLocalDraft) {
-        renderCycleWorkspace();
-      }
-    });
+  if (
+    live.meetingReleasePending &&
+    String(live.status) === 'Review Meeting Open' &&
+    (currentCycle.isManager || currentCycle.isEmployee)
+  ) {
+    const needsAck =
+      (currentCycle.isManager && !live.managerReleaseAcked) ||
+      (currentCycle.isEmployee && !live.employeeReleaseAcked);
+    if (needsAck && !window.__meetingReleaseAckInFlight) {
+      window.__meetingReleaseAckInFlight = true;
+      flushAndAcknowledgeMeetingRelease_()
+        .then(function(ackResult) {
+          if (ackResult && ackResult.live) {
+            applyLiveReviewState_(ackResult.live);
+            if (
+              ackResult.live.alreadyReleased ||
+              String(ackResult.live.status) === 'Awaiting Signatures'
+            ) {
+              handleSignatureReleaseDetection_(ackResult.live);
+            }
+          } else if (ackResult && ackResult.flushFailed) {
+            liveReleaseBannerVisible = true;
+            showToast(
+              'warning',
+              'Meeting notes not synced',
+              ackResult.error ||
+                'Save your meeting notes so signature release can continue.'
+            );
+            renderCycleWorkspace();
+          }
+        })
+        .finally(function() {
+          window.__meetingReleaseAckInFlight = false;
+        });
+    }
   }
 
   const releasedTransition =
@@ -5624,8 +5695,9 @@ function applyLiveReviewState_(live) {
   ) {
     showToast(
       'info',
-      'Saving meeting notes',
-      'Signature release is waiting for open browsers to save meeting notes.'
+      'Waiting for participant sync',
+      live.message ||
+        'Signature release is waiting for Manager and Employee acknowledgements.'
     );
     if (meetingDirty) {
       liveReleaseBannerVisible = true;
@@ -5673,7 +5745,6 @@ function handleSignatureReleaseDetection_(live) {
     document.title = 'Signature Ready — AITHERAS Review';
   }
 
-  // Never destroy participant text. If still dirty after seal, preserve it.
   if (meetingDirty || meetingDraftPreserveAfterSeal) {
     meetingDraftPreserveAfterSeal = true;
     liveReleaseBannerVisible = true;
@@ -5683,7 +5754,6 @@ function handleSignatureReleaseDetection_(live) {
       'Keep your meeting notes',
       'Signatures are ready, but this browser still has meeting text that may not be on the sealed packet. Copy anything you need before continuing.'
     );
-    // Still try one authoritative save; if sealed, preserveLocalDraft stays true.
     flushMeetingDraftForRelease_();
     return;
   }
@@ -5723,34 +5793,71 @@ async function releaseSignatures() {
   window.__releaseSignaturesInFlight = true;
   setSaveIndicator('saving', 'Syncing meeting notes…');
   try {
-    // 1) Flush the releaser's own dirty notes first.
     if (meetingDirty) {
       const flushed = await flushMeetingDraftForRelease_();
-      if (flushed.preserveLocalDraft) {
+      if (!flushed.ok) {
         showToast(
-          'warning',
-          'Keep your meeting notes',
-          flushed.message ||
-            'The packet may already be sealed. Local text was preserved.'
+          'error',
+          'Could not release review packet',
+          flushed.error ||
+            'Your meeting notes could not be saved. Fix the save error before releasing.'
         );
+        return;
       }
     }
 
-    // 2) Ask other open browsers to flush during the sync window.
     let prep = await server('prepareReleaseReviewSignatures', currentCycle.cycleId);
     if (prep.alreadyReleased || String(prep.status) === 'Awaiting Signatures') {
       showToast('success', 'Signatures already released', prep.message || 'Signatures are ready.');
       applyReleaseLiveState_(prep);
       return;
     }
+    if (prep.auditWarning) {
+      showToast('warning', 'Audit trail', prep.auditWarning);
+    }
+    currentCycle.releaseRequestId = prep.releaseRequestId || '';
+    currentCycle.meetingReleasePending = true;
+    startLiveReviewPolling_();
 
-    const deadline = Date.now() + MEETING_RELEASE_CLIENT_SYNC_MS;
-    setSaveIndicator('saving', 'Waiting for participant notes…');
-    while (Date.now() < deadline) {
-      if (meetingDirty) {
-        await flushMeetingDraftForRelease_();
+    if (currentCycle.isManager || currentCycle.isEmployee) {
+      const ack = await flushAndAcknowledgeMeetingRelease_();
+      if (!ack.ok) {
+        showToast(
+          'error',
+          'Could not release review packet',
+          ack.error || 'Could not acknowledge meeting release synchronization.'
+        );
+        return;
       }
-      await sleepMs_(500);
+      if (
+        ack.live &&
+        (ack.live.alreadyReleased ||
+          String(ack.live.status) === 'Awaiting Signatures')
+      ) {
+        showToast('success', 'Review packet released', ack.live.message || 'Signatures are ready.');
+        applyReleaseLiveState_(ack.live);
+        server('accelerateSignatureReleaseNotifications', currentCycle.cycleId).catch(function() {});
+        return;
+      }
+      if (ack.live) prep = ack.live;
+    }
+
+    setSaveIndicator('saving', prep.message || 'Waiting for participant sync…');
+    const deadline = Date.now() + MEETING_RELEASE_ACK_WAIT_MS;
+    while (Date.now() < deadline) {
+      await sleepMs_(1000);
+      if (meetingDirty) {
+        const flushedAgain = await flushMeetingDraftForRelease_();
+        if (!flushedAgain.ok) {
+          showToast(
+            'error',
+            'Could not release review packet',
+            flushedAgain.error || 'Meeting notes could not be saved during release sync.'
+          );
+          return;
+        }
+        await flushAndAcknowledgeMeetingRelease_();
+      }
       try {
         const live = await server('getLiveReviewState', currentCycle.cycleId);
         if (
@@ -5759,29 +5866,27 @@ async function releaseSignatures() {
             String(live.status) === 'Finalizing' ||
             String(live.status) === 'Complete')
         ) {
+          showToast('success', 'Review packet released', live.message || 'Signatures are ready.');
           applyReleaseLiveState_(live);
-          showToast('success', 'Signatures already released', 'The packet was already released.');
+          server('accelerateSignatureReleaseNotifications', currentCycle.cycleId).catch(function() {});
           return;
         }
-      } catch (pollError) {
-        // Continue sync wait.
-      }
+        if (live && live.releaseAcksComplete) break;
+        setSaveIndicator('saving', (live && live.message) || 'Waiting for participant sync…');
+      } catch (pollError) {}
     }
 
-    // 3) Commit seal only after the draft-sync barrier.
-    setSaveIndicator('saving', 'Releasing signatures…');
-    const result = await server('releaseReviewSignatures', currentCycle.cycleId, {
-      commit: true
-    });
+    const result = await server('releaseReviewSignatures', currentCycle.cycleId, {});
     if (result.releasePending) {
-      // Server still waiting — force one commit retry after a short beat.
-      await sleepMs_(Math.max(250, Number(result.syncRemainingMs || 0)));
-      const committed = await server('releaseReviewSignatures', currentCycle.cycleId, {
-        commit: true
-      });
-      Object.keys(committed).forEach(function(key) {
-        result[key] = committed[key];
-      });
+      showToast(
+        'warning',
+        'Waiting for participant sync',
+        result.message ||
+          'The packet is not sealed yet. Keep this page open until the Employee acknowledges.'
+      );
+      applyLiveReviewState_(result);
+      startLiveReviewPolling_();
+      return;
     }
 
     showToast(
@@ -5830,9 +5935,7 @@ async function releaseSignatures() {
         applyReleaseLiveState_(live);
         reconciled = true;
       }
-    } catch (reconcileError) {
-      // Fall through to error toast.
-    }
+    } catch (reconcileError) {}
     if (!reconciled) {
       showToast('error', 'Could not release review packet', errorMessage(error));
     }

@@ -858,15 +858,28 @@ function saveIndependentReview_(
   saved.auditWarning = auditWarning;
 
   if (saved.notifyReady) {
-    deliverWorkflowNotification_(
-      cycleId,
-      getWorkflowNotificationComponent_('ready'),
-      function (cycle) {
-        sendReadyForMeetingEmailBody_(cycle);
-      },
-      {}
-    );
-    dispatchPendingWorkflowNotifications_(cycleId);
+    try {
+      deliverWorkflowNotification_(
+        cycleId,
+        getWorkflowNotificationComponent_('ready'),
+        function (cycle) {
+          sendReadyForMeetingEmailBody_(cycle);
+        },
+        {}
+      );
+      dispatchPendingWorkflowNotifications_(cycleId);
+    } catch (notifyError) {
+      Logger.log(
+        'Post-submit notification acceleration failed: ' +
+          String(
+            (notifyError && notifyError.message) || notifyError
+          )
+      );
+      auditWarning =
+        (auditWarning ? auditWarning + ' ' : '') +
+        'The review was saved, but notification delivery needs attention and will retry through the durable outbox.';
+      saved.auditWarning = auditWarning;
+    }
   }
 
   if (submit) {
@@ -887,6 +900,11 @@ function saveIndependentReview_(
     savedAtIso: saved.savedAtIso,
     message: saved.message,
     auditWarning: saved.auditWarning || '',
+    notificationWarning: /notification delivery needs attention/i.test(
+      String(saved.auditWarning || '')
+    )
+      ? saved.auditWarning
+      : '',
     compensationDecisionRequired:
       type === PR.TYPE.MANAGER &&
       !!submit &&
@@ -995,7 +1013,11 @@ function startReviewMeeting(cycleId) {
       email,
       PR.CYCLE.READY,
       PR.CYCLE.MEETING,
-      ''
+      '',
+      'MEETING_OPENED:' +
+        String(cycleId) +
+        ':' +
+        toIsoString_(stored['Meeting Opened At'])
     );
 
     return stored;
@@ -1009,9 +1031,21 @@ function startReviewMeeting(cycleId) {
     }
   }
 
+  let notificationWarning = '';
   if (!alreadyOpen) {
-    sendMeetingOpenedEmails_(cycleId);
-    dispatchPendingWorkflowNotifications_(cycleId);
+    try {
+      sendMeetingOpenedEmails_(cycleId);
+      dispatchPendingWorkflowNotifications_(cycleId);
+    } catch (notifyError) {
+      Logger.log(
+        'Post-meeting-open notification failed: ' +
+          String(
+            (notifyError && notifyError.message) || notifyError
+          )
+      );
+      notificationWarning =
+        'The meeting is open, but notification delivery needs attention and will retry through the durable outbox.';
+    }
   }
 
   return {
@@ -1022,6 +1056,7 @@ function startReviewMeeting(cycleId) {
       ? 'The review meeting is already open. Both reviews are visible to the manager and employee.'
       : 'The meeting is open. Both reviews are now visible to the manager and employee.',
     auditWarning: auditWarning || '',
+    notificationWarning: notificationWarning || '',
   };
 }
 
@@ -1033,9 +1068,6 @@ function autosaveMeetingOutcomes(cycleId, payload) {
   return saveMeetingOutcomes_(cycleId, payload, true);
 }
 
-/** Client waits this long after prepare so open browsers can flush drafts. */
-var MEETING_RELEASE_DRAFT_SYNC_MS = 7000;
-
 function emptyMeeting_() {
   return {
     managerFinalComments: '',
@@ -1044,8 +1076,15 @@ function emptyMeeting_() {
     employeeComments: '',
     lastSavedAt: '',
     contentRevision: 0,
+    releaseRequestId: '',
     releaseRequestedAt: '',
     releaseRequestedBy: '',
+    managerReleaseAckRequestId: '',
+    managerReleaseAckRevision: null,
+    managerReleaseAckAt: '',
+    employeeReleaseAckRequestId: '',
+    employeeReleaseAckRevision: null,
+    employeeReleaseAckAt: '',
     sealedAt: '',
     sealedBy: '',
   };
@@ -1059,39 +1098,121 @@ function parseMeetingJson_(cycle) {
   if (!Number.isFinite(Number(meeting.contentRevision))) {
     meeting.contentRevision = 0;
   }
+  meeting.releaseRequestId = String(meeting.releaseRequestId || '');
   meeting.releaseRequestedAt = String(
     meeting.releaseRequestedAt || ''
   );
   meeting.releaseRequestedBy = String(
     meeting.releaseRequestedBy || ''
   );
+  meeting.managerReleaseAckRequestId = String(
+    meeting.managerReleaseAckRequestId || ''
+  );
+  meeting.employeeReleaseAckRequestId = String(
+    meeting.employeeReleaseAckRequestId || ''
+  );
+  meeting.managerReleaseAckAt = String(
+    meeting.managerReleaseAckAt || ''
+  );
+  meeting.employeeReleaseAckAt = String(
+    meeting.employeeReleaseAckAt || ''
+  );
   meeting.sealedAt = String(meeting.sealedAt || '');
   meeting.sealedBy = String(meeting.sealedBy || '');
   return meeting;
 }
 
-function meetingReleaseSyncAgeMs_(meeting, nowMs) {
-  const requested = meeting && meeting.releaseRequestedAt
-    ? new Date(meeting.releaseRequestedAt)
-    : null;
-  if (!requested || isNaN(requested.getTime())) return null;
-  return Math.max(0, Number(nowMs || Date.now()) - requested.getTime());
+function clearMeetingReleaseAcks_(meeting) {
+  meeting.managerReleaseAckRequestId = '';
+  meeting.managerReleaseAckRevision = null;
+  meeting.managerReleaseAckAt = '';
+  meeting.employeeReleaseAckRequestId = '';
+  meeting.employeeReleaseAckRevision = null;
+  meeting.employeeReleaseAckAt = '';
+  return meeting;
 }
 
-function isMeetingReleaseSyncReady_(meeting, nowMs) {
-  const age = meetingReleaseSyncAgeMs_(meeting, nowMs);
-  if (age === null) return false;
-  return age >= MEETING_RELEASE_DRAFT_SYNC_MS;
-}
-
-function requestMeetingReleaseOnMeetingJson_(meeting, actorEmail, now) {
-  if (meeting.releaseRequestedAt) {
+/**
+ * Start or reuse an immutable release request. New request clears ACKs.
+ */
+function requestMeetingReleaseOnMeetingJson_(
+  meeting,
+  actorEmail,
+  now,
+  cycleId
+) {
+  if (meeting.releaseRequestId && meeting.releaseRequestedAt) {
     return { meeting: meeting, created: false };
   }
   const when = now instanceof Date ? now : new Date();
+  const requestId =
+    'RELEASE:' +
+    String(cycleId || 'cycle') +
+    ':' +
+    when.toISOString();
+  meeting.releaseRequestId = requestId;
   meeting.releaseRequestedAt = when.toISOString();
   meeting.releaseRequestedBy = normalizeEmail_(actorEmail);
+  clearMeetingReleaseAcks_(meeting);
   return { meeting: meeting, created: true };
+}
+
+function hasMeetingReleaseAckForRole_(meeting, role) {
+  const requestId = String(
+    (meeting && meeting.releaseRequestId) || ''
+  );
+  if (!requestId) return false;
+  if (role === PR.ROLE.MANAGER) {
+    return (
+      String(meeting.managerReleaseAckRequestId || '') ===
+        requestId && !!meeting.managerReleaseAckAt
+    );
+  }
+  if (role === PR.ROLE.EMPLOYEE) {
+    return (
+      String(meeting.employeeReleaseAckRequestId || '') ===
+        requestId && !!meeting.employeeReleaseAckAt
+    );
+  }
+  return false;
+}
+
+function areMeetingReleaseAcksComplete_(meeting) {
+  return (
+    hasMeetingReleaseAckForRole_(meeting, PR.ROLE.MANAGER) &&
+    hasMeetingReleaseAckForRole_(meeting, PR.ROLE.EMPLOYEE)
+  );
+}
+
+function missingMeetingReleaseAckRoles_(meeting) {
+  const missing = [];
+  if (!hasMeetingReleaseAckForRole_(meeting, PR.ROLE.MANAGER)) {
+    missing.push(PR.ROLE.MANAGER);
+  }
+  if (!hasMeetingReleaseAckForRole_(meeting, PR.ROLE.EMPLOYEE)) {
+    missing.push(PR.ROLE.EMPLOYEE);
+  }
+  return missing;
+}
+
+function recordMeetingReleaseAck_(meeting, role, revision, now) {
+  const when = now instanceof Date ? now : new Date();
+  const requestId = String(meeting.releaseRequestId || '');
+  const rev = Number(revision);
+  if (role === PR.ROLE.MANAGER) {
+    meeting.managerReleaseAckRequestId = requestId;
+    meeting.managerReleaseAckRevision = Number.isFinite(rev)
+      ? rev
+      : Number(meeting.contentRevision || 0);
+    meeting.managerReleaseAckAt = when.toISOString();
+  } else if (role === PR.ROLE.EMPLOYEE) {
+    meeting.employeeReleaseAckRequestId = requestId;
+    meeting.employeeReleaseAckRevision = Number.isFinite(rev)
+      ? rev
+      : Number(meeting.contentRevision || 0);
+    meeting.employeeReleaseAckAt = when.toISOString();
+  }
+  return meeting;
 }
 
 function sealMeetingJsonOnRelease_(cycle, actorEmail, sealedAt) {
@@ -1198,8 +1319,12 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
         PR.CYCLE.MEETING,
         JSON.stringify({
           contentRevision: meeting.contentRevision,
-          releaseRequested: !!meeting.releaseRequestedAt,
-        })
+          releaseRequestId: meeting.releaseRequestId || '',
+        }),
+        'MEETING_SAVE:' +
+          String(cycleId) +
+          ':' +
+          String(meeting.contentRevision)
       );
     }
 
@@ -1210,7 +1335,8 @@ function saveMeetingOutcomes_(cycleId, payload, isAutosave) {
       savedAt: formatDateTime_(now),
       savedAtIso: now.toISOString(),
       contentRevision: meeting.contentRevision,
-      meetingReleasePending: !!meeting.releaseRequestedAt,
+      meetingReleasePending: !!meeting.releaseRequestId,
+      releaseRequestId: meeting.releaseRequestId || '',
       message: isAutosave
         ? 'Meeting notes autosaved.'
         : 'Meeting outcomes saved.',
@@ -1291,9 +1417,24 @@ function applyFirstReleaseReviewSignaturesMutation_(
   return stored;
 }
 
+function buildReleaseWaitingMessage_(missingRoles) {
+  const missing = missingRoles || [];
+  if (!missing.length) {
+    return 'Participant acknowledgements are complete. Releasing…';
+  }
+  if (missing.length === 2) {
+    return 'Waiting for Manager and Employee pages to synchronize meeting notes…';
+  }
+  return (
+    'Waiting for ' +
+    missing[0] +
+    ' page to synchronize meeting notes…'
+  );
+}
+
 /**
- * Ask open participant browsers to flush meeting drafts before seal.
- * Status stays Meeting Open; Meeting JSON gains releaseRequestedAt.
+ * Create immutable releaseRequestId and clear prior ACKs.
+ * Status stays Meeting Open until both ACKs exist.
  */
 function prepareReleaseReviewSignatures(cycleId) {
   const email = getCurrentUserEmail_();
@@ -1333,7 +1474,8 @@ function prepareReleaseReviewSignatures(cycleId) {
     const requested = requestMeetingReleaseOnMeetingJson_(
       meeting,
       email,
-      new Date()
+      new Date(),
+      cycleId
     );
     createdRequest = requested.created;
     stored['Meeting JSON'] = JSON.stringify(requested.meeting);
@@ -1348,16 +1490,24 @@ function prepareReleaseReviewSignatures(cycleId) {
         PR.CYCLE.MEETING,
         PR.CYCLE.MEETING,
         JSON.stringify({
-          releaseRequestedAt: requested.meeting.releaseRequestedAt,
+          releaseRequestId: requested.meeting.releaseRequestId,
           contentRevision: requested.meeting.contentRevision,
-        })
+        }),
+        'MEETING_RELEASE_REQUESTED:' +
+          String(cycleId) +
+          ':' +
+          String(requested.meeting.releaseRequestId)
       );
     }
     return stored;
   });
 
+  let auditWarning = '';
   if (pendingAuditEvent) {
-    commitAuditEventOutsideLock_(pendingAuditEvent);
+    const auditResult = commitAuditEventOutsideLock_(pendingAuditEvent);
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
   }
 
   const live = buildLiveReviewStatePayload_(
@@ -1367,20 +1517,149 @@ function prepareReleaseReviewSignatures(cycleId) {
   );
   live.alreadyReleased = alreadyReleased;
   live.releasePending = !alreadyReleased;
+  live.auditWarning = auditWarning || '';
   live.message = alreadyReleased
     ? 'Signatures were already released.'
-    : 'Meeting release sync started. Open browsers should save meeting notes now.';
+    : 'Meeting release sync started. Both Manager and Employee must acknowledge after saving notes.';
+  return live;
+}
+
+/**
+ * Participant acknowledges the current releaseRequestId after saving
+ * (or confirming clean). When both ACKs exist, seals immediately.
+ */
+function acknowledgeMeetingRelease(cycleId, payload) {
+  const email = getCurrentUserEmail_();
+  const input = payload || {};
+  let pendingAuditEvent = null;
+  let alreadyReleased = false;
+  let sealedNow = false;
+  const cycle = withLock_(function () {
+    const location = findCycle_(cycleId);
+    const stored = location.object;
+    const plan = planReleaseReviewSignatures_(stored);
+    if (
+      plan.action === 'alreadyReleased' ||
+      plan.action === 'returnCurrent'
+    ) {
+      alreadyReleased = true;
+      return stored;
+    }
+    if (plan.action === 'reject') {
+      throw new Error(plan.message);
+    }
+
+    const isHr = isHrUser_(email);
+    const isManager =
+      normalizeEmail_(stored['Manager Email']) === email;
+    const isEmployee =
+      normalizeEmail_(stored['Employee Email']) === email;
+    if (!isHr && !isManager && !isEmployee) {
+      throw new Error(
+        'You are not authorized to acknowledge meeting release.'
+      );
+    }
+
+    const meeting = parseMeetingJson_(stored);
+    if (!meeting.releaseRequestId) {
+      throw new Error(
+        'No meeting release request is pending. Prepare release first.'
+      );
+    }
+    const claimedId = String(input.releaseRequestId || '').trim();
+    if (claimedId && claimedId !== meeting.releaseRequestId) {
+      throw new Error(
+        'This acknowledgement does not match the current release request.'
+      );
+    }
+
+    // HR may acknowledge on behalf of neither required role for seal —
+    // only Manager and Employee ACKs count. If HR is also manager/employee
+    // via assignment, the assignment role wins.
+    let ackRole = '';
+    if (isManager) ackRole = PR.ROLE.MANAGER;
+    else if (isEmployee) ackRole = PR.ROLE.EMPLOYEE;
+    else {
+      // Pure HR: record no participant ACK; return waiting state.
+      return stored;
+    }
+
+    recordMeetingReleaseAck_(
+      meeting,
+      ackRole,
+      Number.isFinite(Number(input.contentRevision))
+        ? Number(input.contentRevision)
+        : meeting.contentRevision,
+      new Date()
+    );
+    stored['Meeting JSON'] = JSON.stringify(meeting);
+    stored['Updated At'] = new Date();
+
+    if (areMeetingReleaseAcksComplete_(meeting)) {
+      applyFirstReleaseReviewSignaturesMutation_(
+        stored,
+        email,
+        new Date()
+      );
+      sealedNow = true;
+      pendingAuditEvent = buildPendingAuditEvent_(
+        cycleId,
+        'Review packet released for combined signatures',
+        email,
+        PR.CYCLE.MEETING,
+        PR.CYCLE.SIGNATURES,
+        JSON.stringify({
+          releaseRequestId: meeting.releaseRequestId,
+          via: 'acknowledgeMeetingRelease',
+        }),
+        'SIGNATURES_RELEASED:' +
+          String(cycleId) +
+          ':' +
+          toIsoString_(stored['Signatures Released At'])
+      );
+    }
+
+    writeCycle_(location.rowNumber, stored);
+    return stored;
+  });
+
+  let auditWarning = '';
+  if (pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(pendingAuditEvent);
+    if (!auditResult.ok) {
+      auditWarning = auditResult.warning;
+    }
+  }
+
+  const live = buildLiveReviewStatePayload_(
+    cycle,
+    email,
+    assertLiveReviewAccess_(cycle, email)
+  );
+  live.alreadyReleased =
+    alreadyReleased ||
+    String(cycle['Status']) === PR.CYCLE.SIGNATURES;
+  live.sealedNow = sealedNow;
+  live.releasePending =
+    String(cycle['Status']) === PR.CYCLE.MEETING &&
+    !!parseMeetingJson_(cycle).releaseRequestId;
+  live.auditWarning = auditWarning || '';
+  live.message = live.alreadyReleased
+    ? 'Signatures were already released. The manager and employee may each sign once, in either order. HR will sign last.'
+    : buildReleaseWaitingMessage_(live.missingReleaseAcks || []);
   return live;
 }
 
 function releaseReviewSignatures(cycleId, options) {
   const opts = options || {};
-  const forceCommit = opts.commit === true || opts.forceCommit === true;
   const email = getCurrentUserEmail_();
+  const forceOverride =
+    opts.forceCommit === true &&
+    String(opts.forceReleaseConfirmation || '') ===
+      'FORCE_RELEASE_WITHOUT_PARTICIPANT_ACK';
   let pendingAuditEvent = null;
   let alreadyReleased = false;
   let releasePending = false;
-  let syncRemainingMs = 0;
   const cycle = withLock_(function () {
     const location = findCycle_(cycleId);
     const stored = location.object;
@@ -1415,17 +1694,17 @@ function releaseReviewSignatures(cycleId, options) {
 
     const meeting = parseMeetingJson_(stored);
     const now = new Date();
-    if (!meeting.releaseRequestedAt) {
+    if (!meeting.releaseRequestId) {
       const requested = requestMeetingReleaseOnMeetingJson_(
         meeting,
         email,
-        now
+        now,
+        cycleId
       );
       stored['Meeting JSON'] = JSON.stringify(requested.meeting);
       stored['Updated At'] = now;
       writeCycle_(location.rowNumber, stored);
       releasePending = true;
-      syncRemainingMs = MEETING_RELEASE_DRAFT_SYNC_MS;
       pendingAuditEvent = buildPendingAuditEvent_(
         cycleId,
         'Meeting release sync requested',
@@ -1433,21 +1712,29 @@ function releaseReviewSignatures(cycleId, options) {
         PR.CYCLE.MEETING,
         PR.CYCLE.MEETING,
         JSON.stringify({
-          releaseRequestedAt: requested.meeting.releaseRequestedAt,
+          releaseRequestId: requested.meeting.releaseRequestId,
           contentRevision: requested.meeting.contentRevision,
-        })
+        }),
+        'MEETING_RELEASE_REQUESTED:' +
+          String(cycleId) +
+          ':' +
+          String(requested.meeting.releaseRequestId)
       );
       return stored;
     }
 
-    if (!forceCommit && !isMeetingReleaseSyncReady_(meeting, now.getTime())) {
-      releasePending = true;
-      const age = meetingReleaseSyncAgeMs_(meeting, now.getTime()) || 0;
-      syncRemainingMs = Math.max(
-        0,
-        MEETING_RELEASE_DRAFT_SYNC_MS - age
-      );
-      return stored;
+    const acksComplete = areMeetingReleaseAcksComplete_(meeting);
+    if (!acksComplete) {
+      if (forceOverride) {
+        if (!isHrUser_(email)) {
+          throw new Error(
+            'Only HR may force release without participant acknowledgements.'
+          );
+        }
+      } else {
+        releasePending = true;
+        return stored;
+      }
     }
 
     // First successful release only — never re-clear signatures on retry.
@@ -1456,11 +1743,21 @@ function releaseReviewSignatures(cycleId, options) {
 
     pendingAuditEvent = buildPendingAuditEvent_(
       cycleId,
-      'Review packet released for combined signatures',
+      forceOverride && !acksComplete
+        ? 'Review packet force-released without full participant acknowledgements'
+        : 'Review packet released for combined signatures',
       email,
       PR.CYCLE.MEETING,
       PR.CYCLE.SIGNATURES,
-      ''
+      JSON.stringify({
+        releaseRequestId: meeting.releaseRequestId,
+        forceOverride: !!(forceOverride && !acksComplete),
+        missingAcks: missingMeetingReleaseAckRoles_(meeting),
+      }),
+      'SIGNATURES_RELEASED:' +
+        String(cycleId) +
+        ':' +
+        toIsoString_(stored['Signatures Released At'])
     );
 
     return stored;
@@ -1481,14 +1778,14 @@ function releaseReviewSignatures(cycleId, options) {
   );
   live.alreadyReleased = alreadyReleased;
   live.releasePending = releasePending;
-  live.syncRemainingMs = syncRemainingMs;
   live.auditWarning = auditWarning || '';
   if (alreadyReleased) {
     live.message =
       'Signatures were already released. The manager and employee may each sign once, in either order. HR will sign last.';
   } else if (releasePending) {
-    live.message =
-      'Waiting for open browsers to save meeting notes before sealing the packet.';
+    live.message = buildReleaseWaitingMessage_(
+      live.missingReleaseAcks || []
+    );
   } else {
     live.message =
       'The review packet was released. The manager and employee may each sign once, in either order. HR will sign last.';
@@ -3565,14 +3862,26 @@ function validateCyclePayload_(payload, domain) {
 
   const periodStart = parseDateInput_(clean.reviewPeriodStart);
   const periodEnd = parseDateInput_(clean.reviewPeriodEnd);
-  if (
-    periodStart &&
-    periodEnd &&
-    periodStart.getTime() > periodEnd.getTime()
-  ) {
+  const meetingDate = parseDateInput_(clean.reviewMeetingDate);
+  if (!periodStart || isNaN(periodStart.getTime())) {
+    throw new Error('Review Period Start must be a valid date.');
+  }
+  if (!periodEnd || isNaN(periodEnd.getTime())) {
+    throw new Error('Review Period End must be a valid date.');
+  }
+  if (!meetingDate || isNaN(meetingDate.getTime())) {
+    throw new Error('Review Meeting Date must be a valid date.');
+  }
+  if (periodStart.getTime() > periodEnd.getTime()) {
     throw new Error(
       'Review Period Start must be on or before Review Period End.'
     );
+  }
+  if (clean.hireDate) {
+    const hireDate = parseDateInput_(clean.hireDate);
+    if (!hireDate || isNaN(hireDate.getTime())) {
+      throw new Error('Hire Date must be a valid date when provided.');
+    }
   }
 
   return clean;
@@ -6824,15 +7133,17 @@ function commitAuditEventOutsideLock_(event) {
       newStatus: payload.newStatus,
       details: payload.details,
     };
-    persistPendingAuditEvent_(pendingEvent, message);
+    const persisted = persistPendingAuditEvent_(pendingEvent, message);
     raisePostCommitAuditAlert_(pendingEvent, message);
     return {
       ok: false,
-      warning:
-        'The change was saved, but the audit trail write failed. Use System Health → Retry Audit to recover.',
+      warning: persisted
+        ? 'The change was saved, but the audit trail write failed. Use System Health → Retry Audit to recover.'
+        : 'The change was saved, but the audit trail write failed and the pending-audit recovery row could not be created. Contact HR System Health immediately.',
       error: message,
       eventId: eventId,
       event: pendingEvent,
+      pendingPersisted: !!persisted,
     };
   }
 }
@@ -6950,7 +7261,7 @@ function markPendingAuditComplete_(eventId) {
 
 /**
  * HR-only: retry one durable pending audit by deterministic Event ID.
- * Appends at most once.
+ * Appends at most once under the script lock.
  */
 function retryPendingAudit(eventId) {
   const email = getCurrentUserEmail_();
@@ -6963,54 +7274,60 @@ function retryPendingAudit(eventId) {
     throw new Error('Event ID is required.');
   }
 
-  const pending = findPendingAuditByEventId_(id);
-  if (!pending) {
-    if (auditEventAlreadyRecorded_(id)) {
+  const result = withLock_(function () {
+    const pending = findPendingAuditByEventId_(id);
+    if (!pending) {
+      if (auditEventAlreadyRecorded_(id)) {
+        return {
+          ok: true,
+          alreadyComplete: true,
+          eventId: id,
+          message:
+            'That audit event is already present in the audit log.',
+        };
+      }
+      throw new Error('No pending audit was found for that Event ID.');
+    }
+
+    if (
+      String(pending.Status) === 'Complete' ||
+      auditEventAlreadyRecorded_(id)
+    ) {
+      markPendingAuditComplete_(id);
       return {
         ok: true,
         alreadyComplete: true,
         eventId: id,
-        message: 'That audit event is already present in the audit log.',
+        message:
+          'That audit event is already present in the audit log.',
       };
     }
-    throw new Error('No pending audit was found for that Event ID.');
-  }
 
-  if (
-    String(pending.Status) === 'Complete' ||
-    auditEventAlreadyRecorded_(id)
-  ) {
+    audit_(
+      pending['Cycle ID'],
+      pending.Action,
+      pending['Actor Email'],
+      pending['Previous Status'],
+      pending['New Status'],
+      pending.Details,
+      id
+    );
     markPendingAuditComplete_(id);
     return {
       ok: true,
-      alreadyComplete: true,
+      alreadyComplete: false,
       eventId: id,
-      message: 'That audit event is already present in the audit log.',
+      cycleId: String(pending['Cycle ID'] || ''),
+      message: 'Missing audit event was written successfully.',
     };
-  }
+  });
 
-  audit_(
-    pending['Cycle ID'],
-    pending.Action,
-    pending['Actor Email'],
-    pending['Previous Status'],
-    pending['New Status'],
-    pending.Details,
-    id
-  );
-  markPendingAuditComplete_(id);
   try {
     clearCachedSystemHealthSummary_();
   } catch (cacheError) {
     // optional
   }
-  return {
-    ok: true,
-    alreadyComplete: false,
-    eventId: id,
-    cycleId: String(pending['Cycle ID'] || ''),
-    message: 'Missing audit event was written successfully.',
-  };
+  return result;
 }
 
 function listPendingAuditRecoveryItems_() {
@@ -7258,17 +7575,57 @@ function formatSheets_(ss) {
     PR.SHEETS.ASSIGNMENTS
   );
 
-  if (hr.getMaxRows() > 1) {
-    hr
-      .getRange(2, 3, hr.getMaxRows() - 1, 1)
-      .insertCheckboxes();
+  if (hr && hr.getMaxRows() > 1) {
+    const hrActiveCol = findSheetHeaderColumnIndex_(hr, 'Active');
+    if (hrActiveCol > 0) {
+      hr
+        .getRange(2, hrActiveCol, hr.getMaxRows() - 1, 1)
+        .insertCheckboxes();
+    }
   }
 
-  if (assignments.getMaxRows() > 1) {
-    assignments
-      .getRange(2, 8, assignments.getMaxRows() - 1, 1)
-      .insertCheckboxes();
+  if (assignments && assignments.getMaxRows() > 1) {
+    const activeCol = findSheetHeaderColumnIndex_(
+      assignments,
+      'Active'
+    );
+    if (activeCol > 0) {
+      assignments
+        .getRange(2, activeCol, assignments.getMaxRows() - 1, 1)
+        .insertCheckboxes();
+    }
   }
+}
+
+/**
+ * 1-based column index for a header name, or 0 when missing.
+ * Pure helper for setup formatting — never hard-code compensation-era columns.
+ */
+function findSheetHeaderColumnIndex_(sheet, headerName) {
+  if (!sheet || sheet.getLastColumn() < 1) return 0;
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0];
+  const target = String(headerName || '')
+    .trim()
+    .toLowerCase();
+  for (let i = 0; i < headers.length; i++) {
+    if (String(headers[i] || '').trim().toLowerCase() === target) {
+      return i + 1;
+    }
+  }
+  return 0;
+}
+
+/** Test helper: resolve Active checkbox column from header row values. */
+function resolveActiveCheckboxColumnFromHeaders_(headers) {
+  const list = headers || [];
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i] || '').trim() === 'Active') {
+      return i + 1;
+    }
+  }
+  return 0;
 }
 
 function protectSheets_(ss) {
@@ -7277,8 +7634,10 @@ function protectSheets_(ss) {
     PR.SHEETS.HR,
     PR.SHEETS.ASSIGNMENTS,
     PR.SHEETS.AUDIT,
+    PR.SHEETS.PENDING_AUDIT,
   ].forEach(function (name) {
     const sheet = ss.getSheetByName(name);
+    if (!sheet) return;
 
     if (
       sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET)

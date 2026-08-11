@@ -2,26 +2,24 @@
 
 ## Lifecycle transactional closure
 
-- Meeting-close handshake: `prepareReleaseReviewSignatures` requests draft
-  sync while status stays Meeting Open; `releaseReviewSignatures({ commit: true })`
-  seals only after the sync window (or force commit). Open browsers flush dirty
-  meeting notes during the barrier.
-- Remote release no longer deletes Employee/manager dirty drafts or
-  `localStorage`. Sealed saves return `preserveLocalDraft`; UI keeps text and
-  warns to copy.
-- `releaseReviewSignatures` remains idempotent (`alreadyReleased`) and never
-  re-clears signatures on retry.
-- `startReviewMeeting` remains idempotent (`alreadyOpen`).
-- Post-commit audits use deterministic Event IDs, run outside the cycle lock,
-  and persist durable `ReviewPendingAudits` rows with System Health
-  **Retry Audit** (`retryPendingAudit`) — business commits stay non-fatal on
-  audit failure.
-- `getReviewPdf` allow-lists document type and uses
-  `validateAuthoritativeFinalPdfId_`.
-- `doGet` deep-link `cycleId` / `action` are sanitized/allow-listed.
-- Review Period Start > End is rejected at create validation.
-- Tests: `runV31LifecycleTests_()` (planners, handshake, fault-injected audit,
-  mutation idempotency, deep-link/date gates).
+- Meeting-close handshake is now a **participant acknowledgement protocol**:
+  `prepareReleaseReviewSignatures` creates an immutable `releaseRequestId`;
+  Manager and Employee each ACK after saving (or confirming clean) via
+  `acknowledgeMeetingRelease`. Seal happens only when both ACKs exist.
+- `commit:true` no longer force-seals. Force override requires HR +
+  `forceCommit` + confirmation token
+  `FORCE_RELEASE_WITHOUT_PARTICIPANT_ACK`.
+- Manager flush failure aborts release. Hidden-tab polling accelerates to 1s
+  while release is pending so ACKs are not starved by the 9s hidden interval.
+- Post-submit / post-meeting-open notification acceleration is non-fatal.
+- Critical audit Event IDs are reconstructible
+  (`MEETING_OPENED:…`, `SIGNATURES_RELEASED:…`, `MEETING_RELEASE_REQUESTED:…`).
+  `retryPendingAudit` is lock-guarded; `ReviewPendingAudits` is protected and
+  ensured in `ensureV31DataModel_`.
+- Assignment checkbox formatting locates `Active` by header (never column H /
+  Current Pay Rate).
+- Invalid review period/meeting/hire dates are rejected.
+- Tests: `runV31LifecycleTests_()`.
 
 ## Concurrent signature handoff
 

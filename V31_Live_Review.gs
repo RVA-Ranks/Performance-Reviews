@@ -14,7 +14,12 @@ function buildLiveReviewStatePayload_(cycle, email, viewerRole) {
   const tasks = getSignatureTasks_(cycle, email);
   const meeting = parseMeetingJson_(cycle);
   const releasePending =
-    status === PR.CYCLE.MEETING && !!meeting.releaseRequestedAt && !meeting.sealedAt;
+    status === PR.CYCLE.MEETING &&
+    !!meeting.releaseRequestId &&
+    !meeting.sealedAt;
+  const missingReleaseAcks = releasePending
+    ? missingMeetingReleaseAckRoles_(meeting)
+    : [];
 
   return {
     ok: true,
@@ -33,10 +38,21 @@ function buildLiveReviewStatePayload_(cycle, email, viewerRole) {
     signatureTasks: tasks,
     viewerRole: String(viewerRole || ''),
     meetingReleasePending: releasePending,
+    releaseRequestId: String(meeting.releaseRequestId || ''),
     meetingReleaseRequestedAtIso: String(meeting.releaseRequestedAt || ''),
     meetingLastSavedAtIso: String(meeting.lastSavedAt || ''),
     meetingContentRevision: Number(meeting.contentRevision || 0),
     meetingSealed: !!meeting.sealedAt,
+    managerReleaseAcked: hasMeetingReleaseAckForRole_(
+      meeting,
+      PR.ROLE.MANAGER
+    ),
+    employeeReleaseAcked: hasMeetingReleaseAckForRole_(
+      meeting,
+      PR.ROLE.EMPLOYEE
+    ),
+    missingReleaseAcks: missingReleaseAcks,
+    releaseAcksComplete: areMeetingReleaseAcksComplete_(meeting),
   };
 }
 
@@ -227,10 +243,16 @@ function liveReviewStatePayloadIsSafe_(payload) {
     meetingLastSavedAtIso: true,
     meetingContentRevision: true,
     meetingSealed: true,
+    releaseRequestId: true,
+    managerReleaseAcked: true,
+    employeeReleaseAcked: true,
+    missingReleaseAcks: true,
+    releaseAcksComplete: true,
     alreadyReleased: true,
     releasePending: true,
     syncRemainingMs: true,
     auditWarning: true,
+    sealedNow: true,
   };
   const value = payload || {};
   const keys = Object.keys(value);

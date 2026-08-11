@@ -9,21 +9,21 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-transactional-closure`  
-Tip SHA: `7e897cbfd635e0ff6ac2d50685f3e5ef33be2333`  
-Feature commit: `7c10543a3974b651b03d7e2df6706742c213f168` (`fix(meeting): preserve participant drafts…`)
+Tip SHA: *(set after commit)*
 
-Closes Coach P0–P3 plus the 78% blocker (employee meeting-note data loss):
-meeting-close draft-sync handshake before seal, preserve local drafts when
-already sealed, durable pending-audit recovery with Retry Audit, audit append
-outside the lifecycle lock, `getReviewPdf` provenance validation, deep-link
-sanitization, and period chronology validation. Preserve finalization,
-compensation architecture, Attempt-ID signing, and live-poll performance work.
+Closes the 79% blocker: replace timed draft-sync with Manager+Employee
+`releaseRequestId` acknowledgements before seal; non-fatal post-commit
+notifications; reconstructible audit Event IDs; locked Retry Audit; protected
+`ReviewPendingAudits`; header-driven Active checkboxes; invalid date rejection.
+Preserve finalization, compensation architecture, Attempt-ID signing.
 
 **Still open (compensation module):** orphan relink, reset→replacement,
 gating policy consistency, No Adjustment manager-submit guard, reset during
 Meeting, employee acknowledgement stage gating.
 
-Run `runV31LifecycleTests_()` in Apps Script. Stop for Coach before merge.
+Run `runV31LifecycleTests_()` in Apps Script. **Do not run
+`setupReviewSystem_()` on production until this tip is deployed** (Active
+column formatting fix). Stop for Coach before merge.
 
 ## Active work — Concurrent signature handoff
 

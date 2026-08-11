@@ -365,6 +365,10 @@ function testSecurityPublicRecoveryApiSurface_() {
     'prepareReleaseReviewSignatures must remain a public release API.'
   );
   assertTriggerTest_(
+    typeof acknowledgeMeetingRelease === 'function',
+    'acknowledgeMeetingRelease must remain a public release API.'
+  );
+  assertTriggerTest_(
     typeof getPreviousReviewContext === 'function',
     'getPreviousReviewContext must remain a public manager/HR API.'
   );
