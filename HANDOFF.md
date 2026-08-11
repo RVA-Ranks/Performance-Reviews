@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-pass4-92` (also `backup/pre-lifecycle-pass3-91`)  
-Tip SHA: *(set after commit)*
+Tip SHA: `f83a7b6101a60498363966cb6c0b6988309b90a7`
 
 Pass 4 closes Coach 92% majors: request-scoped compensation integrity counts
 (one CompensationRecords read per request), truthful signature-email
