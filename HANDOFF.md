@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-orchestration`  
-Tip SHA: _(pending UX-0 commit)_
+Tip SHA: `b1e2c3c2608d08ffbef70035c3c81f1877b3be78`
 
 Starts from Code Coach live three-screen grade (UX 68%). Lifecycle transactional
 closure remains frozen at Pass 6. This branch makes the UI acknowledge durable
