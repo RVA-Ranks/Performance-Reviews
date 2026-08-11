@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-transactional-closure`  
-Tip SHA: *(set after commit)*
+Tip SHA: `8882db2c53e3048eb05c1d0b8dc8362dd75112fb`
 
 Closes the 79% blocker: replace timed draft-sync with Manager+Employee
 `releaseRequestId` acknowledgements before seal; non-fatal post-commit
