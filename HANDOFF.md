@@ -5,6 +5,27 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
+## Active work — Live UX / performance orchestration
+
+Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
+Backup: `backup/pre-live-ux-orchestration`  
+Tip SHA: _(pending UX-0 commit)_
+
+Starts from Code Coach live three-screen grade (UX 68%). Lifecycle transactional
+closure remains frozen at Pass 6. This branch makes the UI acknowledge durable
+commits quickly and keeps employee-facing artifacts privacy-safe.
+
+**UX-0 (in flight):** employee/shared CAF shows final approved terms only —
+no manager recommendation, business justification, or owner decision notes.
+
+Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
+design and frozen finalization/PDF/signature Attempt-ID architecture. Do not
+redesign CAF provenance, Delivery Unknown, or finalization durability — only
+CAF body content allow-listing and later UX orchestration boundaries.
+
+Run `runV31CompensationTests_()` after UX-0. Keep Automation Preview.
+Stop for Coach after each UX phase.
+
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
@@ -1027,7 +1048,8 @@ V3.1 fields:
 
 Key durability columns beyond identity/rate fields:
 
-- `Manager Business Justification` — required reason; surfaced in Queue, CAF, history.
+- `Manager Business Justification` — required reason; HR Queue / history only
+  (not employee CAF body).
 - `CAF PDF Status` / `CAF PDF Attempt ID` / `CAF PDF Started At` /
   `CAF Final PDF ID` / `CAF PDF Last Error` — crash-safe PDF lifecycle
   (`Pending → Generating → Complete`, with `Delivery Unknown`). CAF files carry
@@ -1585,6 +1607,13 @@ Human-readable filename (shared helper with Manager/Self PDFs):
 `[Employee] - [YYYY-MM-DD] - [Review Type] - Compensation Adjustment Form.pdf`
 Legacy `AITHERAS_<cycleId>_Compensation_Adjustment_FINAL.pdf` remains recoverable.
 Folder setting: `COMPENSATION_FOLDER_ID`
+
+**Employee-facing body (shared attachment):** allow-listed final terms only —
+identity, current compensation, approved rate/salary/increase %, effective date,
+signatures, acknowledgement. Does **not** include manager recommendation amounts,
+business justification, owner decision notes, or recorded-by/audit metadata.
+Internal deliberation remains in `CompensationRecords` / `CompensationHistory` /
+HR UI. Drive file description provenance is unchanged for recovery validation.
 
 After CAF seal → CompensationHistory → due `EmployeeAssignments.Current Pay Rate`
 update (header lookup, conflict-guarded). Future effective dates stay

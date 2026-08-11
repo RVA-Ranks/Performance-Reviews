@@ -1,5 +1,15 @@
 # V3.1 Changelog
 
+## Live UX — employee CAF privacy (UX-0)
+
+- Shared Compensation Adjustment Agreement is built from an allow-listed
+  employee-safe DTO (identity, current compensation, final approved terms,
+  effective date, signatures, acknowledgement).
+- Manager recommendation amounts/justification, owner decision notes, and
+  recorded-by/audit metadata are no longer rendered into the employee-facing
+  CAF body. Internal values remain in CompensationRecords / History / HR UI.
+- Drive provenance description is unchanged for HR recovery validation.
+
 ## Lifecycle transactional closure (Pass 6)
 
 - `isV31CompensationComplete_` treats CompensationRecords as authoritative for

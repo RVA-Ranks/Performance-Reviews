@@ -530,6 +530,160 @@ function findExistingCompensationCafId_(cycleId, record) {
   return '';
 }
 
+/**
+ * Allow-listed employee-facing CAF fields only.
+ * Never pass the raw CompensationRecord into Document body builders —
+ * manager recommendation, owner notes, and audit metadata stay internal.
+ */
+function buildEmployeeSafeCompensationCafDto_(cycle, record) {
+  return {
+    cycleId: String(
+      (cycle && cycle['Cycle ID']) || (record && record['Review Cycle ID']) || ''
+    ),
+    employeeName: String((record && record['Employee Name']) || ''),
+    employeeEmail: String((record && record['Employee Email']) || ''),
+    managerName: String((record && record['Manager Name']) || ''),
+    jobTitle: String((cycle && cycle['Employee Job Title']) || ''),
+    department: String((cycle && cycle['Department / Project']) || ''),
+    originalPayRate: Number((record && record['Original Pay Rate']) || 0),
+    originalAnnualSalary: Number(
+      (record && record['Original Annual Salary']) || 0
+    ),
+    finalApprovedPayRate: Number(
+      (record && record['Final Approved Pay Rate']) || 0
+    ),
+    finalApprovedAnnualSalary: Number(
+      (record && record['Final Approved Annual Salary']) || 0
+    ),
+    finalApprovedPercent: Number(
+      (record && record['Final Approved Percent']) || 0
+    ),
+    effectiveDate: record && record['Compensation Effective Date'],
+  };
+}
+
+/**
+ * Flat text used for privacy regressions (no DocumentApp required).
+ * Must never include manager recommendation or owner deliberative content.
+ */
+function serializeEmployeeSafeCompensationCafDto_(dto) {
+  const rows = [
+    'AITHERAS',
+    'Compensation Adjustment Agreement',
+    'Review Cycle ID: ' + String(dto.cycleId || ''),
+    'Employee',
+    String(dto.employeeName || ''),
+    'Employee Email',
+    String(dto.employeeEmail || ''),
+    'Manager',
+    String(dto.managerName || ''),
+    'Job Title',
+    String(dto.jobTitle || ''),
+    'Department / Project',
+    String(dto.department || ''),
+    'Current Compensation',
+    'Current Pay Rate',
+    formatMoney_(Number(dto.originalPayRate || 0)),
+    'Current Annual Salary',
+    formatMoney_(Number(dto.originalAnnualSalary || 0)),
+    'Approved Compensation Adjustment',
+    'Approved Pay Rate',
+    formatMoney_(Number(dto.finalApprovedPayRate || 0)),
+    'Approved Annual Salary',
+    formatMoney_(Number(dto.finalApprovedAnnualSalary || 0)),
+    'Approved Increase',
+    formatPercentDisplay_(Number(dto.finalApprovedPercent || 0)),
+    'Effective Date',
+    formatDate_(dto.effectiveDate) || '',
+    'By signing, the employee acknowledges receipt of the approved compensation adjustment shown above.',
+  ];
+  return rows.join('\n');
+}
+
+function assertEmployeeSafeCompensationCafText_(text) {
+  const forbidden = [
+    'Manager Recommendation',
+    'Recommended Pay Rate',
+    'Recommended Annual Salary',
+    'Recommended Increase',
+    'Business Justification',
+    'Proposed Effective Date',
+    'Submitted By',
+    'Submitted At',
+    'Owner Decision',
+    'Approved by',
+    'Decision recorded by',
+    'Decision date',
+    'Decision notes',
+    'Recommendation Accepted',
+  ];
+  const haystack = String(text || '');
+  forbidden.forEach(function (label) {
+    if (haystack.indexOf(label) !== -1) {
+      throw new Error(
+        'Employee CAF must not include internal label: ' + label
+      );
+    }
+  });
+  return true;
+}
+
+function renderEmployeeSafeCompensationCafBody_(body, dto) {
+  body
+    .appendParagraph('AITHERAS')
+    .setHeading(DocumentApp.ParagraphHeading.TITLE)
+    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body
+    .appendParagraph('Compensation Adjustment Agreement')
+    .setHeading(DocumentApp.ParagraphHeading.HEADING1)
+    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body
+    .appendParagraph('Review Cycle ID: ' + String(dto.cycleId || ''))
+    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body.appendHorizontalRule();
+
+  const identity = body.appendTable([
+    ['Employee', String(dto.employeeName || '')],
+    ['Employee Email', String(dto.employeeEmail || '')],
+    ['Manager', String(dto.managerName || '')],
+    ['Job Title', String(dto.jobTitle || '')],
+    ['Department / Project', String(dto.department || '')],
+  ]);
+  styleInfoTable_(identity);
+
+  body
+    .appendParagraph('Current Compensation')
+    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  const currentTable = body.appendTable([
+    ['Current Pay Rate', formatMoney_(Number(dto.originalPayRate || 0))],
+    [
+      'Current Annual Salary',
+      formatMoney_(Number(dto.originalAnnualSalary || 0)),
+    ],
+  ]);
+  styleInfoTable_(currentTable);
+
+  body
+    .appendParagraph('Approved Compensation Adjustment')
+    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  const finalTable = body.appendTable([
+    [
+      'Approved Pay Rate',
+      formatMoney_(Number(dto.finalApprovedPayRate || 0)),
+    ],
+    [
+      'Approved Annual Salary',
+      formatMoney_(Number(dto.finalApprovedAnnualSalary || 0)),
+    ],
+    [
+      'Approved Increase',
+      formatPercentDisplay_(Number(dto.finalApprovedPercent || 0)),
+    ],
+    ['Effective Date', formatDate_(dto.effectiveDate) || ''],
+  ]);
+  styleInfoTable_(finalTable);
+}
+
 function generateCompensationCafPdf_(cycleId) {
   const cycle = findCycle_(cycleId).object;
   const record = findCompensationRecordByCycle_(cycleId).object;
@@ -563,131 +717,18 @@ function generateCompensationCafPdf_(cycleId) {
     PR.ROLE.HR
   );
 
+  const employeeSafeDto = buildEmployeeSafeCompensationCafDto_(cycle, record);
+  assertEmployeeSafeCompensationCafText_(
+    serializeEmployeeSafeCompensationCafDto_(employeeSafeDto)
+  );
+
   const doc = DocumentApp.create(
     'AITHERAS_' + cycleId + '_Compensation_Adjustment_WORKING'
   );
   const body = doc.getBody();
   body.clear();
 
-  body
-    .appendParagraph('AITHERAS')
-    .setHeading(DocumentApp.ParagraphHeading.TITLE)
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  body
-    .appendParagraph('Compensation Adjustment Agreement')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING1)
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  body
-    .appendParagraph('Review Cycle ID: ' + cycleId)
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  body.appendHorizontalRule();
-
-  const identity = body.appendTable([
-    ['Employee', String(record['Employee Name'] || '')],
-    ['Employee Email', String(record['Employee Email'] || '')],
-    ['Manager', String(record['Manager Name'] || '')],
-    ['Job Title', String(cycle['Employee Job Title'] || '')],
-    ['Department / Project', String(cycle['Department / Project'] || '')],
-  ]);
-  styleInfoTable_(identity);
-
-  body
-    .appendParagraph('Current Compensation')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  const currentTable = body.appendTable([
-    [
-      'Current Pay Rate',
-      formatMoney_(Number(record['Original Pay Rate'] || 0)),
-    ],
-    [
-      'Current Annual Salary',
-      formatMoney_(Number(record['Original Annual Salary'] || 0)),
-    ],
-  ]);
-  styleInfoTable_(currentTable);
-
-  body
-    .appendParagraph('Manager Recommendation')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  const recommendationTable = body.appendTable([
-    [
-      'Recommended Pay Rate',
-      formatMoney_(Number(record['Manager Recommended Pay Rate'] || 0)),
-    ],
-    [
-      'Recommended Annual Salary',
-      formatMoney_(
-        Number(record['Manager Recommended Annual Salary'] || 0)
-      ),
-    ],
-    [
-      'Recommended Increase',
-      formatPercentDisplay_(
-        Number(record['Manager Recommended Percent'] || 0)
-      ),
-    ],
-    [
-      'Business Justification',
-      String(record['Manager Business Justification'] || ''),
-    ],
-    [
-      'Proposed Effective Date',
-      formatDate_(record['Manager Proposed Effective Date']) || '',
-    ],
-    [
-      'Submitted By',
-      String(record['Manager Recommendation Submitted By'] || ''),
-    ],
-    [
-      'Submitted At',
-      formatDateTime_(record['Manager Recommendation Submitted At']) || '',
-    ],
-  ]);
-  styleInfoTable_(recommendationTable);
-
-  body
-    .appendParagraph('Final Approved Compensation')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  const finalTable = body.appendTable([
-    [
-      'Final Approved Pay Rate',
-      formatMoney_(Number(record['Final Approved Pay Rate'] || 0)),
-    ],
-    [
-      'Final Approved Annual Salary',
-      formatMoney_(Number(record['Final Approved Annual Salary'] || 0)),
-    ],
-    [
-      'Final Approved Increase',
-      formatPercentDisplay_(Number(record['Final Approved Percent'] || 0)),
-    ],
-    [
-      'Recommendation Accepted',
-      String(record['Recommendation Accepted'] || ''),
-    ],
-    [
-      'Effective Date',
-      formatDate_(record['Compensation Effective Date']) || '',
-    ],
-  ]);
-  styleInfoTable_(finalTable);
-
-  body
-    .appendParagraph('Owner Decision')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  const ownerTable = body.appendTable([
-    ['Approved by', String(record['Owner Name'] || '')],
-    [
-      'Decision recorded by',
-      String(record['Owner Decision Recorded By'] || ''),
-    ],
-    [
-      'Decision date',
-      formatDateTime_(record['Owner Decision At']) || '',
-    ],
-    ['Decision notes', String(record['Owner Decision Notes'] || '')],
-  ]);
-  styleInfoTable_(ownerTable);
+  renderEmployeeSafeCompensationCafBody_(body, employeeSafeDto);
 
   body
     .appendParagraph('Signatures')
@@ -725,6 +766,7 @@ function generateCompensationCafPdf_(cycleId) {
   const pdfBlob = docFile.getAs(MimeType.PDF).setName(fileName);
   const pdfFile = folder.createFile(pdfBlob);
   pdfFile.setName(fileName);
+  // Provenance stays on the Drive file description (HR/system), not body text.
   pdfFile.setDescription(buildCompensationCafProvenance_(cycleId, record));
   docFile.setTrashed(true);
   ensureHumanReadableCompensationCafName_(pdfFile.getId(), cycleId);

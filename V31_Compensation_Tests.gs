@@ -474,6 +474,73 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Employee CAF DTO excludes internal deliberative secrets', function () {
+    const secretMgr = 'MANAGER_INTERNAL_SECRET_123';
+    const secretOwner = 'OWNER_INTERNAL_SECRET_456';
+    const cycle = {
+      'Cycle ID': 'C-CAF-SAFE',
+      'Employee Job Title': 'Analyst',
+      'Department / Project': 'Ops',
+    };
+    const record = {
+      'Review Cycle ID': 'C-CAF-SAFE',
+      'Employee Name': 'Pat Employee',
+      'Employee Email': 'emp@aitheras.com',
+      'Manager Name': 'Mo Manager',
+      'Original Pay Rate': 40,
+      'Original Annual Salary': 83200,
+      'Manager Recommended Pay Rate': 47.77,
+      'Manager Recommended Annual Salary': 99111.11,
+      'Manager Recommended Percent': 0.2,
+      'Manager Business Justification': secretMgr,
+      'Manager Proposed Effective Date': '2026-10-01',
+      'Manager Recommendation Submitted By': 'mgr@aitheras.com',
+      'Manager Recommendation Submitted At': new Date(),
+      'Final Approved Pay Rate': 44,
+      'Final Approved Annual Salary': 91520,
+      'Final Approved Percent': 0.1,
+      'Recommendation Accepted': 'No',
+      'Compensation Effective Date': '2026-10-01',
+      'Owner Name': 'Dana Owner',
+      'Owner Decision Recorded By': 'hr@aitheras.com',
+      'Owner Decision At': new Date(),
+      'Owner Decision Notes': secretOwner,
+      'Owner Decision': V31_COMP.OWNER_DECISION.MODIFIED,
+    };
+    const dto = buildEmployeeSafeCompensationCafDto_(cycle, record);
+    const text = serializeEmployeeSafeCompensationCafDto_(dto);
+    assertEmployeeSafeCompensationCafText_(text);
+    assert_(
+      text.indexOf(secretMgr) === -1,
+      'Manager justification must not appear in employee CAF text'
+    );
+    assert_(
+      text.indexOf(secretOwner) === -1,
+      'Owner notes must not appear in employee CAF text'
+    );
+    assert_(
+      text.indexOf('47.77') === -1 && text.indexOf('99111') === -1,
+      'Manager recommended amounts must not appear'
+    );
+    assert_(
+      text.indexOf('Approved Compensation Adjustment') !== -1,
+      'Final approved section heading must remain'
+    );
+    assert_(
+      Number(dto.finalApprovedPayRate) === 44,
+      'Final approved rate must remain in DTO'
+    );
+    // Authoritative internal record is unchanged.
+    assert_(
+      String(record['Manager Business Justification']) === secretMgr,
+      'HR record keeps manager justification'
+    );
+    assert_(
+      String(record['Owner Decision Notes']) === secretOwner,
+      'HR record keeps owner notes'
+    );
+  });
+
   check('Finalization disposition: not required → skip', function () {
     assert_(
       compensationFinalizationDisposition_(
