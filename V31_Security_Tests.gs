@@ -52,6 +52,14 @@ function runV31SecurityTests_() {
       'Public recovery and System Health APIs remain HR-gated names',
       testSecurityPublicRecoveryApiSurface_
     ),
+    triggerTestCase_(
+      'Meeting ACK authorization rejects non-participants',
+      testSecurityMeetingAckAuthorization_
+    ),
+    triggerTestCase_(
+      'Employee compensation acknowledgement is privacy-scoped',
+      testSecurityEmployeeCompAckPrivacy_
+    ),
     {
       name: 'Employee session rejected from System Health and recovery endpoints',
       severity: 'Blocking',
@@ -396,4 +404,80 @@ function testSecurityPublicRecoveryApiSurface_() {
       }) === false,
     'Previous-review access requires current manager or HR.'
   );
+}
+
+function testSecurityMeetingAckAuthorization_() {
+  const cycle = {
+    'Manager Email': 'mgr@aitheras.com',
+    'Employee Email': 'emp@aitheras.com',
+    Status: PR.CYCLE.MEETING,
+  };
+  assertTriggerTest_(
+    normalizeEmail_(cycle['Manager Email']) ===
+      normalizeEmail_('mgr@aitheras.com'),
+    'Manager assignment authorizes ACK'
+  );
+  assertTriggerTest_(
+    normalizeEmail_(cycle['Employee Email']) ===
+      normalizeEmail_('emp@aitheras.com'),
+    'Employee assignment authorizes ACK'
+  );
+  assertTriggerTest_(
+    normalizeEmail_('other@aitheras.com') !==
+      normalizeEmail_(cycle['Manager Email']) &&
+      normalizeEmail_('other@aitheras.com') !==
+        normalizeEmail_(cycle['Employee Email']),
+    'Unrelated domain user is not a participant'
+  );
+}
+
+function testSecurityEmployeeCompAckPrivacy_() {
+  const approved = {
+    'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+    Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+    'Final Approved Pay Rate': 50,
+    'Original Pay Rate': 40,
+    'Original Annual Salary': 83200,
+    'Final Approved Annual Salary': 104000,
+    'Final Approved Percent': 0.25,
+    'Compensation Effective Date': new Date('2026-09-01'),
+    'Manager Business Justification': 'SECRET JUSTIFICATION',
+    'Owner Decision Notes': 'SECRET OWNER NOTES',
+    'Compensation Record ID': 'REC-SECRET',
+  };
+  const originalFind = findActiveCompensationRecordByCycleOptional_;
+  findActiveCompensationRecordByCycleOptional_ = function () {
+    return { rowNumber: 2, object: approved };
+  };
+  try {
+    const openAck = getEmployeeCompensationAcknowledgement_({
+      Status: PR.CYCLE.OPEN,
+      'Cycle ID': 'C-PRIV-OPEN',
+      'Signatures Released At': '',
+    });
+    assertTriggerTest_(
+      openAck === null,
+      'Pre-release employee acknowledgement must be null'
+    );
+
+    const ack = getEmployeeCompensationAcknowledgement_({
+      Status: PR.CYCLE.SIGNATURES,
+      'Cycle ID': 'C-PRIV-SIG',
+      'Signatures Released At': new Date(),
+    });
+    assertTriggerTest_(!!ack, 'Post-release acknowledgement is visible');
+    assertTriggerTest_(
+      Number(ack.finalApprovedPayRate) === 50,
+      'Approved rate is disclosed'
+    );
+    assertTriggerTest_(
+      typeof ack.managerBusinessJustification === 'undefined' &&
+        typeof ack.ownerDecisionNotes === 'undefined' &&
+        typeof ack.compensationRecordId === 'undefined' &&
+        typeof ack['Manager Business Justification'] === 'undefined',
+      'Private recommendation/owner/recovery fields must not be exposed'
+    );
+  } finally {
+    findActiveCompensationRecordByCycleOptional_ = originalFind;
+  }
 }

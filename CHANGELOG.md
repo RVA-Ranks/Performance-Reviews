@@ -1,5 +1,23 @@
 # V3.1 Changelog
 
+## Lifecycle transactional closure (Pass 2)
+
+- Removed duplicate release-pending live polling; Manager wait uses the single
+  live-review poller plus a UX-only 120s timeout (no second RPC stream).
+- Release flush callers share one Promise instead of rejecting on boolean
+  in-flight conflicts.
+- Compensation mutations fail closed on multiple active records via
+  `requireSingleActiveCompensationRecord_` (System Health alert; no newest-wins
+  selection on material paths).
+- Orphan compensation reconciliation repairs Failed/stale mirrors when
+  unambiguous and recalculates cycle readiness (Open → Ready when eligible).
+- Material compensation transitions use recoverable post-commit audit events
+  with deterministic Event IDs; blank reset reasons are rejected server-side.
+- Deterministic lifecycle audit IDs: `CYCLE_CREATED:<cycleId>`,
+  `REVIEW_SUBMITTED:<cycleId>:Manager|Employee`.
+- Lifecycle/compensation suites exercise public endpoint orchestration; security
+  suite covers ACK participant authorization and employee acknowledgement privacy.
+
 ## Lifecycle transactional closure
 
 - Meeting saves are revision-safe: `meetingLocalRevision` + shared in-flight
@@ -15,13 +33,14 @@
 - Manager release wait no longer force-seals; second ACK seals server-side.
   Signature-email acceleration warnings are centralized.
 - Compensation: Failed/reset rows are historical; active-record selection
-  prefers non-Failed; reset→replacement works; orphan relink + multi-active
-  System Health; Adjustment stays gated if the global setting is disabled;
-  Manager No Adjustment requires submitted Manager Review; reset rejected
-  after Meeting Open and demotes Ready→Open; employee acknowledgement only
-  after signature release.
+  prefers non-Failed; reset→replacement works; orphan relink recalculates
+  readiness; multi-active mutations fail closed with System Health; Adjustment
+  stays gated if the global setting is disabled; Manager No Adjustment requires
+  submitted Manager Review; reset rejected after Meeting Open and demotes
+  Ready→Open; employee acknowledgement only after signature release.
 - Assignment `Active` checkboxes remain header-driven.
-- Tests: `runV31LifecycleTests_()`, `runV31CompensationTests_()`.
+- Tests: `runV31LifecycleTests_()`, `runV31CompensationTests_()`,
+  `runV31SecurityTests_()`.
 
 ## Concurrent signature handoff
 

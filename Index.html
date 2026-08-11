@@ -1618,7 +1618,7 @@ let liveReviewPollGeneration = 0;
 let liveReviewRequestToken = 0;
 let liveReleaseBannerVisible = false;
 let meetingDraftPreserveAfterSeal = false;
-let meetingReleaseFlushInFlight = false;
+let meetingReleaseFlushInFlight = null;
 let defaultDocumentTitle = 'AITHERAS Performance Reviews';
 const LIVE_REVIEW_POLL_VISIBLE_MS = 2500;
 const LIVE_REVIEW_POLL_HIDDEN_MS = 9000;
@@ -5389,16 +5389,21 @@ async function manualSaveMeeting() {
 /**
  * Flush dirty meeting drafts to authority. Never clears localStorage unless
  * the returned save still matches the current local revision.
+ * Concurrent callers await the same Promise (no boolean rejection race).
  */
 async function flushMeetingDraftForRelease_() {
   if (!currentCycle) {
     return { ok: false, flushed: false, error: 'No cycle' };
   }
   if (meetingReleaseFlushInFlight) {
-    return { ok: false, flushed: false, inFlight: true, error: 'A meeting save is already in progress.' };
+    try {
+      return await meetingReleaseFlushInFlight;
+    } catch (error) {
+      return { ok: false, flushed: false, error: errorMessage(error) };
+    }
   }
-  meetingReleaseFlushInFlight = true;
-  try {
+
+  const run = (async function() {
     if (meetingSaveInFlight) {
       try { await meetingSaveInFlight; } catch (error) {}
     }
@@ -5427,7 +5432,6 @@ async function flushMeetingDraftForRelease_() {
       return { ok: false, flushed: false, error: outcome.error || 'Meeting notes could not be saved.' };
     }
     if (!outcome.stillCurrent || meetingDirty) {
-      // Newer keystrokes arrived during save — caller must retry.
       return {
         ok: false,
         flushed: false,
@@ -5441,10 +5445,56 @@ async function flushMeetingDraftForRelease_() {
       contentRevision: outcome.contentRevision,
       result: outcome.result
     };
+  })();
+
+  meetingReleaseFlushInFlight = run;
+  try {
+    return await run;
   } catch (error) {
     return { ok: false, flushed: false, error: errorMessage(error) };
   } finally {
-    meetingReleaseFlushInFlight = false;
+    if (meetingReleaseFlushInFlight === run) {
+      meetingReleaseFlushInFlight = null;
+    }
+  }
+}
+
+/**
+ * UX-only 120s reminder while waiting for the other participant ACK.
+ * Does not open a second getLiveReviewState RPC stream — live polling owns that.
+ */
+function scheduleMeetingReleaseWaitTimeout_(cycleId) {
+  if (window.__meetingReleaseWaitTimer) {
+    clearTimeout(window.__meetingReleaseWaitTimer);
+    window.__meetingReleaseWaitTimer = null;
+  }
+  const watchedId = String(cycleId || '');
+  window.__meetingReleaseWaitTimer = setTimeout(function() {
+    window.__meetingReleaseWaitTimer = null;
+    if (!currentCycle || String(currentCycle.cycleId) !== watchedId) return;
+    const status = String(currentCycle.status || '');
+    if (
+      status === 'Awaiting Signatures' ||
+      status === 'Finalizing' ||
+      status === 'Complete'
+    ) {
+      return;
+    }
+    if (!currentCycle.meetingReleasePending && !currentCycle.releaseRequestId) {
+      return;
+    }
+    showToast(
+      'warning',
+      'Waiting for participant sync',
+      'The packet is not sealed yet. Keep this page open until the Employee acknowledges.'
+    );
+  }, MEETING_RELEASE_ACK_WAIT_MS);
+}
+
+function clearMeetingReleaseWaitTimeout_() {
+  if (window.__meetingReleaseWaitTimer) {
+    clearTimeout(window.__meetingReleaseWaitTimer);
+    window.__meetingReleaseWaitTimer = null;
   }
 }
 
@@ -5934,6 +5984,7 @@ function applyLiveReviewState_(live) {
 }
 
 function handleSignatureReleaseDetection_(live) {
+  clearMeetingReleaseWaitTimeout_();
   const isEmployee = !!(currentCycle && currentCycle.isEmployee);
   const isManager = !!(currentCycle && currentCycle.isManager);
   const isHr = !!(currentCycle && currentCycle.isHr);
@@ -6064,38 +6115,17 @@ async function releaseSignatures() {
       }
     }
 
-    // 4) Wait for remaining ACKs. Do not force-seal; second ACK seals server-side.
+    // 4) Remaining ACKs: single live-review poller only (no private RPC loop).
+    // Second ACK seals server-side; applyLiveReviewState_ opens Signatures.
     setSaveIndicator('saving', prep.message || 'Waiting for participant sync…');
-    const deadline = Date.now() + MEETING_RELEASE_ACK_WAIT_MS;
-    while (Date.now() < deadline) {
-      await sleepMs_(1000);
-      try {
-        const live = await server('getLiveReviewState', currentCycle.cycleId);
-        applyLiveReviewState_(live);
-        if (
-          live &&
-          (String(live.status) === 'Awaiting Signatures' ||
-            String(live.status) === 'Finalizing' ||
-            String(live.status) === 'Complete')
-        ) {
-          showToast('success', 'Review packet released', live.message || 'Signatures are ready.');
-          applyReleaseLiveState_(live);
-          accelerateSignatureReleaseEmails_(currentCycle.cycleId);
-          return;
-        }
-        setSaveIndicator(
-          'saving',
-          (live && live.message) || 'Waiting for participant sync…'
-        );
-      } catch (pollError) {}
-    }
-
     showToast(
-      'warning',
+      'info',
       'Waiting for participant sync',
-      'The packet is not sealed yet. Keep this page open until the Employee acknowledges.'
+      (prep && prep.message) ||
+        'Signature release is waiting for Manager and Employee acknowledgements.'
     );
     startLiveReviewPolling_();
+    scheduleMeetingReleaseWaitTimeout_(currentCycle.cycleId);
   } catch (error) {
     let reconciled = false;
     try {

@@ -617,7 +617,8 @@ function createReviewCycle(payload) {
         JSON.stringify({
           employeeEmail: clean.employeeEmail,
           managerEmail: clean.managerEmail,
-        })
+        }),
+        'CYCLE_CREATED:' + cycleId
       ),
     };
   });
@@ -819,6 +820,8 @@ function saveIndependentReview_(
 
     let pendingAuditEvent = null;
     if (source !== 'autosave') {
+      const roleLabel =
+        type === PR.TYPE.MANAGER ? 'Manager' : 'Employee';
       pendingAuditEvent = buildPendingAuditEvent_(
         cycleId,
         type +
@@ -826,7 +829,10 @@ function saveIndependentReview_(
         email,
         previousStatus,
         newStatus,
-        ''
+        '',
+        submit
+          ? 'REVIEW_SUBMITTED:' + cycleId + ':' + roleLabel
+          : ''
       );
     }
 

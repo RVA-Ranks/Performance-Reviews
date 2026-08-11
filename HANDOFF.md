@@ -8,17 +8,20 @@ highest-priority source of truth.
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
-Backup: `backup/pre-lifecycle-transactional-closure`  
-Tip SHA: `98b0c871ce3130872d4eb840b091319deb13f922`
+Backup: `backup/pre-lifecycle-pass2-87` (also `backup/pre-lifecycle-transactional-closure`)  
+Tip SHA: *(set after commit)*
 
-Closes Coach 76% blockers: revision-safe meeting save/ACK, release
-attribution via `releaseRequestedBy`, compensation reset→replacement +
-active-record selection, orphan relink, gate consistency, No Adjustment
-submit guard, reset lifecycle enforcement, employee acknowledgement stage
-gating. Preserve finalization/PDF/signature Attempt-ID architecture.
+Pass 2 closes Coach 87% majors: single live-review poller (no duplicate release
+RPC loop), fail-closed multi-active compensation mutations, orphan relink
+readiness recalculation, pending/deterministic compensation + lifecycle audit
+IDs, shared release-flush Promise, server-required reset reason, public
+endpoint orchestration tests, security ACK/privacy regressions.
 
-Run `runV31LifecycleTests_()` and `runV31CompensationTests_()` in Apps Script.
-Stop for Coach before merge.
+Preserve finalization/PDF/signature Attempt-ID architecture and the working
+release ACK / `meetingLocalRevision` design.
+
+Run `runV31LifecycleTests_()`, `runV31CompensationTests_()`, and
+`runV31SecurityTests_()` in Apps Script. Stop for Coach before merge.
 
 ## Active work — Concurrent signature handoff
 

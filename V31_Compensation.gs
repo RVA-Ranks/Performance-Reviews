@@ -317,14 +317,14 @@ function getAssignmentPayRate_(employeeEmail) {
 }
 
 function findCompensationRecordByCycleOptional_(cycleId) {
-  const map = getCompensationRecordsByCycleId_();
-  return map[String(cycleId || '')] || null;
+  // Soft lookup: never silently pick among multiple actives.
+  return findActiveCompensationRecordByCycleOptional_(cycleId);
 }
 
 function findCompensationRecordByCycle_(cycleId) {
-  const found = findCompensationRecordByCycleOptional_(cycleId);
-  if (found) return found;
-  throw new Error('Compensation record not found.');
+  return requireSingleActiveCompensationRecord_(cycleId, {
+    allowZero: false,
+  });
 }
 
 function writeCompensationRecord_(rowNumber, object) {
@@ -505,7 +505,9 @@ function compensationFinalizationDisposition_(decisionRaw, compensationRequired)
  * Denied / no-record / no-adjustment → cafRequired=false.
  */
 function getFinalDistributionCafBinding_(cycleId) {
-  const recordLoc = findCompensationRecordByCycleOptional_(cycleId);
+  const recordLoc = requireSingleActiveCompensationRecord_(cycleId, {
+    allowZero: true,
+  });
   if (!recordLoc) {
     return { cafRequired: false, cafPdfId: '', reason: 'no-record' };
   }
@@ -901,7 +903,7 @@ function toCompensationRecordView_(record, isHr) {
 }
 
 function submitNoCompensationAdjustment(cycleId, notes) {
-  return withLock_(function () {
+  const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
@@ -928,6 +930,9 @@ function submitNoCompensationAdjustment(cycleId, notes) {
       );
     }
 
+    // Fail closed if multiple actives exist (even when recording No Adjustment).
+    requireSingleActiveCompensationRecord_(cycleId, { allowZero: true });
+
     const previous = normalizeCompensationDecision_(
       cycle['Compensation Decision']
     );
@@ -940,24 +945,16 @@ function submitNoCompensationAdjustment(cycleId, notes) {
       );
     }
 
+    const now = new Date();
     cycle['Compensation Decision'] = V31.COMPENSATION.NONE;
     cycle['Compensation Decision Notes'] = cleanText_(notes || '');
-    cycle['Compensation Decision At'] = new Date();
+    cycle['Compensation Decision At'] = now;
     cycle['Compensation Decision By'] = email;
     cycle['Compensation Status'] = V31_COMP.STATUS.COMPLETE;
     cycle['Compensation Record ID'] = '';
-    cycle['Updated At'] = new Date();
+    cycle['Updated At'] = now;
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
-
-    audit_(
-      cycleId,
-      'Compensation decision recorded',
-      email,
-      previous,
-      V31.COMPENSATION.NONE,
-      cleanText_(notes || '')
-    );
 
     return {
       ok: true,
@@ -965,8 +962,31 @@ function submitNoCompensationAdjustment(cycleId, notes) {
       compensationComplete: isV31CompensationComplete_(cycle),
       cycleStatus: String(cycle['Status']),
       message: 'No compensation adjustment recommended.',
+      pendingAuditEvent: buildPendingAuditEvent_(
+        cycleId,
+        'Compensation decision recorded',
+        email,
+        previous,
+        V31.COMPENSATION.NONE,
+        cleanText_(notes || ''),
+        'COMP_NO_ADJUSTMENT:' +
+          String(cycleId) +
+          ':' +
+          toIsoString_(now)
+      ),
     };
   });
+
+  let auditWarning = '';
+  if (result.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      result.pendingAuditEvent
+    );
+    if (!auditResult.ok) auditWarning = auditResult.warning;
+    delete result.pendingAuditEvent;
+  }
+  result.auditWarning = auditWarning;
+  return result;
 }
 
 function submitCompensationRecommendation(cycleId, payload) {
@@ -995,16 +1015,11 @@ function submitCompensationRecommendation(cycleId, payload) {
       );
     }
 
-    const activeCount = countActiveCompensationRecordsForCycle_(cycleId);
-    if (activeCount > 1) {
-      throw new Error(
-        'Multiple active compensation records exist for this cycle. HR must reconcile before a new recommendation can be submitted.'
-      );
-    }
-    if (
-      activeCount === 1 ||
-      findActiveCompensationRecordByCycleOptional_(cycleId)
-    ) {
+    const existingActive = requireSingleActiveCompensationRecord_(
+      cycleId,
+      { allowZero: true }
+    );
+    if (existingActive) {
       throw new Error(
         'A compensation recommendation already exists for this review cycle.'
       );
@@ -1096,19 +1111,6 @@ function submitCompensationRecommendation(cycleId, payload) {
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
 
-    audit_(
-      cycleId,
-      'Compensation recommendation submitted',
-      email,
-      decision,
-      V31.COMPENSATION.ADJUSTMENT,
-      JSON.stringify({
-        compensationRecordId: recordId,
-        recommendedRate: clean.recommendedRate,
-        recommendedPercent: clean.recommendedPercent,
-      })
-    );
-
     return {
       ok: true,
       decision: V31.COMPENSATION.ADJUSTMENT,
@@ -1116,8 +1118,31 @@ function submitCompensationRecommendation(cycleId, payload) {
       compensationComplete: isV31CompensationComplete_(cycle),
       cycleStatus: String(cycle['Status']),
       message: 'Compensation recommendation submitted.',
+      pendingAuditEvent: buildPendingAuditEvent_(
+        cycleId,
+        'Compensation recommendation submitted',
+        email,
+        decision,
+        V31.COMPENSATION.ADJUSTMENT,
+        JSON.stringify({
+          compensationRecordId: recordId,
+          recommendedRate: clean.recommendedRate,
+          recommendedPercent: clean.recommendedPercent,
+        }),
+        'COMP_RECOMMENDATION_SUBMITTED:' + recordId
+      ),
     };
   });
+
+  let auditWarning = '';
+  if (result.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      result.pendingAuditEvent
+    );
+    if (!auditResult.ok) auditWarning = auditResult.warning;
+    delete result.pendingAuditEvent;
+  }
+  result.auditWarning = auditWarning;
 
   // Raised outside the lock: email claim and system alert use their own locks.
   try {
@@ -1248,24 +1273,6 @@ function recordCompensationOwnerDecision(cycleId, payload) {
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
 
-    audit_(
-      cycleId,
-      'Compensation owner decision recorded',
-      email,
-      V31_COMP.STATUS.AWAITING_OWNER,
-      String(record['Status']),
-      JSON.stringify({
-        ownerName: clean.ownerName,
-        ownerDecision: clean.ownerDecision,
-        finalRate: clean.finalRate || '',
-        finalPercent: clean.finalPercent || '',
-        accepted: clean.accepted,
-        effectiveDate: clean.effectiveDate
-          ? formatDate_(clean.effectiveDate)
-          : '',
-      })
-    );
-
     return {
       ok: true,
       status: String(record['Status']),
@@ -1277,8 +1284,39 @@ function recordCompensationOwnerDecision(cycleId, payload) {
           ? 'Owner declined the compensation recommendation.'
           : 'Owner compensation decision recorded.',
       actorEmail: email,
+      pendingAuditEvent: buildPendingAuditEvent_(
+        cycleId,
+        'Compensation owner decision recorded',
+        email,
+        V31_COMP.STATUS.AWAITING_OWNER,
+        String(record['Status']),
+        JSON.stringify({
+          ownerName: clean.ownerName,
+          ownerDecision: clean.ownerDecision,
+          finalRate: clean.finalRate || '',
+          finalPercent: clean.finalPercent || '',
+          accepted: clean.accepted,
+          effectiveDate: clean.effectiveDate
+            ? formatDate_(clean.effectiveDate)
+            : '',
+        }),
+        'COMP_OWNER_DECISION:' +
+          String(record['Compensation Record ID'] || cycleId) +
+          ':' +
+          String(record['Status'] || '')
+      ),
     };
   });
+
+  let auditWarning = '';
+  if (result.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      result.pendingAuditEvent
+    );
+    if (!auditResult.ok) auditWarning = auditResult.warning;
+    delete result.pendingAuditEvent;
+  }
+  result.auditWarning = auditWarning;
 
   resolveCompensationOwnerAlert_(cycleId, result.actorEmail);
 
@@ -1486,35 +1524,48 @@ function editCompensationOwnerDecision(cycleId, payload) {
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
 
-    audit_(
-      cycleId,
-      'Compensation owner decision corrected',
-      email,
-      V31_COMP.STATUS.AWAITING_SIGNATURES,
-      String(record['Status']),
-      JSON.stringify({
-        reason: reason,
-        previous: previous,
-        next: {
-          ownerDecision: clean.ownerDecision,
-          finalRate: clean.finalRate || '',
-          finalPercent: clean.finalPercent || '',
-          effectiveDate: clean.effectiveDate
-            ? formatDate_(clean.effectiveDate)
-            : '',
-          ownerName: clean.ownerName,
-          accepted: clean.accepted,
-        },
-      })
-    );
-
     return {
       ok: true,
       message: 'Owner compensation decision updated.',
       status: String(record['Status']),
       ownerDecision: clean.ownerDecision,
+      pendingAuditEvent: buildPendingAuditEvent_(
+        cycleId,
+        'Compensation owner decision corrected',
+        email,
+        V31_COMP.STATUS.AWAITING_SIGNATURES,
+        String(record['Status']),
+        JSON.stringify({
+          reason: reason,
+          previous: previous,
+          next: {
+            ownerDecision: clean.ownerDecision,
+            finalRate: clean.finalRate || '',
+            finalPercent: clean.finalPercent || '',
+            effectiveDate: clean.effectiveDate
+              ? formatDate_(clean.effectiveDate)
+              : '',
+            ownerName: clean.ownerName,
+            accepted: clean.accepted,
+          },
+        }),
+        'COMP_OWNER_DECISION_EDIT:' +
+          String(record['Compensation Record ID'] || cycleId) +
+          ':' +
+          toIsoString_(now)
+      ),
     };
   });
+
+  let auditWarning = '';
+  if (result.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      result.pendingAuditEvent
+    );
+    if (!auditResult.ok) auditWarning = auditResult.warning;
+    delete result.pendingAuditEvent;
+  }
+  result.auditWarning = auditWarning;
 
   try {
     ensureCompensationManagerOutcomeEmail_(cycleId);
@@ -1529,11 +1580,16 @@ function editCompensationOwnerDecision(cycleId, payload) {
 }
 
 function resetCompensationDecision(cycleId, reason) {
-  return withLock_(function () {
+  const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
     if (!isHrUser_(email)) {
       throw new Error('Only HR may reset the compensation decision.');
+    }
+
+    const cleanReason = cleanText_(reason || '');
+    if (!cleanReason) {
+      throw new Error('A reset reason is required.');
     }
 
     const location = findCycle_(cycleId);
@@ -1564,7 +1620,10 @@ function resetCompensationDecision(cycleId, reason) {
     const previous = normalizeCompensationDecision_(
       cycle['Compensation Decision']
     );
-    const recordLoc = findActiveCompensationRecordByCycleOptional_(cycleId);
+    // Fail closed on multi-active before mutating any selected row.
+    const recordLoc = requireSingleActiveCompensationRecord_(cycleId, {
+      allowZero: true,
+    });
     if (recordLoc) {
       const recordStatus = String(recordLoc.object['Status'] || '');
       if (
@@ -1580,10 +1639,11 @@ function resetCompensationDecision(cycleId, reason) {
       recordLoc.object['Status'] = V31_COMP.STATUS.FAILED;
       recordLoc.object['Updated At'] = new Date();
       recordLoc.object['CAF PDF Last Error'] =
-        'Reset by HR: ' + cleanText_(reason || '');
+        'Reset by HR: ' + cleanReason;
       writeCompensationRecord_(recordLoc.rowNumber, recordLoc.object);
     }
 
+    const now = new Date();
     cycle['Compensation Decision'] = V31.COMPENSATION.PENDING;
     cycle['Compensation Decision Notes'] = '';
     cycle['Compensation Decision At'] = '';
@@ -1595,7 +1655,7 @@ function resetCompensationDecision(cycleId, reason) {
     if (status === PR.CYCLE.READY) {
       cycle['Status'] = PR.CYCLE.OPEN;
     }
-    cycle['Updated At'] = new Date();
+    cycle['Updated At'] = now;
     writeCycle_(location.rowNumber, cycle);
 
     // Clear request-scoped compensation cache so Failed no longer shadows.
@@ -1604,22 +1664,33 @@ function resetCompensationDecision(cycleId, reason) {
       delete req.cache.compensationByCycleId;
     }
 
-    audit_(
-      cycleId,
-      'Compensation decision reset',
-      email,
-      previous,
-      V31.COMPENSATION.PENDING,
-      cleanText_(reason || '')
-    );
-
     return {
       ok: true,
       decision: V31.COMPENSATION.PENDING,
       cycleStatus: String(cycle['Status'] || ''),
       message: 'Compensation decision reset to Pending.',
+      pendingAuditEvent: buildPendingAuditEvent_(
+        cycleId,
+        'Compensation decision reset',
+        email,
+        previous,
+        V31.COMPENSATION.PENDING,
+        cleanReason,
+        'COMP_RESET:' + String(cycleId) + ':' + toIsoString_(now)
+      ),
     };
   });
+
+  let auditWarning = '';
+  if (result.pendingAuditEvent) {
+    const auditResult = commitAuditEventOutsideLock_(
+      result.pendingAuditEvent
+    );
+    if (!auditResult.ok) auditWarning = auditResult.warning;
+    delete result.pendingAuditEvent;
+  }
+  result.auditWarning = auditWarning;
+  return result;
 }
 
 /**

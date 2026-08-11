@@ -787,6 +787,435 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('requireSingleActiveCompensationRecord_ fails closed on multi-active', function () {
+    const originalList = listActiveCompensationRecordLocationsForCycle_;
+    const originalAlert = raiseMultiActiveCompensationAlert_;
+    let alerted = false;
+    listActiveCompensationRecordLocationsForCycle_ = function () {
+      return [
+        {
+          rowNumber: 2,
+          object: {
+            'Compensation Record ID': 'A',
+            Status: V31_COMP.STATUS.AWAITING_OWNER,
+          },
+        },
+        {
+          rowNumber: 3,
+          object: {
+            'Compensation Record ID': 'B',
+            Status: V31_COMP.STATUS.AWAITING_OWNER,
+          },
+        },
+      ];
+    };
+    raiseMultiActiveCompensationAlert_ = function () {
+      alerted = true;
+    };
+    try {
+      let failed = false;
+      try {
+        requireSingleActiveCompensationRecord_('C-MULTI', {
+          allowZero: true,
+        });
+      } catch (error) {
+        failed = /Multiple active compensation records/i.test(
+          String(error.message || error)
+        );
+      }
+      assert_(failed, 'multi-active must throw');
+      assert_(alerted, 'System Health alert raised');
+    } finally {
+      listActiveCompensationRecordLocationsForCycle_ = originalList;
+      raiseMultiActiveCompensationAlert_ = originalAlert;
+    }
+  });
+
+  check('Orphan relink readiness: sync + updateCycleReadiness_ reaches Ready', function () {
+    const cycle = {
+      'Cycle ID': 'C-ORPHAN',
+      Status: PR.CYCLE.OPEN,
+      'Manager Review Status': PR.DOC.SUBMITTED,
+      'Self Evaluation Status': PR.DOC.SUBMITTED,
+      'Compensation Decision': V31.COMPENSATION.PENDING,
+      'Compensation Status': V31_COMP.STATUS.PENDING,
+      'Compensation Record ID': '',
+    };
+    const record = {
+      'Compensation Record ID': 'REC-ORPHAN',
+      Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+      'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+      'Manager Recommendation Submitted At': new Date(),
+      'Manager Recommendation Submitted By': 'mgr@aitheras.com',
+    };
+    syncCycleCompensationSummary_(cycle, record);
+    updateCycleReadiness_(cycle);
+    assert_(
+      String(cycle['Compensation Record ID']) === 'REC-ORPHAN',
+      'mirror restored'
+    );
+    assert_(
+      String(cycle['Status']) === PR.CYCLE.READY,
+      'lifecycle recalculated to Ready for Review Meeting'
+    );
+  });
+
+  check('Reset reason blank rejected by server contract', function () {
+    assert_(
+      !cleanText_('   '),
+      'whitespace-only reason is empty after cleanText_'
+    );
+  });
+
+  check('Compensation pending-audit Event IDs are deterministic', function () {
+    assert_(
+      buildPendingAuditEvent_(
+        'C1',
+        'Compensation recommendation submitted',
+        'mgr@aitheras.com',
+        '',
+        V31.COMPENSATION.ADJUSTMENT,
+        '{}',
+        'COMP_RECOMMENDATION_SUBMITTED:REC-1'
+      ).eventId === 'COMP_RECOMMENDATION_SUBMITTED:REC-1',
+      'recommendation event id'
+    );
+    assert_(
+      buildPendingAuditEvent_(
+        'C1',
+        'Compensation decision reset',
+        'hr@aitheras.com',
+        V31.COMPENSATION.ADJUSTMENT,
+        V31.COMPENSATION.PENDING,
+        'reason',
+        'COMP_RESET:C1:2026-08-10T12:00:00.000Z'
+      ).eventId === 'COMP_RESET:C1:2026-08-10T12:00:00.000Z',
+      'reset event id'
+    );
+  });
+
+  check('Public reset/submit orchestration: A Failed then B active', function () {
+    const store = {
+      'Cycle ID': 'C-REPL',
+      Status: PR.CYCLE.OPEN,
+      'Manager Email': 'mgr@aitheras.com',
+      'Employee Email': 'emp@aitheras.com',
+      'Manager Review Status': PR.DOC.SUBMITTED,
+      'Self Evaluation Status': PR.DOC.DRAFT,
+      'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+      'Compensation Status': V31_COMP.STATUS.AWAITING_OWNER,
+      'Compensation Record ID': 'REC-A',
+      'CAF Final PDF ID': '',
+    };
+    const records = [
+      {
+        'Compensation Record ID': 'REC-A',
+        'Review Cycle ID': 'C-REPL',
+        Status: V31_COMP.STATUS.AWAITING_OWNER,
+      },
+    ];
+    const originals = {
+      withLock_: withLock_,
+      findCycle_: findCycle_,
+      writeCycle_: writeCycle_,
+      getCurrentUserEmail_: getCurrentUserEmail_,
+      isHrUser_: isHrUser_,
+      ensureCompensationDataModel_: ensureCompensationDataModel_,
+      listActiveCompensationRecordLocationsForCycle_:
+        listActiveCompensationRecordLocationsForCycle_,
+      writeCompensationRecord_: writeCompensationRecord_,
+      appendCompensationRecord_: appendCompensationRecord_,
+      getAssignmentPayRate_: getAssignmentPayRate_,
+      getCombinedSignatureState_: getCombinedSignatureState_,
+      commitAuditEventOutsideLock_: commitAuditEventOutsideLock_,
+      validateCompensationRecommendation_:
+        validateCompensationRecommendation_,
+      syncCycleCompensationSummary_: syncCycleCompensationSummary_,
+      updateCycleReadiness_: updateCycleReadiness_,
+      perfGetRequest_:
+        typeof perfGetRequest_ === 'function' ? perfGetRequest_ : null,
+    };
+
+    withLock_ = function (inner) {
+      return inner();
+    };
+    findCycle_ = function () {
+      return { rowNumber: 2, object: store };
+    };
+    writeCycle_ = function () {};
+    getCurrentUserEmail_ = function () {
+      return 'hr@aitheras.com';
+    };
+    isHrUser_ = function () {
+      return true;
+    };
+    ensureCompensationDataModel_ = function () {};
+    listActiveCompensationRecordLocationsForCycle_ = function () {
+      const out = [];
+      records.forEach(function (row, index) {
+        if (!isCompensationRecordActive_(row)) return;
+        out.push({ rowNumber: index + 2, object: row });
+      });
+      return out;
+    };
+    writeCompensationRecord_ = function (rowNumber, object) {
+      records[rowNumber - 2] = object;
+    };
+    appendCompensationRecord_ = function (object) {
+      records.push(object);
+    };
+    getAssignmentPayRate_ = function () {
+      return { found: true, rate: 40, annual: 83200 };
+    };
+    getCombinedSignatureState_ = function () {
+      return {
+        managerSigned: false,
+        employeeSigned: false,
+        hrSigned: false,
+      };
+    };
+    commitAuditEventOutsideLock_ = function (event) {
+      return { ok: true, warning: '', eventId: event.eventId };
+    };
+    validateCompensationRecommendation_ = function (payload) {
+      return {
+        recommendedRate: 50,
+        recommendedAnnual: 104000,
+        recommendedPercent: 0.25,
+        businessJustification: 'Merit',
+        proposedEffectiveDate: new Date('2026-09-01'),
+      };
+    };
+    if (originals.perfGetRequest_) {
+      perfGetRequest_ = function () {
+        return { cache: {} };
+      };
+    }
+
+    try {
+      const resetResult = resetCompensationDecision(
+        'C-REPL',
+        'Coach regression reset'
+      );
+      assert_(resetResult.ok === true, 'reset ok');
+      assert_(
+        String(records[0].Status) === V31_COMP.STATUS.FAILED,
+        'A marked Failed'
+      );
+      assert_(
+        String(store['Compensation Decision']) ===
+          V31.COMPENSATION.PENDING,
+        'cycle pending'
+      );
+
+      getCurrentUserEmail_ = function () {
+        return 'mgr@aitheras.com';
+      };
+      isHrUser_ = function () {
+        return false;
+      };
+      const submitResult = submitCompensationRecommendation('C-REPL', {});
+      assert_(submitResult.ok === true, 'replacement submit ok');
+      assert_(
+        records.length === 2 &&
+          String(records[1].Status) === V31_COMP.STATUS.AWAITING_OWNER,
+        'B active'
+      );
+      assert_(
+        String(store['Compensation Record ID']) ===
+          String(submitResult.compensationRecordId),
+        'cycle linked to B'
+      );
+    } finally {
+      withLock_ = originals.withLock_;
+      findCycle_ = originals.findCycle_;
+      writeCycle_ = originals.writeCycle_;
+      getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+      isHrUser_ = originals.isHrUser_;
+      ensureCompensationDataModel_ = originals.ensureCompensationDataModel_;
+      listActiveCompensationRecordLocationsForCycle_ =
+        originals.listActiveCompensationRecordLocationsForCycle_;
+      writeCompensationRecord_ = originals.writeCompensationRecord_;
+      appendCompensationRecord_ = originals.appendCompensationRecord_;
+      getAssignmentPayRate_ = originals.getAssignmentPayRate_;
+      getCombinedSignatureState_ = originals.getCombinedSignatureState_;
+      commitAuditEventOutsideLock_ = originals.commitAuditEventOutsideLock_;
+      validateCompensationRecommendation_ =
+        originals.validateCompensationRecommendation_;
+      if (originals.perfGetRequest_) {
+        perfGetRequest_ = originals.perfGetRequest_;
+      }
+    }
+  });
+
+  check('Public reset during Meeting Open is rejected', function () {
+    const store = {
+      'Cycle ID': 'C-MEET-RESET',
+      Status: PR.CYCLE.MEETING,
+      'Compensation Decision': V31.COMPENSATION.NONE,
+    };
+    const originals = {
+      withLock_: withLock_,
+      findCycle_: findCycle_,
+      getCurrentUserEmail_: getCurrentUserEmail_,
+      isHrUser_: isHrUser_,
+      ensureCompensationDataModel_: ensureCompensationDataModel_,
+    };
+    withLock_ = function (inner) {
+      return inner();
+    };
+    findCycle_ = function () {
+      return { rowNumber: 2, object: store };
+    };
+    getCurrentUserEmail_ = function () {
+      return 'hr@aitheras.com';
+    };
+    isHrUser_ = function () {
+      return true;
+    };
+    ensureCompensationDataModel_ = function () {};
+    try {
+      let rejected = false;
+      try {
+        resetCompensationDecision('C-MEET-RESET', 'too late');
+      } catch (error) {
+        rejected = /cannot be reset after the review meeting/i.test(
+          String(error.message || error)
+        );
+      }
+      assert_(rejected, 'meeting open reset rejected');
+    } finally {
+      withLock_ = originals.withLock_;
+      findCycle_ = originals.findCycle_;
+      getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+      isHrUser_ = originals.isHrUser_;
+      ensureCompensationDataModel_ = originals.ensureCompensationDataModel_;
+    }
+  });
+
+  check('Public No Adjustment before Manager submit is rejected', function () {
+    const store = {
+      'Cycle ID': 'C-NOADJ',
+      Status: PR.CYCLE.OPEN,
+      'Manager Email': 'mgr@aitheras.com',
+      'Employee Email': 'emp@aitheras.com',
+      'Manager Review Status': PR.DOC.DRAFT,
+      'Compensation Decision': V31.COMPENSATION.PENDING,
+    };
+    const originals = {
+      withLock_: withLock_,
+      findCycle_: findCycle_,
+      getCurrentUserEmail_: getCurrentUserEmail_,
+      isHrUser_: isHrUser_,
+      ensureCompensationDataModel_: ensureCompensationDataModel_,
+      listActiveCompensationRecordLocationsForCycle_:
+        listActiveCompensationRecordLocationsForCycle_,
+    };
+    withLock_ = function (inner) {
+      return inner();
+    };
+    findCycle_ = function () {
+      return { rowNumber: 2, object: store };
+    };
+    getCurrentUserEmail_ = function () {
+      return 'mgr@aitheras.com';
+    };
+    isHrUser_ = function () {
+      return false;
+    };
+    ensureCompensationDataModel_ = function () {};
+    listActiveCompensationRecordLocationsForCycle_ = function () {
+      return [];
+    };
+    try {
+      let rejected = false;
+      try {
+        submitNoCompensationAdjustment('C-NOADJ', 'early');
+      } catch (error) {
+        rejected = /Submit the manager review before recording No Adjustment/i.test(
+          String(error.message || error)
+        );
+      }
+      assert_(rejected, 'early No Adjustment rejected');
+    } finally {
+      withLock_ = originals.withLock_;
+      findCycle_ = originals.findCycle_;
+      getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+      isHrUser_ = originals.isHrUser_;
+      ensureCompensationDataModel_ = originals.ensureCompensationDataModel_;
+      listActiveCompensationRecordLocationsForCycle_ =
+        originals.listActiveCompensationRecordLocationsForCycle_;
+    }
+  });
+
+  check('Audit failure after compensation commit returns warning not rollback', function () {
+    const store = {
+      'Cycle ID': 'C-AUD',
+      Status: PR.CYCLE.OPEN,
+      'Manager Email': 'mgr@aitheras.com',
+      'Employee Email': 'emp@aitheras.com',
+      'Manager Review Status': PR.DOC.SUBMITTED,
+      'Compensation Decision': V31.COMPENSATION.PENDING,
+    };
+    const originals = {
+      withLock_: withLock_,
+      findCycle_: findCycle_,
+      writeCycle_: writeCycle_,
+      getCurrentUserEmail_: getCurrentUserEmail_,
+      isHrUser_: isHrUser_,
+      ensureCompensationDataModel_: ensureCompensationDataModel_,
+      listActiveCompensationRecordLocationsForCycle_:
+        listActiveCompensationRecordLocationsForCycle_,
+      commitAuditEventOutsideLock_: commitAuditEventOutsideLock_,
+      updateCycleReadiness_: updateCycleReadiness_,
+    };
+    withLock_ = function (inner) {
+      return inner();
+    };
+    findCycle_ = function () {
+      return { rowNumber: 2, object: store };
+    };
+    writeCycle_ = function () {};
+    getCurrentUserEmail_ = function () {
+      return 'mgr@aitheras.com';
+    };
+    isHrUser_ = function () {
+      return false;
+    };
+    ensureCompensationDataModel_ = function () {};
+    listActiveCompensationRecordLocationsForCycle_ = function () {
+      return [];
+    };
+    commitAuditEventOutsideLock_ = function () {
+      return {
+        ok: false,
+        warning:
+          'The change was saved, but the audit trail write failed. System Health has been notified.',
+        eventId: 'COMP_NO_ADJUSTMENT:C-AUD:x',
+      };
+    };
+    try {
+      const result = submitNoCompensationAdjustment('C-AUD', 'ok');
+      assert_(result.ok === true, 'business commit succeeded');
+      assert_(
+        String(store['Compensation Decision']) === V31.COMPENSATION.NONE,
+        'decision committed'
+      );
+      assert_(!!result.auditWarning, 'audit warning surfaced');
+    } finally {
+      withLock_ = originals.withLock_;
+      findCycle_ = originals.findCycle_;
+      writeCycle_ = originals.writeCycle_;
+      getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+      isHrUser_ = originals.isHrUser_;
+      ensureCompensationDataModel_ = originals.ensureCompensationDataModel_;
+      listActiveCompensationRecordLocationsForCycle_ =
+        originals.listActiveCompensationRecordLocationsForCycle_;
+      commitAuditEventOutsideLock_ = originals.commitAuditEventOutsideLock_;
+      updateCycleReadiness_ = originals.updateCycleReadiness_;
+    }
+  });
+
   const failed = results.filter(function (item) {
     return !item.ok;
   });

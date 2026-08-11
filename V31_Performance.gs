@@ -228,34 +228,122 @@ function isCompensationRecordActive_(record) {
   return !!status && status !== V31_COMP.STATUS.FAILED;
 }
 
+/**
+ * Sheet-backed list of active (non-Failed) CompensationRecords for one cycle.
+ * Never applies a newest-wins heuristic — callers must fail closed on length > 1.
+ */
+function listActiveCompensationRecordLocationsForCycle_(cycleId) {
+  const id = String(cycleId || '');
+  const out = [];
+  if (!id) return out;
+  const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
+  if (!sheet) return out;
+  const values = perfTimedSheetValues_(sheet, V31_COMP.RECORDS_SHEET);
+  if (values.length < 2) return out;
+  const headers = values[0].map(String);
+  const cycleIndex = headers.indexOf('Review Cycle ID');
+  if (cycleIndex < 0) return out;
+  for (let row = 1; row < values.length; row++) {
+    if (String(values[row][cycleIndex] || '') !== id) continue;
+    const object = {};
+    headers.forEach(function (header, index) {
+      object[header] = values[row][index];
+    });
+    if (!isCompensationRecordActive_(object)) continue;
+    out.push({ rowNumber: row + 1, object: object });
+  }
+  return out;
+}
+
+function raiseMultiActiveCompensationAlert_(cycleId, actives) {
+  const rows = actives || [];
+  try {
+    upsertSystemAlert_({
+      alertKey: buildSystemAlertKey_(
+        cycleId,
+        'Compensation',
+        'multiple_active_records'
+      ),
+      cycleId: String(cycleId || ''),
+      severity: 'Blocking',
+      component: 'Compensation',
+      subject:
+        'Multiple active compensation records for cycle ' + cycleId,
+      lastError:
+        'Found ' +
+        rows.length +
+        ' active CompensationRecords. Fail closed until HR reconciles.',
+      details: {
+        recordIds: rows.map(function (row) {
+          return String(
+            (row && row.object && row.object['Compensation Record ID']) ||
+              (row && row['Compensation Record ID']) ||
+              ''
+          );
+        }),
+      },
+    });
+  } catch (alertError) {
+    Logger.log(
+      'multi-active compensation alert failed: ' +
+        String(alertError.message || alertError)
+    );
+  }
+}
+
+/**
+ * Authoritative active-record gate for compensation money/approval mutations.
+ * 0 active → null when allowZero, else throw.
+ * 1 active → that location.
+ * >1 active → System Health + throw (never pick newest).
+ */
+function requireSingleActiveCompensationRecord_(cycleId, options) {
+  const opts = options || {};
+  const actives = listActiveCompensationRecordLocationsForCycle_(cycleId);
+  if (actives.length > 1) {
+    raiseMultiActiveCompensationAlert_(cycleId, actives);
+    throw new Error(
+      'Multiple active compensation records exist for this cycle. HR must reconcile before continuing.'
+    );
+  }
+  if (actives.length === 0) {
+    if (opts.allowZero) return null;
+    throw new Error('Compensation record not found.');
+  }
+  return actives[0];
+}
+
 function findActiveCompensationRecordByCycleOptional_(cycleId) {
-  const loc = findCompensationRecordByCycleOptional_(cycleId);
-  if (!loc || !isCompensationRecordActive_(loc.object)) {
+  const actives = listActiveCompensationRecordLocationsForCycle_(cycleId);
+  if (actives.length > 1) {
+    raiseMultiActiveCompensationAlert_(cycleId, actives);
     return null;
   }
-  return loc;
+  return actives[0] || null;
 }
 
 /**
  * Count active (non-Failed) CompensationRecords for one cycle.
  */
 function countActiveCompensationRecordsForCycle_(cycleId) {
-  const id = String(cycleId || '');
-  if (!id) return 0;
-  const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
-  if (!sheet) return 0;
-  const rows = getAllObjects_(V31_COMP.RECORDS_SHEET);
-  let count = 0;
-  rows.forEach(function (row) {
-    if (String(row['Review Cycle ID'] || '') !== id) return;
-    if (isCompensationRecordActive_(row)) count += 1;
-  });
-  return count;
+  return listActiveCompensationRecordLocationsForCycle_(cycleId).length;
+}
+
+function findCompensationRecordObjectById_(records, recordId) {
+  const id = String(recordId || '');
+  if (!id || !records || !records.length) return null;
+  for (let i = 0; i < records.length; i++) {
+    if (String(records[i]['Compensation Record ID'] || '') === id) {
+      return records[i];
+    }
+  }
+  return null;
 }
 
 /**
  * Relink ReviewCycles to exactly one active CompensationRecord when the
  * cycle mirror is blank/stale and the active record is unambiguous.
+ * After a successful relink, recalculates ordinary readiness.
  */
 function reconcileCompensationCycleLinks_() {
   const cycles = getAllObjects_(PR.SHEETS.CYCLES);
@@ -265,51 +353,35 @@ function reconcileCompensationCycleLinks_() {
   });
   const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
   if (!sheet) {
-    return { relinked: 0, multiActive: 0 };
+    return { relinked: 0, multiActive: 0, readinessFixed: 0 };
   }
   const records = getAllObjects_(V31_COMP.RECORDS_SHEET);
   const activeByCycle = {};
+  const allByCycle = {};
   records.forEach(function (record) {
     const cycleId = String(record['Review Cycle ID'] || '');
-    if (!cycleId || !isCompensationRecordActive_(record)) return;
+    if (!cycleId) return;
+    if (!allByCycle[cycleId]) allByCycle[cycleId] = [];
+    allByCycle[cycleId].push(record);
+    if (!isCompensationRecordActive_(record)) return;
     if (!activeByCycle[cycleId]) activeByCycle[cycleId] = [];
     activeByCycle[cycleId].push(record);
   });
 
   let relinked = 0;
   let multiActive = 0;
+  let readinessFixed = 0;
+
   Object.keys(activeByCycle).forEach(function (cycleId) {
     const actives = activeByCycle[cycleId];
     if (actives.length > 1) {
       multiActive += 1;
-      try {
-        upsertSystemAlert_({
-          alertKey: buildSystemAlertKey_(
-            cycleId,
-            'Compensation',
-            'multiple_active_records'
-          ),
-          cycleId: cycleId,
-          severity: 'Blocking',
-          component: 'Compensation',
-          subject:
-            'Multiple active compensation records for cycle ' + cycleId,
-          lastError:
-            'Found ' +
-            actives.length +
-            ' active CompensationRecords. Fail closed until HR reconciles.',
-          details: {
-            recordIds: actives.map(function (row) {
-              return String(row['Compensation Record ID'] || '');
-            }),
-          },
-        });
-      } catch (alertError) {
-        Logger.log(
-          'multi-active compensation alert failed: ' +
-            String(alertError.message || alertError)
-        );
-      }
+      raiseMultiActiveCompensationAlert_(
+        cycleId,
+        actives.map(function (row) {
+          return { object: row };
+        })
+      );
       return;
     }
     const record = actives[0];
@@ -317,22 +389,67 @@ function reconcileCompensationCycleLinks_() {
     if (!cycle) return;
     const mirrorId = String(cycle['Compensation Record ID'] || '');
     const recordId = String(record['Compensation Record ID'] || '');
-    if (mirrorId && mirrorId === recordId) return;
-    if (
-      mirrorId &&
-      mirrorId !== recordId &&
-      String(cycle['Compensation Decision'] || '') ===
-        V31.COMPENSATION.ADJUSTMENT
-    ) {
-      // Ambiguous mirror — leave for System Health / HR.
-      return;
+    let needsRelink = false;
+
+    if (!mirrorId || mirrorId === recordId) {
+      needsRelink = !mirrorId;
+    } else {
+      const mirrored = findCompensationRecordObjectById_(
+        allByCycle[cycleId] || [],
+        mirrorId
+      );
+      if (mirrored && !isCompensationRecordActive_(mirrored)) {
+        // Stale Failed/historical mirror + exactly one active → repair.
+        needsRelink = true;
+      } else {
+        try {
+          upsertSystemAlert_({
+            alertKey: buildSystemAlertKey_(
+              cycleId,
+              'Compensation',
+              'ambiguous_compensation_mirror'
+            ),
+            cycleId: cycleId,
+            severity: 'Blocking',
+            component: 'Compensation',
+            subject:
+              'Ambiguous compensation mirror for cycle ' + cycleId,
+            lastError:
+              'Cycle Compensation Record ID does not match the single active record and is not a Failed historical row.',
+            details: {
+              mirrorId: mirrorId,
+              activeRecordId: recordId,
+            },
+          });
+        } catch (alertError) {
+          Logger.log(
+            'ambiguous compensation mirror alert failed: ' +
+              String(alertError.message || alertError)
+          );
+        }
+        return;
+      }
     }
+
     try {
       const location = findCycle_(cycleId);
-      syncCycleCompensationSummary_(location.object, record);
-      location.object['Updated At'] = new Date();
-      writeCycle_(location.rowNumber, location.object);
-      relinked += 1;
+      const beforeStatus = String(location.object['Status'] || '');
+      if (needsRelink) {
+        syncCycleCompensationSummary_(location.object, record);
+      }
+      updateCycleReadiness_(location.object);
+      const afterStatus = String(location.object['Status'] || '');
+      const changed =
+        needsRelink ||
+        beforeStatus !== afterStatus ||
+        String(location.object['Compensation Record ID'] || '') !==
+          mirrorId;
+      if (changed) {
+        location.object['Updated At'] = new Date();
+        writeCycle_(location.rowNumber, location.object);
+        if (needsRelink) relinked += 1;
+        if (beforeStatus !== afterStatus) readinessFixed += 1;
+      }
     } catch (error) {
       Logger.log(
         'Compensation relink failed for ' +
@@ -343,5 +460,9 @@ function reconcileCompensationCycleLinks_() {
     }
   });
 
-  return { relinked: relinked, multiActive: multiActive };
+  return {
+    relinked: relinked,
+    multiActive: multiActive,
+    readinessFixed: readinessFixed,
+  };
 }

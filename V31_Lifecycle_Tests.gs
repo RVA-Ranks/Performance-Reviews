@@ -405,6 +405,166 @@ function runV31LifecycleTests_() {
     })
   );
 
+  results.push(
+    lifeCase_(
+      'public ACK orchestration: Manager authority when Employee ACKs second',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-ORCH-1');
+        withLifecycleEndpointDoubles_(store, 'mgr@aitheras.com', {}, function () {
+          const prep = prepareReleaseReviewSignatures(store['Cycle ID']);
+          assertLife_(!!prep.releaseRequestId, 'prep request id');
+          store.releaseRequestId = prep.releaseRequestId;
+          store.meetingContentRevision = prep.meetingContentRevision;
+          const mgrAck = acknowledgeMeetingRelease(store['Cycle ID'], {
+            releaseRequestId: prep.releaseRequestId,
+            contentRevision: prep.meetingContentRevision,
+          });
+          assertLife_(
+            String(mgrAck.status) === PR.CYCLE.MEETING,
+            'still meeting after manager ACK'
+          );
+        });
+        withLifecycleEndpointDoubles_(store, 'emp@aitheras.com', {}, function () {
+          const meeting = parseMeetingJson_(store);
+          const empAck = acknowledgeMeetingRelease(store['Cycle ID'], {
+            releaseRequestId: meeting.releaseRequestId,
+            contentRevision: meeting.contentRevision,
+          });
+          assertLife_(
+            String(empAck.status) === PR.CYCLE.SIGNATURES ||
+              empAck.alreadyReleased === true,
+            'sealed after employee ACK'
+          );
+          assertLife_(
+            normalizeEmail_(store['Signatures Released By']) ===
+              'mgr@aitheras.com',
+            'Released By is Manager initiator'
+          );
+          assertLife_(
+            parseMeetingJson_(store).sealedBy === 'mgr@aitheras.com',
+            'sealedBy is Manager initiator'
+          );
+          assertLife_(
+            store.__audits &&
+              store.__audits.some(function (row) {
+                return (
+                  normalizeEmail_(row.actorEmail) === 'mgr@aitheras.com' &&
+                  /secondAckBy/.test(String(row.details || ''))
+                );
+              }),
+            'release audit actor is Manager'
+          );
+        });
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_(
+      'public ACK rejects blank and stale contentRevision',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-ORCH-2');
+        withLifecycleEndpointDoubles_(store, 'mgr@aitheras.com', {}, function () {
+          const prep = prepareReleaseReviewSignatures(store['Cycle ID']);
+          let blankFailed = false;
+          try {
+            acknowledgeMeetingRelease(store['Cycle ID'], {
+              releaseRequestId: '',
+              contentRevision: prep.meetingContentRevision,
+            });
+          } catch (error) {
+            blankFailed = /releaseRequestId is required/i.test(
+              String(error.message || error)
+            );
+          }
+          assertLife_(blankFailed, 'blank request id rejected');
+
+          let staleFailed = false;
+          try {
+            acknowledgeMeetingRelease(store['Cycle ID'], {
+              releaseRequestId: prep.releaseRequestId,
+              contentRevision: Number(prep.meetingContentRevision) - 1,
+            });
+          } catch (error) {
+            staleFailed = /Stale meeting acknowledgement/i.test(
+              String(error.message || error)
+            );
+          }
+          assertLife_(staleFailed, 'stale revision rejected');
+        });
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_(
+      'public saveMeetingOutcomes invalidates post-ACK participant ACK',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-ORCH-3');
+        withLifecycleEndpointDoubles_(store, 'mgr@aitheras.com', {}, function () {
+          const prep = prepareReleaseReviewSignatures(store['Cycle ID']);
+          acknowledgeMeetingRelease(store['Cycle ID'], {
+            releaseRequestId: prep.releaseRequestId,
+            contentRevision: prep.meetingContentRevision,
+          });
+          assertLife_(
+            hasMeetingReleaseAckForRole_(
+              parseMeetingJson_(store),
+              PR.ROLE.MANAGER
+            ),
+            'manager acked'
+          );
+          saveMeetingOutcomes(store['Cycle ID'], {
+            managerFinalComments: 'Edited after ACK',
+            developmentGoals: '',
+            actionSteps: '',
+            employeeComments: '',
+          });
+          assertLife_(
+            !hasMeetingReleaseAckForRole_(
+              parseMeetingJson_(store),
+              PR.ROLE.MANAGER
+            ),
+            'manager ACK invalidated after save'
+          );
+        });
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_('deterministic create/submit audit Event IDs', function () {
+      assertLife_(
+        String(
+          buildPendingAuditEvent_(
+            'C1',
+            'Review cycle created',
+            'hr@aitheras.com',
+            '',
+            PR.CYCLE.OPEN,
+            '{}',
+            'CYCLE_CREATED:C1'
+          ).eventId
+        ) === 'CYCLE_CREATED:C1',
+        'CYCLE_CREATED'
+      );
+      assertLife_(
+        String(
+          buildPendingAuditEvent_(
+            'C1',
+            'Manager Review submitted and sealed',
+            'mgr@aitheras.com',
+            PR.DOC.DRAFT,
+            PR.DOC.SUBMITTED,
+            '',
+            'REVIEW_SUBMITTED:C1:Manager'
+          ).eventId
+        ) === 'REVIEW_SUBMITTED:C1:Manager',
+        'REVIEW_SUBMITTED Manager'
+      );
+    })
+  );
+
   const failed = results.filter(function (row) {
     return !row.ok;
   });
@@ -441,5 +601,99 @@ function lifeCase_(name, fn) {
 function assertLife_(condition, message) {
   if (!condition) {
     throw new Error(message || 'Assertion failed');
+  }
+}
+
+function lifeEndpointMeetingCycle_(cycleId) {
+  return {
+    'Cycle ID': String(cycleId),
+    Status: PR.CYCLE.MEETING,
+    'Manager Email': 'mgr@aitheras.com',
+    'Employee Email': 'emp@aitheras.com',
+    'HR Email': 'hr@aitheras.com',
+    'Manager Review Status': PR.DOC.SUBMITTED,
+    'Self Evaluation Status': PR.DOC.SUBMITTED,
+    'Compensation Decision': V31.COMPENSATION.NONE,
+    'Compensation Status': V31_COMP.STATUS.COMPLETE,
+    'Compensation Record ID': '',
+    'Meeting JSON': JSON.stringify({
+      managerFinalComments: '',
+      developmentGoals: '',
+      actionSteps: '',
+      employeeComments: '',
+      contentRevision: 3,
+      releaseRequestId: '',
+      releaseRequestedAt: '',
+      releaseRequestedBy: '',
+    }),
+    'Signatures Released At': '',
+    'Signatures Released By': '',
+    'Updated At': new Date(),
+    'Manager Signature File ID': '',
+    'Employee Signature File ID': '',
+    'HR Signature File ID': '',
+    'MGR Manager Signature ID': '',
+    'SELF Manager Signature ID': '',
+    'MGR Employee Signature ID': '',
+    'SELF Employee Signature ID': '',
+    'MGR HR Signature ID': '',
+    'SELF HR Signature ID': '',
+    __audits: [],
+  };
+}
+
+/**
+ * In-memory doubles for public release/ACK/save orchestration tests.
+ * Restores originals in finally.
+ */
+function withLifecycleEndpointDoubles_(store, actorEmail, extras, fn) {
+  const opts = extras || {};
+  const originals = {
+    withLock_: withLock_,
+    findCycle_: findCycle_,
+    writeCycle_: writeCycle_,
+    getCurrentUserEmail_: getCurrentUserEmail_,
+    isHrUser_: isHrUser_,
+    commitAuditEventOutsideLock_: commitAuditEventOutsideLock_,
+  };
+  withLock_ = function (inner) {
+    return inner();
+  };
+  findCycle_ = function (id) {
+    if (String(store['Cycle ID']) !== String(id)) {
+      throw new Error('Cycle not found.');
+    }
+    return { rowNumber: 2, object: store };
+  };
+  writeCycle_ = function () {
+    // store is mutated in place via location.object
+  };
+  getCurrentUserEmail_ = function () {
+    return normalizeEmail_(actorEmail);
+  };
+  isHrUser_ = function () {
+    return !!opts.isHr;
+  };
+  commitAuditEventOutsideLock_ = function (event) {
+    store.__audits = store.__audits || [];
+    store.__audits.push(event);
+    if (opts.failAudit) {
+      return {
+        ok: false,
+        warning: 'The change was saved, but the audit trail write failed.',
+        eventId: event.eventId,
+      };
+    }
+    return { ok: true, warning: '', eventId: event.eventId };
+  };
+  try {
+    return fn();
+  } finally {
+    withLock_ = originals.withLock_;
+    findCycle_ = originals.findCycle_;
+    writeCycle_ = originals.writeCycle_;
+    getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+    isHrUser_ = originals.isHrUser_;
+    commitAuditEventOutsideLock_ = originals.commitAuditEventOutsideLock_;
   }
 }
