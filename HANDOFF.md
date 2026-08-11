@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-pass6-95` (also `backup/pre-lifecycle-pass5-94`)  
-Tip SHA: _(pending Pass 6 commit)_
+Tip SHA: `52fba81aaa29a8295d84def3daf9c8f1cf93cce9`
 
 Pass 6 closes Coach 95% major: `isV31CompensationComplete_` requires exactly
 one active CompensationRecord for Adjustment and evaluates that record's
