@@ -2305,22 +2305,9 @@ function signReviewCycle(cycleId, signatureDataUrl) {
     commitResult.updatedState.employeeSigned;
 
   if (commitResult.role === PR.ROLE.HR) {
-    let compensationPdfResult = null;
-    try {
-      compensationPdfResult =
-        maybeGenerateCompensationPdfAfterSignatures_(cycleId);
-    } catch (compensationPdfError) {
-      compensationPdfResult = {
-        ok: false,
-        error: String(
-          compensationPdfError.message || compensationPdfError
-        ),
-      };
-    }
-
-    const finalizeResult =
-      attemptFinalizationAfterSignature_(cycleId);
-
+    // Authoritative HR signature is committed and cycle is Finalizing.
+    // PDF/CAF/distribution/audit continue via continueReviewFinalization —
+    // do not hold the browser on that work.
     const hrLive = buildParticipantSignatureLiveResult_(
       cycleId,
       email,
@@ -2332,31 +2319,14 @@ function signReviewCycle(cycleId, signatureDataUrl) {
         notificationWarning: notificationWarning,
       }
     );
-    hrLive.finalization = finalizeResult;
-    hrLive.compensationPdf = compensationPdfResult;
-    hrLive.partial =
-      hrLive.partial ||
-      !!(compensationPdfResult && compensationPdfResult.error) ||
-      !!(finalizeResult && finalizeResult.ok === false);
+    hrLive.finalizationDeferred = true;
+    hrLive.continueFinalization = true;
     hrLive.message =
-      finalizeResult.message +
-      ([
-        auditWarning,
-        canonicalWarning,
-        notificationWarning,
-        compensationPdfResult && compensationPdfResult.error
-          ? 'Compensation CAF PDF needs recovery.'
-          : '',
-      ].filter(Boolean).length
+      'HR signature recorded. Preparing final documents…' +
+      ([auditWarning, canonicalWarning, notificationWarning]
+        .filter(Boolean).length
         ? ' ' +
-          [
-            auditWarning,
-            canonicalWarning,
-            notificationWarning,
-            compensationPdfResult && compensationPdfResult.error
-              ? 'Compensation CAF PDF needs recovery.'
-              : '',
-          ]
+          [auditWarning, canonicalWarning, notificationWarning]
             .filter(Boolean)
             .join(' ')
         : '');
@@ -3092,6 +3062,72 @@ function attemptFinalizationAfterSignature_(cycleId) {
       error: String(error.message || error),
     };
   }
+}
+
+/**
+ * Continue crash-safe finalization after HR signature was already committed.
+ * Safe for Manager/Employee/HR live clients to kick (idempotent claims).
+ * Does not redesign PDF/CAF provenance or Delivery Unknown recovery.
+ */
+function continueReviewFinalization(cycleId) {
+  const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
+
+  const id = String(cycleId || '').trim();
+  if (!id) {
+    throw new Error('Cycle ID is required.');
+  }
+
+  const cycle = findCycle_(id).object;
+  assertLiveReviewAccess_(cycle, email);
+
+  const status = String(cycle['Status'] || '');
+  if (status === PR.CYCLE.COMPLETE) {
+    return {
+      ok: true,
+      alreadyComplete: true,
+      cycleId: id,
+      status: status,
+      message: 'This review is already complete.',
+    };
+  }
+  if (status !== PR.CYCLE.FINALIZING && status !== PR.CYCLE.SIGNATURES) {
+    throw new Error(
+      'Finalization can only continue while the review is Finalizing.'
+    );
+  }
+
+  let compensationPdfResult = null;
+  try {
+    compensationPdfResult =
+      maybeGenerateCompensationPdfAfterSignatures_(id);
+  } catch (compensationPdfError) {
+    compensationPdfResult = {
+      ok: false,
+      error: String(
+        compensationPdfError.message || compensationPdfError
+      ),
+    };
+  }
+
+  const finalizeResult = attemptFinalizationAfterSignature_(id);
+  return {
+    ok: !!(finalizeResult && finalizeResult.ok),
+    cycleId: id,
+    status:
+      (finalizeResult && finalizeResult.alreadyComplete) ||
+      (finalizeResult && finalizeResult.ok)
+        ? PR.CYCLE.COMPLETE
+        : PR.CYCLE.FINALIZING,
+    finalization: finalizeResult,
+    compensationPdf: compensationPdfResult,
+    partial:
+      !!(compensationPdfResult && compensationPdfResult.error) ||
+      !!(finalizeResult && finalizeResult.ok === false),
+    message:
+      (finalizeResult && finalizeResult.message) ||
+      'Finalization progress updated.',
+  };
 }
 
 function buildSupersededSignatureResult_(recovery) {
@@ -7012,6 +7048,74 @@ function findCycle_(cycleId) {
     'Cycle ID',
     cycleId
   );
+}
+
+/**
+ * Live-poll / hot-path cycle lookup: resolve Cycle ID and read one row.
+ * Avoids hydrating the entire ReviewCycles sheet when the request-scoped
+ * sheet cache is cold. Falls back to findCycle_ when the sheet is already
+ * cached in this request (same authoritative object shape).
+ */
+function findLiveCycleRow_(cycleId) {
+  const id = String(cycleId || '').trim();
+  if (!id) {
+    throw new Error('Cycle ID is required.');
+  }
+
+  const req = perfGetRequest_();
+  if (
+    req &&
+    req.cache &&
+    req.cache.sheets &&
+    Object.prototype.hasOwnProperty.call(req.cache.sheets, PR.SHEETS.CYCLES)
+  ) {
+    return findCycle_(id);
+  }
+
+  const sheet = getSpreadsheet_().getSheetByName(PR.SHEETS.CYCLES);
+  if (!sheet) {
+    throw new Error('ReviewCycles sheet is missing.');
+  }
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) {
+    throw new Error('Record not found.');
+  }
+
+  const headerStarted = Date.now();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  perfCountSheetRead_(PR.SHEETS.CYCLES + ':headers', Date.now() - headerStarted);
+
+  const cycleCol = headers.indexOf('Cycle ID') + 1;
+  if (cycleCol < 1) {
+    throw new Error('Cycle ID column is missing.');
+  }
+
+  const searchStarted = Date.now();
+  const idRange = sheet.getRange(2, cycleCol, lastRow, cycleCol);
+  const match = idRange
+    .createTextFinder(id)
+    .matchEntireCell(true)
+    .findNext();
+  perfCountSheetRead_(
+    PR.SHEETS.CYCLES + ':idLookup',
+    Date.now() - searchStarted
+  );
+  if (!match) {
+    throw new Error('Record not found.');
+  }
+
+  const rowNumber = match.getRow();
+  const rowStarted = Date.now();
+  const rowValues = sheet.getRange(rowNumber, 1, 1, lastCol).getValues()[0];
+  perfCountSheetRead_(PR.SHEETS.CYCLES + ':row', Date.now() - rowStarted);
+
+  const object = {};
+  headers.forEach(function (header, index) {
+    object[header] = rowValues[index];
+  });
+  return { rowNumber: rowNumber, object: object };
 }
 
 function writeCycle_(rowNumber, cycle) {

@@ -83,6 +83,29 @@ function runV31LiveReviewTests_() {
   );
 
   results.push(
+    liveCase_('stale updatedAtIso is rejected by monotonic guard', function () {
+      assertLive_(
+        isLiveReviewStateStale_(
+          '2026-08-10T18:00:00.000Z',
+          '2026-08-10T18:01:00.000Z'
+        ) === true,
+        'older incoming is stale'
+      );
+      assertLive_(
+        isLiveReviewStateStale_(
+          '2026-08-10T18:02:00.000Z',
+          '2026-08-10T18:01:00.000Z'
+        ) === false,
+        'newer incoming is accepted'
+      );
+      assertLive_(
+        isLiveReviewStateStale_('', '2026-08-10T18:01:00.000Z') === false,
+        'blank incoming is not treated as stale'
+      );
+    })
+  );
+
+  results.push(
     liveCase_('live access prefers assignment before HR', function () {
       const cycle = {
         'Manager Email': 'mgr@example.com',

@@ -78,20 +78,35 @@ function assertLiveReviewAccess_(cycle, email) {
 
 /**
  * Public: tiny live meeting/signature poll endpoint.
- * No Audit write. No locks. No Drive.
+ * No Audit write. No locks. No Drive. Uses one-row cycle lookup.
  */
 function getLiveReviewState(cycleId) {
-  const email = getCurrentUserEmail_();
-  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
+  const started = Date.now();
+  perfBeginRequest_('getLiveReviewState');
+  try {
+    const email = getCurrentUserEmail_();
+    assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
 
-  const id = String(cycleId || '').trim();
-  if (!id) {
-    throw new Error('Cycle ID is required.');
+    const id = String(cycleId || '').trim();
+    if (!id) {
+      throw new Error('Cycle ID is required.');
+    }
+
+    const cycle = findLiveCycleRow_(id).object;
+    const viewerRole = assertLiveReviewAccess_(cycle, email);
+    const payload = buildLiveReviewStatePayload_(cycle, email, viewerRole);
+    perfEndRequest_({
+      cycleId: id,
+      durationMs: Date.now() - started,
+    });
+    return payload;
+  } catch (error) {
+    perfEndRequest_({
+      error: String(error.message || error),
+      durationMs: Date.now() - started,
+    });
+    throw error;
   }
-
-  const cycle = findCycle_(id).object;
-  const viewerRole = assertLiveReviewAccess_(cycle, email);
-  return buildLiveReviewStatePayload_(cycle, email, viewerRole);
 }
 
 /**
@@ -267,6 +282,19 @@ function shouldRestoreLiveReviewDocumentTitle_(isDocumentHidden) {
 
 function shouldWarnSignatureReleaseEmailAcceleration_(result) {
   return !(result && result.ok === true);
+}
+
+/**
+ * Pure monotonic guard: older updatedAtIso must not overwrite newer client state.
+ */
+function isLiveReviewStateStale_(incomingUpdatedAtIso, currentUpdatedAtIso) {
+  const previous = String(currentUpdatedAtIso || '');
+  const next = String(incomingUpdatedAtIso || '');
+  if (!previous || !next) return false;
+  const nextMs = Date.parse(next);
+  const prevMs = Date.parse(previous);
+  if (!isFinite(nextMs) || !isFinite(prevMs)) return false;
+  return nextMs < prevMs;
 }
 
 /**

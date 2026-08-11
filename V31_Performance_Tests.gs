@@ -164,6 +164,19 @@ function runV31PerformanceTests_() {
       testCompensationIntegrityCacheInvalidation_
     )
   );
+  results.push(
+    runPerfCase_(
+      'live cycle row helper exists for hot-path polls',
+      function () {
+        if (typeof findLiveCycleRow_ !== 'function') {
+          throw new Error('findLiveCycleRow_ must exist');
+        }
+        if (typeof isLiveReviewStateStale_ !== 'function') {
+          throw new Error('isLiveReviewStateStale_ must exist');
+        }
+      }
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
