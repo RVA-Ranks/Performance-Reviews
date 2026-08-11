@@ -1181,26 +1181,63 @@ function submitCompensationRecommendation(cycleId, payload) {
     delete result.pendingAuditEvent;
   }
   result.auditWarning = auditWarning;
-
-  // Raised outside the lock: email claim and system alert use their own locks.
-  try {
-    ensureCompensationRecommendationHrEmail_(cycleId);
-  } catch (notifyError) {
-    Logger.log(
-      'HR recommendation notification failed: ' +
-        String(notifyError.message || notifyError)
-    );
-  }
-  try {
-    maybeRaiseCompensationOwnerAlert_(findCycle_(cycleId).object);
-  } catch (alertError) {
-    Logger.log(
-      'Owner alert after recommendation failed: ' +
-        String(alertError.message || alertError)
-    );
-  }
+  // HR email / owner alert are accelerated off the Manager's critical path
+  // via accelerateCompensationRecommendationNotifications (client kick).
+  result.accelerateNotifications = true;
+  result.notificationPending = true;
+  result.message =
+    'Compensation recommendation submitted. HR has been notified or notification delivery is pending.';
 
   return result;
+  });
+}
+
+/**
+ * Durable HR recommendation email + owner alert after the recommendation
+ * row is already committed. Failure must never make a saved recommendation
+ * look unsaved.
+ */
+function accelerateCompensationRecommendationNotifications(cycleId) {
+  return runCompensationPublicMutation_(function () {
+    const email = getCurrentUserEmail_();
+    const location = findCycle_(cycleId);
+    const cycle = location.object;
+    const isHr = isHrUser_(email);
+    const isManager =
+      normalizeEmail_(cycle['Manager Email']) === normalizeEmail_(email);
+    if (!isHr && !isManager) {
+      throw new Error(
+        'Only the assigned manager or HR may accelerate compensation recommendation notifications.'
+      );
+    }
+
+    let emailOk = true;
+    let emailError = '';
+    try {
+      ensureCompensationRecommendationHrEmail_(cycleId);
+    } catch (notifyError) {
+      emailOk = false;
+      emailError = String(notifyError.message || notifyError);
+      Logger.log(
+        'HR recommendation notification failed: ' + emailError
+      );
+    }
+    try {
+      maybeRaiseCompensationOwnerAlert_(findCycle_(cycleId).object);
+    } catch (alertError) {
+      Logger.log(
+        'Owner alert after recommendation failed: ' +
+          String(alertError.message || alertError)
+      );
+    }
+    return {
+      ok: emailOk,
+      cycleId: String(cycleId),
+      message: emailOk
+        ? 'Compensation recommendation notifications advanced.'
+        : 'Recommendation is saved. HR notification is pending in the workflow queue.',
+      error: emailError,
+    };
   });
 }
 
@@ -1359,17 +1396,44 @@ function recordCompensationOwnerDecision(cycleId, payload) {
   result.auditWarning = auditWarning;
 
   resolveCompensationOwnerAlert_(cycleId, result.actorEmail);
-
-  try {
-    ensureCompensationManagerOutcomeEmail_(cycleId);
-  } catch (notifyError) {
-    Logger.log(
-      'Manager outcome notification failed: ' +
-        String(notifyError.message || notifyError)
-    );
-  }
+  // Manager outcome email is accelerated off HR's critical path.
+  result.accelerateNotifications = true;
+  result.notificationPending = true;
 
   return result;
+  });
+}
+
+/**
+ * Durable manager outcome email after owner decision is committed.
+ */
+function accelerateCompensationOwnerOutcomeNotifications(cycleId) {
+  return runCompensationPublicMutation_(function () {
+    const email = getCurrentUserEmail_();
+    if (!isHrUser_(email)) {
+      throw new Error(
+        'Only HR may accelerate compensation owner outcome notifications.'
+      );
+    }
+    let emailOk = true;
+    let emailError = '';
+    try {
+      ensureCompensationManagerOutcomeEmail_(cycleId);
+    } catch (notifyError) {
+      emailOk = false;
+      emailError = String(notifyError.message || notifyError);
+      Logger.log(
+        'Manager outcome notification failed: ' + emailError
+      );
+    }
+    return {
+      ok: emailOk,
+      cycleId: String(cycleId),
+      message: emailOk
+        ? 'Manager outcome notification advanced.'
+        : 'Owner decision is saved. Manager notification is pending in the workflow queue.',
+      error: emailError,
+    };
   });
 }
 
@@ -1608,15 +1672,8 @@ function editCompensationOwnerDecision(cycleId, payload) {
     delete result.pendingAuditEvent;
   }
   result.auditWarning = auditWarning;
-
-  try {
-    ensureCompensationManagerOutcomeEmail_(cycleId);
-  } catch (notifyError) {
-    Logger.log(
-      'Manager outcome notification (edit) failed: ' +
-        String(notifyError.message || notifyError)
-    );
-  }
+  result.accelerateNotifications = true;
+  result.notificationPending = true;
 
   return result;
   });
