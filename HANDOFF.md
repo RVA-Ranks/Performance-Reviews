@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-perf-package` (also `backup/pre-live-ux-orchestration`)  
-Tip SHA: _(pending performance package commits)_
+Tip SHA: `75dfec70e5addfbcc323f31b59476746efb9e342` (docs `85498ee`)
 
 UX-0 accepted. UX-1–UX-6 shipped as one bounded performance package:
 
