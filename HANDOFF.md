@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-pass3-91` (also `backup/pre-lifecycle-pass2-87`)  
-Tip SHA: *(set after commit)*
+Tip SHA: `57b211ca14c5c6653ad36958a61f8895cf86a74f`
 
 Pass 3 closes Coach 91% majors: deferred multi-active System Health (no nested
 lock), lifecycle compensation gate fail-closed on multi-active, zero-active
