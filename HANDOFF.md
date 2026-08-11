@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-pass2-87` (also `backup/pre-lifecycle-transactional-closure`)  
-Tip SHA: *(set after commit)*
+Tip SHA: `9bad34a5b35b8e2046d4166326f7f42810a396d2`
 
 Pass 2 closes Coach 87% majors: single live-review poller (no duplicate release
 RPC loop), fail-closed multi-active compensation mutations, orphan relink
