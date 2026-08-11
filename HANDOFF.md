@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-client-93` (also `backup/pre-live-ux-correction-72`, `-91`)  
-Tip SHA: _(update after commit)_
+Tip SHA: `d3d8bf3014eabd0e6e4a1fe8721a205b59cce7d5`
 
 Pre-OBS client reconciliation after Coach 93% (Index.html only):
 
