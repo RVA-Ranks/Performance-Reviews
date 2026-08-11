@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-correction-91` (also `backup/pre-live-ux-correction-88`)  
-Tip SHA: `5f5b880dc8ca6e13f0713f738d336598f73b3f72`
+Tip SHA: `6a579d5` (reconcile package `5f5b880`)
 
 UX-0 + performance package + 88% correction accepted path. Pre-OBS 91% fixes:
 
