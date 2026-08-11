@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-pass5-94` (also `backup/pre-lifecycle-pass4-92`)  
-Tip SHA: *(set after commit)*
+Tip SHA: `ba759fd20dbd4757b14bcf5d23a98282fb2abad6`
 
 Pass 5 closes Coach 94% majors: truthful HR signature-notification acceleration
 outcomes, remaining HR recommendation recovery integrity-alert flushes, and
