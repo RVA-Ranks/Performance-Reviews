@@ -177,6 +177,22 @@ function runV31PerformanceTests_() {
       }
     )
   );
+  results.push(
+    runPerfCase_(
+      'live Cycle-ID lookup range is one column / lastRow-1 rows',
+      function () {
+        const args = liveCycleIdLookupRangeArgs_(3, 10);
+        if (args.row !== 2) throw new Error('start row must be 2');
+        if (args.column !== 3) throw new Error('column must match Cycle ID col');
+        if (args.numRows !== 9) throw new Error('numRows must be lastRow-1');
+        if (args.numColumns !== 1) throw new Error('numColumns must be 1');
+        const col1 = liveCycleIdLookupRangeArgs_(1, 5);
+        if (col1.numColumns !== 1 || col1.numRows !== 4) {
+          throw new Error('column 1 must still be one-column lastRow-1');
+        }
+      }
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;

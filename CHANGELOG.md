@@ -1,5 +1,17 @@
 # V3.1 Changelog
 
+## Live UX — fast-ACK correction
+
+- Fixed fast review submission patching document `Submitted` into Cycle Status;
+  submit now returns authoritative `documentStatus` + `cycleStatus` separately.
+- Review submission notifications/alerts accelerate off the submit critical path.
+- Owner Decision fast ACK returns a compact compensation record DTO (status,
+  final terms, canEditOwnerDecision) so the HR card updates without loadCycle.
+- Finalization continuation is HR-leader only (Manager/Employee poll Finalizing).
+- Corrected live Cycle-ID lookup to `getRange(row, column, numRows, numColumns)`
+  with one column and `lastRow - 1` rows.
+- Added regressions for submit contract, live range shape, and owner DTO.
+
 ## Live UX — performance orchestration package
 
 - Live poll uses `findLiveCycleRow_` (one-row Cycle ID lookup) instead of

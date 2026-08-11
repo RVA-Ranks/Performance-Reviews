@@ -1355,7 +1355,14 @@ function recordCompensationOwnerDecision(cycleId, payload) {
       status: String(record['Status']),
       ownerDecision: clean.ownerDecision,
       compensationComplete: isV31CompensationComplete_(cycle),
+      compensationDecision: normalizeCompensationDecision_(
+        cycle['Compensation Decision']
+      ),
+      compensationStatus: String(
+        cycle['Compensation Status'] || record['Status'] || ''
+      ),
       cycleStatus: String(cycle['Status']),
+      record: toCompensationRecordView_(record, true),
       message:
         clean.ownerDecision === V31_COMP.OWNER_DECISION.DENIED
           ? 'Owner declined the compensation recommendation.'
@@ -1635,6 +1642,15 @@ function editCompensationOwnerDecision(cycleId, payload) {
       message: 'Owner compensation decision updated.',
       status: String(record['Status']),
       ownerDecision: clean.ownerDecision,
+      compensationComplete: isV31CompensationComplete_(cycle),
+      compensationDecision: normalizeCompensationDecision_(
+        cycle['Compensation Decision']
+      ),
+      compensationStatus: String(
+        cycle['Compensation Status'] || record['Status'] || ''
+      ),
+      cycleStatus: String(cycle['Status']),
+      record: toCompensationRecordView_(record, true),
       pendingAuditEvent: buildPendingAuditEvent_(
         cycleId,
         'Compensation owner decision corrected',

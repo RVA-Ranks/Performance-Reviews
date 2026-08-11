@@ -541,6 +541,46 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Owner decision result includes compact compensation record DTO', function () {
+    const record = {
+      'Compensation Record ID': 'REC-DTO',
+      Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+      'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+      'Original Pay Rate': 40,
+      'Original Annual Salary': 83200,
+      'Manager Recommended Pay Rate': 44,
+      'Manager Recommended Annual Salary': 91520,
+      'Manager Recommended Percent': 0.1,
+      'Manager Business Justification': 'keep internal',
+      'Final Approved Pay Rate': 44,
+      'Final Approved Annual Salary': 91520,
+      'Final Approved Percent': 0.1,
+      'Compensation Effective Date': '2026-10-01',
+      'Recommendation Accepted': 'Yes',
+      'Owner Name': 'Dana Owner',
+      'Owner Decision Notes': 'OWNER_INTERNAL_SECRET_456',
+      'CAF PDF Status': V31_COMP.PDF.PENDING,
+      'Rate Update Status': V31_COMP.RATE_UPDATE.PENDING,
+    };
+    const view = toCompensationRecordView_(record, true);
+    assert_(view.status === V31_COMP.STATUS.AWAITING_SIGNATURES, 'status');
+    assert_(
+      view.ownerDecision === V31_COMP.OWNER_DECISION.APPROVED,
+      'ownerDecision'
+    );
+    assert_(Number(view.finalApprovedPayRate) === 44, 'final rate');
+    assert_(
+      Number(view.finalApprovedAnnualSalary) === 91520,
+      'final annual'
+    );
+    assert_(view.finalApprovedPercentDisplay != null, 'percent display');
+    assert_(
+      String(view.compensationEffectiveDate || '').indexOf('2026-10-01') === 0,
+      'effective date'
+    );
+    assert_(view.canEditOwnerDecision === true, 'can edit after approve');
+  });
+
   check('Finalization disposition: not required → skip', function () {
     assert_(
       compensationFinalizationDisposition_(

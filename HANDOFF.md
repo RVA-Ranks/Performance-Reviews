@@ -8,16 +8,17 @@ highest-priority source of truth.
 ## Active work — Live UX / performance orchestration
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
-Backup: `backup/pre-live-ux-perf-package` (also `backup/pre-live-ux-orchestration`)  
-Tip SHA: `75dfec70e5addfbcc323f31b59476746efb9e342` (docs `85498ee`)
+Backup: `backup/pre-live-ux-correction-88` (also `backup/pre-live-ux-perf-package`)  
+Tip SHA: _(pending correction commit)_
 
-UX-0 accepted. UX-1–UX-6 shipped as one bounded performance package:
+UX-0 accepted. UX-1–UX-6 shipped, then Coach 88% correction:
 
-- Lightweight live poll (`findLiveCycleRow_`) + stale-guard + delayed banner
-- Fast ACK for submit / compensation / owner decision (local patch)
-- HR signature returns immediately; finalization continues via
-  `continueReviewFinalization` (idempotent claims preserved)
-- Loader depth always released; ordinary `loadCycle` uses skeleton only
+- Review submit returns `documentStatus` + `cycleStatus` (never patches
+  document Submitted into cycle status)
+- Review notification acceleration off submit critical path
+- Owner Decision returns compact compensation record DTO for immediate UI
+- HR-only `continueReviewFinalization` leader (no three-browser fan-out)
+- Live Cycle-ID range shape fixed (`numRows = lastRow - 1`, one column)
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
 New generations use the employee-safe body. No silent regeneration of signed

@@ -839,6 +839,8 @@ function saveIndependentReview_(
     return {
       ok: true,
       status: newStatus,
+      documentStatus: newStatus,
+      cycleStatus: String(cycle['Status'] || ''),
       savedAt: formatDateTime_(now),
       savedAtIso: now.toISOString(),
       message: submit
@@ -848,6 +850,7 @@ function saveIndependentReview_(
         : type + ' draft saved.',
       notifyReady:
         submit && String(cycle['Status']) === PR.CYCLE.READY,
+      accelerateNotifications: !!submit,
       pendingAuditEvent: pendingAuditEvent,
     };
   });
@@ -863,54 +866,21 @@ function saveIndependentReview_(
   }
   saved.auditWarning = auditWarning;
 
-  if (saved.notifyReady) {
-    try {
-      deliverWorkflowNotification_(
-        cycleId,
-        getWorkflowNotificationComponent_('ready'),
-        function (cycle) {
-          sendReadyForMeetingEmailBody_(cycle);
-        },
-        {}
-      );
-      dispatchPendingWorkflowNotifications_(cycleId);
-    } catch (notifyError) {
-      Logger.log(
-        'Post-submit notification acceleration failed: ' +
-          String(
-            (notifyError && notifyError.message) || notifyError
-          )
-      );
-      auditWarning =
-        (auditWarning ? auditWarning + ' ' : '') +
-        'The review was saved, but notification delivery needs attention and will retry through the durable outbox.';
-      saved.auditWarning = auditWarning;
-    }
-  }
-
-  if (submit) {
-    try {
-      maybeRaiseCompensationOwnerAlert_(findCycle_(cycleId).object);
-    } catch (compAlertError) {
-      Logger.log(
-        'Compensation owner alert (submit) failed: ' +
-          String(compAlertError.message || compAlertError)
-      );
-    }
-  }
-
+  // Ready emails / compensation alerts are accelerated off the submit
+  // critical path via accelerateReviewSubmissionNotifications.
+  const cycleAfter = findCycle_(cycleId).object;
   return {
     ok: saved.ok,
     status: saved.status,
+    documentStatus: saved.documentStatus || saved.status,
+    cycleStatus: saved.cycleStatus || String(cycleAfter['Status'] || ''),
     savedAt: saved.savedAt,
     savedAtIso: saved.savedAtIso,
     message: saved.message,
     auditWarning: saved.auditWarning || '',
-    notificationWarning: /notification delivery needs attention/i.test(
-      String(saved.auditWarning || '')
-    )
-      ? saved.auditWarning
-      : '',
+    notificationWarning: '',
+    accelerateNotifications: !!saved.accelerateNotifications,
+    notifyReady: !!saved.notifyReady,
     compensationDecisionRequired:
       type === PR.TYPE.MANAGER &&
       !!submit &&
@@ -918,15 +888,80 @@ function saveIndependentReview_(
         getSettings_().COMPENSATION_DECISION_REQUIRED,
         true
       ) &&
-      !isV31CompensationComplete_(
-        findCycle_(cycleId).object
-      ),
+      !isV31CompensationComplete_(cycleAfter),
     compensationDecision:
       type === PR.TYPE.MANAGER && submit
         ? normalizeCompensationDecision_(
-            findCycle_(cycleId).object['Compensation Decision']
+            cycleAfter['Compensation Decision']
           )
         : '',
+  };
+}
+
+/**
+ * Durable ready-meeting / compensation-owner notification acceleration
+ * after an authoritative review submit. Failure must never make a
+ * submitted review look unsaved.
+ */
+function accelerateReviewSubmissionNotifications(cycleId) {
+  const email = getCurrentUserEmail_();
+  assertDomain_(email, getSettings_().ALLOWED_DOMAIN);
+
+  const id = String(cycleId || '').trim();
+  if (!id) {
+    throw new Error('Cycle ID is required.');
+  }
+
+  const cycle = findCycle_(id).object;
+  const normalized = normalizeEmail_(email);
+  const authorized =
+    isHrUser_(email) ||
+    normalizeEmail_(cycle['Manager Email']) === normalized ||
+    normalizeEmail_(cycle['Employee Email']) === normalized;
+  if (!authorized) {
+    throw new Error(
+      'Only the assigned manager, employee, or HR may accelerate review submission notifications.'
+    );
+  }
+
+  let ok = true;
+  let error = '';
+  if (String(cycle['Status'] || '') === PR.CYCLE.READY) {
+    try {
+      deliverWorkflowNotification_(
+        id,
+        getWorkflowNotificationComponent_('ready'),
+        function (readyCycle) {
+          sendReadyForMeetingEmailBody_(readyCycle);
+        },
+        {}
+      );
+      dispatchPendingWorkflowNotifications_(id);
+    } catch (notifyError) {
+      ok = false;
+      error = String(notifyError.message || notifyError);
+      Logger.log(
+        'Post-submit notification acceleration failed: ' + error
+      );
+    }
+  }
+
+  try {
+    maybeRaiseCompensationOwnerAlert_(findCycle_(id).object);
+  } catch (compAlertError) {
+    Logger.log(
+      'Compensation owner alert (submit acceleration) failed: ' +
+        String(compAlertError.message || compAlertError)
+    );
+  }
+
+  return {
+    ok: ok,
+    cycleId: id,
+    message: ok
+      ? 'Review submission notifications advanced.'
+      : 'The review is saved. Notification delivery is pending in the workflow queue.',
+    error: error,
   };
 }
 
@@ -3079,6 +3114,9 @@ function continueReviewFinalization(cycleId) {
   }
 
   const cycle = findCycle_(id).object;
+  if (!isHrUser_(email)) {
+    throw new Error('Only HR may continue review finalization.');
+  }
   assertLiveReviewAccess_(cycle, email);
 
   const status = String(cycle['Status'] || '');
@@ -7056,6 +7094,54 @@ function findCycle_(cycleId) {
  * sheet cache is cold. Falls back to findCycle_ when the sheet is already
  * cached in this request (same authoritative object shape).
  */
+function liveCycleIdLookupRangeArgs_(cycleCol, lastRow) {
+  // Sheet.getRange(row, column, numRows, numColumns) — not end-row/end-col.
+  return {
+    row: 2,
+    column: Number(cycleCol) || 1,
+    numRows: Math.max(0, Number(lastRow) - 1),
+    numColumns: 1,
+  };
+}
+
+function isAuthoritativeReviewCycleStatus_(status) {
+  const s = String(status || '');
+  return (
+    s === PR.CYCLE.OPEN ||
+    s === PR.CYCLE.READY ||
+    s === PR.CYCLE.MEETING ||
+    s === PR.CYCLE.SIGNATURES ||
+    s === PR.CYCLE.FINALIZING ||
+    s === PR.CYCLE.COMPLETE ||
+    s === PR.CYCLE.CANCELLED
+  );
+}
+
+function assertReviewSubmitResultContract_(result) {
+  if (!result) {
+    throw new Error('Review submit result is required.');
+  }
+  const documentStatus = String(result.documentStatus || '');
+  const cycleStatus = String(result.cycleStatus || '');
+  if (!documentStatus || !cycleStatus) {
+    throw new Error(
+      'Review submit result must include documentStatus and cycleStatus.'
+    );
+  }
+  if (cycleStatus === PR.DOC.SUBMITTED) {
+    throw new Error(
+      'cycleStatus must never be document status Submitted.'
+    );
+  }
+  if (!isAuthoritativeReviewCycleStatus_(cycleStatus)) {
+    throw new Error(
+      'cycleStatus is not an authoritative Review Cycle status: ' +
+        cycleStatus
+    );
+  }
+  return true;
+}
+
 function findLiveCycleRow_(cycleId) {
   const id = String(cycleId || '').trim();
   if (!id) {
@@ -7092,8 +7178,18 @@ function findLiveCycleRow_(cycleId) {
     throw new Error('Cycle ID column is missing.');
   }
 
+  const rangeArgs = liveCycleIdLookupRangeArgs_(cycleCol, lastRow);
+  if (rangeArgs.numRows < 1) {
+    throw new Error('Record not found.');
+  }
+
   const searchStarted = Date.now();
-  const idRange = sheet.getRange(2, cycleCol, lastRow, cycleCol);
+  const idRange = sheet.getRange(
+    rangeArgs.row,
+    rangeArgs.column,
+    rangeArgs.numRows,
+    rangeArgs.numColumns
+  );
   const match = idRange
     .createTextFinder(id)
     .matchEntireCell(true)

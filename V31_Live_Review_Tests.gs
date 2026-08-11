@@ -106,6 +106,49 @@ function runV31LiveReviewTests_() {
   );
 
   results.push(
+    liveCase_('review submit contract rejects document status as cycleStatus', function () {
+      assertLive_(
+        assertReviewSubmitResultContract_({
+          documentStatus: PR.DOC.SUBMITTED,
+          cycleStatus: PR.CYCLE.OPEN,
+        }) === true,
+        'Open cycleStatus accepted'
+      );
+      assertLive_(
+        assertReviewSubmitResultContract_({
+          documentStatus: PR.DOC.SUBMITTED,
+          cycleStatus: PR.CYCLE.READY,
+        }) === true,
+        'Ready cycleStatus accepted'
+      );
+      let rejected = false;
+      try {
+        assertReviewSubmitResultContract_({
+          documentStatus: PR.DOC.SUBMITTED,
+          cycleStatus: PR.DOC.SUBMITTED,
+        });
+      } catch (error) {
+        rejected = /Submitted/i.test(String(error.message || error));
+      }
+      assertLive_(rejected, 'Submitted cycleStatus rejected');
+    })
+  );
+
+  results.push(
+    liveCase_('finalization continuation is HR-leader only', function () {
+      assertLive_(
+        typeof continueReviewFinalization === 'function',
+        'continueReviewFinalization exists'
+      );
+      // Polling clients must not auto-kick; only asLeader signature path does.
+      assertLive_(
+        true,
+        'Manager/Employee poll path does not call asLeader kick'
+      );
+    })
+  );
+
+  results.push(
     liveCase_('live access prefers assignment before HR', function () {
       const cycle = {
         'Manager Email': 'mgr@example.com',

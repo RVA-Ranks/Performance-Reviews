@@ -4899,6 +4899,26 @@ async function submitReview(type) {
     localStorage.removeItem(draftStorageKey(type));
     showToast('success', 'Evaluation submitted', result.message);
     applyReviewSubmitResult_(type, result);
+    if (result.accelerateNotifications) {
+      server('accelerateReviewSubmissionNotifications', currentCycle.cycleId)
+        .then(function(notifyResult) {
+          if (notifyResult && notifyResult.ok === false) {
+            showToast(
+              'warning',
+              'Notification pending',
+              notifyResult.message ||
+                'Your evaluation is saved. Notification delivery is pending in the workflow queue.'
+            );
+          }
+        })
+        .catch(function() {
+          showToast(
+            'warning',
+            'Notification pending',
+            'Your evaluation is saved. Notification delivery is pending in the workflow queue.'
+          );
+        });
+    }
     if (
       type === 'manager' &&
       result.compensationDecisionRequired
@@ -4913,25 +4933,30 @@ async function submitReview(type) {
 
 function applyReviewSubmitResult_(type, result) {
   if (!currentCycle || !result) return;
+  const documentStatus =
+    result.documentStatus || result.status || 'Submitted';
   if (type === 'manager') {
-    currentCycle.managerReviewStatus = 'Submitted';
+    currentCycle.managerReviewStatus = documentStatus;
     if (currentCycle.managerProgress) {
       currentCycle.managerProgress.percent = 100;
     }
   } else {
-    currentCycle.selfEvaluationStatus = 'Submitted';
+    currentCycle.selfEvaluationStatus = documentStatus;
     if (currentCycle.selfProgress) {
       currentCycle.selfProgress.percent = 100;
     }
   }
-  if (result.status) currentCycle.status = result.status;
+  // Never treat document "Submitted" as the Review Cycle Status.
+  if (result.cycleStatus) {
+    currentCycle.status = result.cycleStatus;
+  }
   if (result.savedAtIso) currentCycle.updatedAtIso = result.savedAtIso;
   if (state && Array.isArray(state.cycles)) {
     state.cycles.forEach(function(row) {
       if (String(row.cycleId) !== String(currentCycle.cycleId)) return;
-      row.status = currentCycle.status;
-      if (type === 'manager') row.managerReviewStatus = 'Submitted';
-      else row.selfEvaluationStatus = 'Submitted';
+      if (result.cycleStatus) row.status = result.cycleStatus;
+      if (type === 'manager') row.managerReviewStatus = documentStatus;
+      else row.selfEvaluationStatus = documentStatus;
     });
   }
   setSaveIndicator('saved', 'Submitted');
@@ -5761,7 +5786,6 @@ async function pollLiveReviewState_() {
       renderCycleWorkspace();
     }
     applyLiveReviewState_(live);
-    maybeKickFinalizationContinuation_(live);
   } catch (error) {
     liveReviewConsecutiveFailures += 1;
     if (liveReviewConsecutiveFailures >= 3 && !liveReviewSyncDelayed) {
@@ -5792,7 +5816,10 @@ function liveStateIsStale_(incoming) {
   return nextMs < prevMs;
 }
 
-function maybeKickFinalizationContinuation_(live) {
+function maybeKickFinalizationContinuation_(live, options) {
+  const opts = options || {};
+  // Only the HR signature leader kicks finalization. Other browsers poll.
+  if (!opts.asLeader) return;
   if (!live || String(live.status) !== 'Finalizing') return;
   const cycleId = String(live.cycleId || '');
   if (!cycleId) return;
@@ -6010,7 +6037,6 @@ function applyLiveReviewState_(live) {
       currentCycle.employeeName + ' — ' + currentCycle.reviewType,
       humanStatus(currentCycle.status)
     );
-    maybeKickFinalizationContinuation_(live);
     if (String(live.status) === 'Complete') {
       stopLiveReviewPolling_();
     }
@@ -6495,10 +6521,13 @@ async function submitSignature() {
         });
     }
     if (result.continueFinalization || result.finalizationDeferred) {
-      maybeKickFinalizationContinuation_({
-        cycleId: currentCycle.cycleId,
-        status: result.status || 'Finalizing'
-      });
+      maybeKickFinalizationContinuation_(
+        {
+          cycleId: currentCycle.cycleId,
+          status: result.status || 'Finalizing'
+        },
+        { asLeader: true }
+      );
       startLiveReviewPolling_();
     }
     forceHideAppLoading_();
@@ -6932,15 +6961,31 @@ function applyCompensationMutationResult_(cycleId, result, defaults) {
   if (typeof result.compensationComplete === 'boolean') {
     currentCycle.v31.compensationComplete = result.compensationComplete;
   }
-  if (result.decision || (defaults && defaults.decision)) {
+  if (
+    result.compensationDecision ||
+    result.decision ||
+    (defaults && defaults.decision)
+  ) {
     currentCycle.v31.compensationDecision =
-      result.decision || defaults.decision;
+      result.compensationDecision ||
+      result.decision ||
+      defaults.decision;
   }
-  if (result.status || (defaults && defaults.status)) {
-    currentCycle.v31.compensationStatus = result.status || defaults.status;
+  if (
+    result.compensationStatus ||
+    result.status ||
+    (defaults && defaults.status)
+  ) {
+    currentCycle.v31.compensationStatus =
+      result.compensationStatus || result.status || defaults.status;
   }
-  if (result.ownerDecision && currentCycle.v31.compensationRecord) {
+  if (result.record) {
+    currentCycle.v31.compensationRecord = result.record;
+  } else if (result.ownerDecision && currentCycle.v31.compensationRecord) {
     currentCycle.v31.compensationRecord.ownerDecision = result.ownerDecision;
+    if (result.status) {
+      currentCycle.v31.compensationRecord.status = result.status;
+    }
   }
   renderCycleWorkspace();
   setTopbar(
