@@ -8,12 +8,15 @@ highest-priority source of truth.
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
-Backup: `backup/pre-lifecycle-pass5-94` (also `backup/pre-lifecycle-pass4-92`)  
-Tip SHA: `ba759fd20dbd4757b14bcf5d23a98282fb2abad6`
+Backup: `backup/pre-lifecycle-pass6-95` (also `backup/pre-lifecycle-pass5-94`)  
+Tip SHA: _(pending Pass 6 commit)_
 
-Pass 5 closes Coach 94% majors: truthful HR signature-notification acceleration
-outcomes, remaining HR recommendation recovery integrity-alert flushes, and
-mutation-boundary compensation cache regressions.
+Pass 6 closes Coach 95% major: `isV31CompensationComplete_` requires exactly
+one active CompensationRecord for Adjustment and evaluates that record's
+Status/Owner Decision (not stale ReviewCycles mirrors). Zero-active reset-crash
+mirrors and one-active mirror mismatches fail closed at Start Meeting / Prepare
+Release. Integrity-alert flush covers finalization and rate-sweep top-level
+boundaries.
 
 Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
 design and frozen finalization/PDF/signature Attempt-ID architecture.

@@ -690,12 +690,11 @@ function ensureCompensationSealedForFinalization_(cycleId) {
 
 function isV31CompensationComplete_(cycle) {
   const cycleId = String((cycle && cycle['Cycle ID']) || '');
-  // Pure gate: multi-active corruption must never be treated as complete.
-  // Do not raise System Alerts here (may run under withLock_).
-  if (
-    cycleId &&
-    countActiveCompensationRecordsForCycle_(cycleId) > 1
-  ) {
+  // Pure gate: use request-scoped integrity index. No System Alert writes.
+  const activeCount = cycleId
+    ? countActiveCompensationRecordsForCycle_(cycleId)
+    : 0;
+  if (activeCount > 1) {
     return false;
   }
 
@@ -703,26 +702,50 @@ function isV31CompensationComplete_(cycle) {
     cycle['Compensation Decision']
   );
 
-  // An actual Adjustment always remains mandatory even if the global
-  // COMPENSATION_DECISION_REQUIRED setting is later disabled.
+  // Adjustment Recommended is authoritative only when exactly one active
+  // CompensationRecord exists. Stale ReviewCycles mirrors must not unlock
+  // meeting/release after a reset-crash left zero active rows.
   if (decision === V31.COMPENSATION.ADJUSTMENT) {
-    const status = String(
-      cycle['Compensation Status'] || V31_COMP.STATUS.PENDING
-    );
+    if (activeCount !== 1) {
+      return false;
+    }
+    const active = findActiveCompensationRecordByCycleOptional_(cycleId);
+    if (!active) {
+      return false;
+    }
+    const record = active.object;
+    const ownerDecision = String(record['Owner Decision'] || '');
+    const status = String(record['Status'] || V31_COMP.STATUS.PENDING);
+    if (
+      ownerDecision === V31_COMP.OWNER_DECISION.DENIED ||
+      status === V31_COMP.STATUS.DENIED
+    ) {
+      return true;
+    }
     return (
       status === V31_COMP.STATUS.AWAITING_SIGNATURES ||
-      status === V31_COMP.STATUS.COMPLETE ||
-      status === V31_COMP.STATUS.DENIED
+      status === V31_COMP.STATUS.COMPLETE
     );
   }
 
-  const active = findActiveCompensationRecordByCycleOptional_(cycleId);
-  if (
-    active &&
-    String(active.object['Status'] || '') ===
-      V31_COMP.STATUS.AWAITING_OWNER
-  ) {
-    return false;
+  if (activeCount === 1) {
+    const active = findActiveCompensationRecordByCycleOptional_(cycleId);
+    if (active) {
+      const status = String(active.object['Status'] || '');
+      const ownerDecision = String(active.object['Owner Decision'] || '');
+      if (status === V31_COMP.STATUS.AWAITING_OWNER) {
+        return false;
+      }
+      // Active approved/modified adjustment while cycle is not Adjustment.
+      if (
+        (status === V31_COMP.STATUS.AWAITING_SIGNATURES ||
+          status === V31_COMP.STATUS.COMPLETE) &&
+        ownerDecision !== V31_COMP.OWNER_DECISION.DENIED &&
+        status !== V31_COMP.STATUS.DENIED
+      ) {
+        return false;
+      }
+    }
   }
 
   const settings = getSettings_();
@@ -2694,6 +2717,7 @@ function classifyCompensationRateUpdate_(
 }
 
 function processDueCompensationRateUpdates_() {
+  try {
   ensureCompensationDataModel_();
   const records = getAllObjects_(V31_COMP.RECORDS_SHEET);
   let updated = 0;
@@ -2751,6 +2775,9 @@ function processDueCompensationRateUpdates_() {
   });
 
   return { updated: updated, skipped: skipped, failed: failed };
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /**

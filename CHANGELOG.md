@@ -1,5 +1,15 @@
 # V3.1 Changelog
 
+## Lifecycle transactional closure (Pass 6)
+
+- `isV31CompensationComplete_` treats CompensationRecords as authoritative for
+  Adjustment: exactly one active record is required; Status/Owner Decision on
+  that record unlock the gate (stale ReviewCycles mirrors alone cannot).
+- Zero-active stale Adjustment mirrors and one-active mirror mismatches fail
+  closed; `startReviewMeeting` / `prepareReleaseReviewSignatures` reject them.
+- Deferred compensation-integrity alerts flush at top-level
+  `finalizeReviewCycle_` and `processDueCompensationRateUpdates_` boundaries.
+
 ## Lifecycle transactional closure (Pass 5)
 
 - HR signature-notification acceleration now propagates durable outbox

@@ -2602,6 +2602,7 @@ function finalizationCompletionGate_(cycle) {
 }
 
 function finalizeReviewCycle_(cycleId) {
+  try {
   const claimed = withLock_(function () {
     const location = findCycle_(cycleId);
     const cycle = applyV31DefaultsToCycle_(
@@ -2710,6 +2711,9 @@ function finalizeReviewCycle_(cycleId) {
       SpreadsheetApp.flush();
     });
     throw error;
+  }
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
   }
 }
 

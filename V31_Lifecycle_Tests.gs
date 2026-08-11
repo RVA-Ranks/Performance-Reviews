@@ -618,6 +618,63 @@ function runV31LifecycleTests_() {
 
   results.push(
     lifeCase_(
+      'prepareRelease and startMeeting reject zero-active stale Adjustment mirror',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-ZERO');
+        store['Compensation Decision'] = V31.COMPENSATION.ADJUSTMENT;
+        store['Compensation Status'] = V31_COMP.STATUS.AWAITING_SIGNATURES;
+        store['Compensation Record ID'] = 'REC-FAILED';
+        const originalCount = countActiveCompensationRecordsForCycle_;
+        const originalFind = findActiveCompensationRecordByCycleOptional_;
+        countActiveCompensationRecordsForCycle_ = function () {
+          return 0;
+        };
+        findActiveCompensationRecordByCycleOptional_ = function () {
+          return null;
+        };
+        try {
+          assertLife_(
+            isV31CompensationComplete_(store) === false,
+            'gate false on zero active'
+          );
+          withLifecycleEndpointDoubles_(
+            store,
+            'mgr@aitheras.com',
+            {},
+            function () {
+              store.Status = PR.CYCLE.MEETING;
+              let prepFailed = false;
+              try {
+                prepareReleaseReviewSignatures(store['Cycle ID']);
+              } catch (error) {
+                prepFailed = /compensation/i.test(
+                  String(error.message || error)
+                );
+              }
+              assertLife_(prepFailed, 'prepareRelease rejects');
+
+              store.Status = PR.CYCLE.READY;
+              let startFailed = false;
+              try {
+                startReviewMeeting(store['Cycle ID']);
+              } catch (error) {
+                startFailed = /compensation/i.test(
+                  String(error.message || error)
+                );
+              }
+              assertLife_(startFailed, 'startReviewMeeting rejects');
+            }
+          );
+        } finally {
+          countActiveCompensationRecordsForCycle_ = originalCount;
+          findActiveCompensationRecordByCycleOptional_ = originalFind;
+        }
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_(
       'unauthorized acknowledgeMeetingRelease is rejected',
       function () {
         const store = lifeEndpointMeetingCycle_('LIFE-UNAUTH');

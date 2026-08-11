@@ -64,13 +64,33 @@ function runV31CompensationTests_() {
   });
 
   check('Owner decision unlocks the gate', function () {
-    assert_(
-      isV31CompensationComplete_({
-        'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
-        'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
-      }) === true,
-      'Awaiting Signatures must satisfy the gate'
-    );
+    const originalCount = countActiveCompensationRecordsForCycle_;
+    const originalFind = findActiveCompensationRecordByCycleOptional_;
+    countActiveCompensationRecordsForCycle_ = function () {
+      return 1;
+    };
+    findActiveCompensationRecordByCycleOptional_ = function () {
+      return {
+        rowNumber: 2,
+        object: {
+          Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+          'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+        },
+      };
+    };
+    try {
+      assert_(
+        isV31CompensationComplete_({
+          'Cycle ID': 'C-GATE-OK',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+        }) === true,
+        'Awaiting Signatures must satisfy the gate'
+      );
+    } finally {
+      countActiveCompensationRecordsForCycle_ = originalCount;
+      findActiveCompensationRecordByCycleOptional_ = originalFind;
+    }
   });
 
   check('Recommendation validation requires effective date', function () {
@@ -280,13 +300,33 @@ function runV31CompensationTests_() {
   });
 
   check('Denied status completes the compensation gate', function () {
-    assert_(
-      isV31CompensationComplete_({
-        'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
-        'Compensation Status': V31_COMP.STATUS.DENIED,
-      }) === true,
-      'Denied must satisfy the meeting/signature gate'
-    );
+    const originalCount = countActiveCompensationRecordsForCycle_;
+    const originalFind = findActiveCompensationRecordByCycleOptional_;
+    countActiveCompensationRecordsForCycle_ = function () {
+      return 1;
+    };
+    findActiveCompensationRecordByCycleOptional_ = function () {
+      return {
+        rowNumber: 2,
+        object: {
+          Status: V31_COMP.STATUS.DENIED,
+          'Owner Decision': V31_COMP.OWNER_DECISION.DENIED,
+        },
+      };
+    };
+    try {
+      assert_(
+        isV31CompensationComplete_({
+          'Cycle ID': 'C-GATE-DENIED',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.DENIED,
+        }) === true,
+        'Denied must satisfy the meeting/signature gate'
+      );
+    } finally {
+      countActiveCompensationRecordsForCycle_ = originalCount;
+      findActiveCompensationRecordByCycleOptional_ = originalFind;
+    }
   });
 
   check('Approved adjustment helper rejects Denied', function () {
@@ -660,19 +700,44 @@ function runV31CompensationTests_() {
 
   check('Adjustment remains gated when setting later disabled', function () {
     const originalGetSettings = getSettings_;
+    const originalCount = countActiveCompensationRecordsForCycle_;
+    const originalFind = findActiveCompensationRecordByCycleOptional_;
     getSettings_ = function () {
       return { COMPENSATION_DECISION_REQUIRED: 'FALSE' };
     };
+    countActiveCompensationRecordsForCycle_ = function () {
+      return 1;
+    };
     try {
+      findActiveCompensationRecordByCycleOptional_ = function () {
+        return {
+          rowNumber: 2,
+          object: {
+            Status: V31_COMP.STATUS.AWAITING_OWNER,
+            'Owner Decision': '',
+          },
+        };
+      };
       assert_(
         isV31CompensationComplete_({
+          'Cycle ID': 'C-GATE-SETTING',
           'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
           'Compensation Status': V31_COMP.STATUS.AWAITING_OWNER,
         }) === false,
         'Awaiting owner Adjustment must remain incomplete'
       );
+      findActiveCompensationRecordByCycleOptional_ = function () {
+        return {
+          rowNumber: 2,
+          object: {
+            Status: V31_COMP.STATUS.AWAITING_SIGNATURES,
+            'Owner Decision': V31_COMP.OWNER_DECISION.APPROVED,
+          },
+        };
+      };
       assert_(
         isV31CompensationComplete_({
+          'Cycle ID': 'C-GATE-SETTING',
           'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
           'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
         }) === true,
@@ -680,6 +745,8 @@ function runV31CompensationTests_() {
       );
     } finally {
       getSettings_ = originalGetSettings;
+      countActiveCompensationRecordsForCycle_ = originalCount;
+      findActiveCompensationRecordByCycleOptional_ = originalFind;
     }
   });
 
@@ -852,6 +919,60 @@ function runV31CompensationTests_() {
       );
     } finally {
       countActiveCompensationRecordsForCycle_ = originalCount;
+    }
+  });
+
+  check('isV31CompensationComplete_ fails closed on zero-active stale Adjustment mirror', function () {
+    const originalCount = countActiveCompensationRecordsForCycle_;
+    const originalFind = findActiveCompensationRecordByCycleOptional_;
+    countActiveCompensationRecordsForCycle_ = function () {
+      return 0;
+    };
+    findActiveCompensationRecordByCycleOptional_ = function () {
+      return null;
+    };
+    try {
+      assert_(
+        isV31CompensationComplete_({
+          'Cycle ID': 'C-ZERO-GATE',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+        }) === false,
+        'stale Ready+Adjustment mirror must not unlock without an active record'
+      );
+    } finally {
+      countActiveCompensationRecordsForCycle_ = originalCount;
+      findActiveCompensationRecordByCycleOptional_ = originalFind;
+    }
+  });
+
+  check('isV31CompensationComplete_ fails closed on one-active mirror mismatch', function () {
+    const originalCount = countActiveCompensationRecordsForCycle_;
+    const originalFind = findActiveCompensationRecordByCycleOptional_;
+    countActiveCompensationRecordsForCycle_ = function () {
+      return 1;
+    };
+    findActiveCompensationRecordByCycleOptional_ = function () {
+      return {
+        rowNumber: 2,
+        object: {
+          Status: V31_COMP.STATUS.AWAITING_OWNER,
+          'Owner Decision': '',
+        },
+      };
+    };
+    try {
+      assert_(
+        isV31CompensationComplete_({
+          'Cycle ID': 'C-MISMATCH-GATE',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+        }) === false,
+        'record Status must win over stale cycle mirror'
+      );
+    } finally {
+      countActiveCompensationRecordsForCycle_ = originalCount;
+      findActiveCompensationRecordByCycleOptional_ = originalFind;
     }
   });
 
@@ -1382,6 +1503,76 @@ function runV31CompensationTests_() {
       listActiveCompensationRecordLocationsForCycle_ =
         originals.listActiveCompensationRecordLocationsForCycle_;
       pendingCompensationIntegrityAlerts_ = [];
+    }
+  });
+
+  check('Finalization and rate-sweep flush deferred integrity alerts', function () {
+    let flushed = 0;
+    const originals = {
+      flushPendingCompensationIntegrityAlerts_:
+        flushPendingCompensationIntegrityAlerts_,
+      withLock_: withLock_,
+      findCycle_: findCycle_,
+      getCombinedSignatureState_: getCombinedSignatureState_,
+      applyV31DefaultsToCycle_: applyV31DefaultsToCycle_,
+      ensureCompensationDataModel_: ensureCompensationDataModel_,
+      getAllObjects_: getAllObjects_,
+    };
+    flushPendingCompensationIntegrityAlerts_ = function () {
+      flushed += 1;
+    };
+    withLock_ = function (inner) {
+      return inner();
+    };
+    findCycle_ = function () {
+      return {
+        rowNumber: 2,
+        object: {
+          'Cycle ID': 'C-FLUSH-FIN',
+          Status: PR.CYCLE.OPEN,
+          'Cycle Source': 'Manual',
+        },
+      };
+    };
+    getCombinedSignatureState_ = function () {
+      return {
+        managerSigned: false,
+        employeeSigned: false,
+        hrSigned: false,
+      };
+    };
+    applyV31DefaultsToCycle_ = function (cycle) {
+      return cycle;
+    };
+    ensureCompensationDataModel_ = function () {};
+    getAllObjects_ = function () {
+      return [];
+    };
+    try {
+      let finalizeRejected = false;
+      try {
+        finalizeReviewCycle_('C-FLUSH-FIN');
+      } catch (error) {
+        finalizeRejected = /Finalization requires/i.test(
+          String(error.message || error)
+        );
+      }
+      assert_(finalizeRejected, 'finalize rejects incomplete signatures');
+      assert_(flushed >= 1, 'finalizeReviewCycle_ flushes');
+
+      flushed = 0;
+      const sweep = processDueCompensationRateUpdates_();
+      assert_(sweep && typeof sweep.updated === 'number', 'rate sweep returns');
+      assert_(flushed >= 1, 'processDueCompensationRateUpdates_ flushes');
+    } finally {
+      flushPendingCompensationIntegrityAlerts_ =
+        originals.flushPendingCompensationIntegrityAlerts_;
+      withLock_ = originals.withLock_;
+      findCycle_ = originals.findCycle_;
+      getCombinedSignatureState_ = originals.getCombinedSignatureState_;
+      applyV31DefaultsToCycle_ = originals.applyV31DefaultsToCycle_;
+      ensureCompensationDataModel_ = originals.ensureCompensationDataModel_;
+      getAllObjects_ = originals.getAllObjects_;
     }
   });
 
