@@ -8,23 +8,27 @@ highest-priority source of truth.
 ## Active work — Live UX / performance orchestration
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
-Backup: `backup/pre-live-ux-orchestration`  
-Tip SHA: `b1e2c3c2608d08ffbef70035c3c81f1877b3be78`
+Backup: `backup/pre-live-ux-perf-package` (also `backup/pre-live-ux-orchestration`)  
+Tip SHA: _(pending performance package commits)_
 
-Starts from Code Coach live three-screen grade (UX 68%). Lifecycle transactional
-closure remains frozen at Pass 6. This branch makes the UI acknowledge durable
-commits quickly and keeps employee-facing artifacts privacy-safe.
+UX-0 accepted. UX-1–UX-6 shipped as one bounded performance package:
 
-**UX-0 (in flight):** employee/shared CAF shows final approved terms only —
-no manager recommendation, business justification, or owner decision notes.
+- Lightweight live poll (`findLiveCycleRow_`) + stale-guard + delayed banner
+- Fast ACK for submit / compensation / owner decision (local patch)
+- HR signature returns immediately; finalization continues via
+  `continueReviewFinalization` (idempotent claims preserved)
+- Loader depth always released; ordinary `loadCycle` uses skeleton only
+
+**Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
+New generations use the employee-safe body. No silent regeneration of signed
+historical agreements.
 
 Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
-design and frozen finalization/PDF/signature Attempt-ID architecture. Do not
-redesign CAF provenance, Delivery Unknown, or finalization durability — only
-CAF body content allow-listing and later UX orchestration boundaries.
+design and frozen finalization/PDF/signature Attempt-ID architecture.
 
-Run `runV31CompensationTests_()` after UX-0. Keep Automation Preview.
-Stop for Coach after each UX phase.
+Run Lifecycle, Compensation, Live Review, Performance, Security suites in
+Apps Script. Rerun the three-screen OBS AFTER test only after Coach review.
+Keep Automation Preview.
 
 ## Active work — Lifecycle transactional closure
 

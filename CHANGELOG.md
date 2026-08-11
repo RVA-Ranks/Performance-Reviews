@@ -1,5 +1,21 @@
 # V3.1 Changelog
 
+## Live UX — performance orchestration package
+
+- Live poll uses `findLiveCycleRow_` (one-row Cycle ID lookup) instead of
+  hydrating all ReviewCycles for each `getLiveReviewState` call.
+- Live clients reject stale `updatedAtIso`, keep polling through Finalizing,
+  surface “Live status delayed” after repeated poll failures, and kick
+  `continueReviewFinalization` once per cycle.
+- Review submit / compensation recommendation / owner decision patch local
+  cycle state instead of `refreshApplication` / blocking `loadCycle`.
+- Compensation recommendation and owner-outcome emails move off the user
+  critical path via accelerate endpoints.
+- HR `signReviewCycle` returns after authoritative signature + Finalizing;
+  PDF/CAF/distribution/audit continue via `continueReviewFinalization`.
+- `loadCycle` uses skeleton only (no full-screen Opening Review overlay).
+- `withAppLoading_` always releases depth in finally (fixes stranded overlay).
+
 ## Live UX — employee CAF privacy (UX-0)
 
 - Shared Compensation Adjustment Agreement is built from an allow-listed
@@ -9,6 +25,7 @@
   recorded-by/audit metadata are no longer rendered into the employee-facing
   CAF body. Internal values remain in CompensationRecords / History / HR UI.
 - Drive provenance description is unchanged for HR recovery validation.
+- Already-sealed historical CAF PDFs remain immutable (no silent regeneration).
 
 ## Lifecycle transactional closure (Pass 6)
 
