@@ -8,25 +8,27 @@ highest-priority source of truth.
 ## Active work — Live UX / performance orchestration
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
-Backup: `backup/pre-live-ux-correction-72` (also `backup/pre-live-ux-correction-91`)  
-Tip SHA: `feab13ced2acec55c4e46c55c7b2b4ebf7a5a148`
+Backup: `backup/pre-live-ux-client-93` (also `backup/pre-live-ux-correction-72`, `-91`)  
+Tip SHA: _(update after commit)_
 
-Pre-OBS correction after Coach 72% (parser + critical path):
+Pre-OBS client reconciliation after Coach 93% (Index.html only):
 
-- `saveIndependentReview_` returns `resultPayload` (Code.gs parses again)
-- Interactive compensation mutations use `assertCompensationDataModelReady_`
-  (no format/protect/migrate/reconcile under the mutation lock)
-- Fast-ACK reconciles `canStartMeeting` and Ready → Start Review Meeting
-- Live poll clears stale signature actions/nav badges when tasks resolve
-- Finalization continuation comment is HR-only
+- Submit fast-ACK locks `canEditManagerReview` / `canEditSelfEvaluation` and
+  seals local draft into `managerReview` / `selfEvaluation`
+- `reconcileCurrentCyclePrimaryAction_` keeps Overview `primaryAction`
+  aligned with Ready / signature / Finalizing / Complete
+- Live poll calls `refreshLocalSummaryViews_()` only on meaningful status /
+  action / signature-task transitions (not every 2.5s poll)
+- Live Review suite asserts Index.html client contracts via HtmlService
+
+Do **not** change server transactional architecture, compensation lock path,
+finalization, or frozen ACK/PDF/signature Attempt-ID models before OBS.
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
 
-Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
-design and frozen finalization/PDF/signature Attempt-ID architecture.
-
 Run static parse, then Lifecycle / Compensation / Live Review / Performance /
-Security suites. Three-screen OBS only after Coach approval. Automation Preview.
+Security suites in Apps Script. **Stop for Coach.** Three-screen OBS only after
+approval. Automation Preview.
 
 ## Active work — Lifecycle transactional closure
 

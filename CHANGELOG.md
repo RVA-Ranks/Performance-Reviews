@@ -1,5 +1,16 @@
 # V3.1 Changelog
 
+## Live UX — finish fast-ACK client state reconciliation
+
+- Submitted Manager and Employee evaluations become read-only immediately
+  after authoritative fast-ACK success.
+- Synchronized current-cycle primaryAction with fast lifecycle transitions.
+- Removed stale review/signature actions after successful submissions and
+  live signature completion.
+- Rerendered local dashboard/review/signature summaries only on meaningful
+  live workflow transitions.
+- Added pre-OBS checks for read-only submit state and stale action removal.
+
 ## Live UX — pre-OBS parser and critical-path fixes
 
 - Fixed review-submit result variable redeclaration that prevented Code.gs parsing.

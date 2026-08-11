@@ -4940,11 +4940,19 @@ function applyReviewSubmitResult_(type, result) {
     if (currentCycle.managerProgress) {
       currentCycle.managerProgress.percent = 100;
     }
+    if (editorState.manager && editorState.manager.draft) {
+      currentCycle.managerReview = deepClone(editorState.manager.draft);
+    }
+    currentCycle.canEditManagerReview = false;
   } else {
     currentCycle.selfEvaluationStatus = documentStatus;
     if (currentCycle.selfProgress) {
       currentCycle.selfProgress.percent = 100;
     }
+    if (editorState.self && editorState.self.draft) {
+      currentCycle.selfEvaluation = deepClone(editorState.self.draft);
+    }
+    currentCycle.canEditSelfEvaluation = false;
   }
   // Never treat document "Submitted" as the Review Cycle Status.
   if (result.cycleStatus) {
@@ -5010,6 +5018,15 @@ function reconcileCurrentCycleDerivedState_(cycleStatus) {
   currentCycle.canStartMeeting =
     ready && !!(currentCycle.isManager || currentCycle.isHr);
 
+  const mgrDoc = String(currentCycle.managerReviewStatus || '');
+  const selfDoc = String(currentCycle.selfEvaluationStatus || '');
+  currentCycle.canEditManagerReview =
+    !!currentCycle.isManager &&
+    (mgrDoc === 'Not Started' || mgrDoc === 'Draft');
+  currentCycle.canEditSelfEvaluation =
+    !!currentCycle.isEmployee &&
+    (selfDoc === 'Not Started' || selfDoc === 'Draft');
+
   if (signatures || finalizing || complete) {
     currentCycle.canReleaseSignatures = false;
     currentCycle.canEditManagerMeeting = false;
@@ -5026,6 +5043,133 @@ function reconcileCurrentCycleDerivedState_(cycleStatus) {
       !!(currentCycle.v31 && currentCycle.v31.compensationComplete);
   } else {
     currentCycle.canReleaseSignatures = false;
+  }
+
+  reconcileCurrentCyclePrimaryAction_();
+}
+
+function reconcileCurrentCyclePrimaryAction_() {
+  if (!currentCycle) return;
+  const status = String(currentCycle.status || '');
+  const tasks = currentCycle.signatureTasks || [];
+  const signatureTaskReady =
+    status === 'Awaiting Signatures' &&
+    (currentCycle.actionKey === 'signature' || tasks.length > 0);
+
+  if (status === 'Complete') {
+    currentCycle.primaryAction = {
+      key: 'overview',
+      label: 'View Completed Review',
+      tone: 'outline',
+      required: false
+    };
+    if (currentCycle.actionKey === 'signature') {
+      clearStaleSignatureActionOnCycle_(currentCycle, status);
+    }
+    return;
+  }
+
+  if (status === 'Finalizing') {
+    currentCycle.primaryAction = {
+      key: 'signatures',
+      label: 'View Finalization Progress',
+      tone: 'outline',
+      required: false
+    };
+    if (currentCycle.actionKey === 'signature') {
+      clearStaleSignatureActionOnCycle_(currentCycle, status);
+    }
+    return;
+  }
+
+  if (signatureTaskReady) {
+    currentCycle.primaryAction = {
+      key: 'signature',
+      label: 'Sign Review Packet',
+      tone: 'primary',
+      required: true
+    };
+    currentCycle.actionKey = 'signature';
+    return;
+  }
+
+  if (status === 'Awaiting Signatures') {
+    currentCycle.primaryAction = {
+      key: 'signatures',
+      label: 'View Signature Status',
+      tone: 'outline',
+      required: false
+    };
+    if (currentCycle.actionKey === 'signature') {
+      clearStaleSignatureActionOnCycle_(currentCycle, status);
+    }
+    return;
+  }
+
+  if (currentCycle.canStartMeeting) {
+    currentCycle.primaryAction = {
+      key: 'meeting',
+      label: 'Start Review Meeting',
+      tone: 'success',
+      required: true
+    };
+    currentCycle.actionKey = 'meeting';
+    return;
+  }
+
+  if (status === 'Review Meeting Open') {
+    if (currentCycle.canReleaseSignatures) {
+      currentCycle.primaryAction = {
+        key: 'signatures',
+        label: 'Release for Signatures',
+        tone: 'primary',
+        required: true
+      };
+    } else {
+      currentCycle.primaryAction = {
+        key: 'meeting',
+        label: 'Open Review Meeting',
+        tone: 'outline',
+        required: false
+      };
+    }
+    return;
+  }
+
+  if (currentCycle.canEditManagerReview) {
+    currentCycle.primaryAction = {
+      key: 'manager-review',
+      label: 'Continue Manager Review',
+      tone: 'primary',
+      required: true
+    };
+    currentCycle.actionKey = 'manager-review';
+    return;
+  }
+
+  if (currentCycle.canEditSelfEvaluation) {
+    currentCycle.primaryAction = {
+      key: 'self-evaluation',
+      label: 'Continue Self-Evaluation',
+      tone: 'primary',
+      required: true
+    };
+    currentCycle.actionKey = 'self-evaluation';
+    return;
+  }
+
+  currentCycle.primaryAction = {
+    key: 'overview',
+    label: 'Open Review',
+    tone: 'outline',
+    required: false
+  };
+  if (
+    currentCycle.actionKey === 'manager-review' ||
+    currentCycle.actionKey === 'self-evaluation' ||
+    currentCycle.actionKey === 'signature'
+  ) {
+    currentCycle.actionKey = 'overview';
   }
 }
 
@@ -5973,6 +6117,11 @@ function patchCycleFromLiveState_(live) {
   if (String(live.cycleId) !== String(currentCycle.cycleId)) return;
   if (liveStateIsStale_(live)) return;
 
+  const prevStatus = String(currentCycle.status || '');
+  const prevActionKey = String(currentCycle.actionKey || '');
+  const prevHadSignatureAction = prevActionKey === 'signature';
+  let summaryActionChanged = false;
+
   currentCycle.status = live.status || currentCycle.status;
   if (typeof live.signaturesReleasedAt !== 'undefined') {
     currentCycle.signaturesReleasedAt = live.signaturesReleasedAt;
@@ -6005,8 +6154,10 @@ function patchCycleFromLiveState_(live) {
   if (typeof live.signatureTaskReady !== 'undefined') {
     if (live.signatureTaskReady) {
       currentCycle.actionKey = 'signature';
+      reconcileCurrentCyclePrimaryAction_();
     } else if (currentCycle.actionKey === 'signature') {
       clearStaleSignatureActionOnCycle_(currentCycle, live.status);
+      reconcileCurrentCyclePrimaryAction_();
     }
   }
   if (String(live.status) === 'Complete') {
@@ -6017,6 +6168,7 @@ function patchCycleFromLiveState_(live) {
   if (state && Array.isArray(state.cycles)) {
     state.cycles.forEach(function(row) {
       if (String(row.cycleId) !== String(live.cycleId)) return;
+      const rowPrevAction = String(row.actionKey || '');
       row.status = live.status || row.status;
       if (live.signatureState) row.signatureState = live.signatureState;
       if (typeof live.signaturesReleasedAt !== 'undefined') {
@@ -6032,7 +6184,24 @@ function patchCycleFromLiveState_(live) {
           clearStaleSignatureActionOnCycle_(row, live.status);
         }
       }
+      if (rowPrevAction !== String(row.actionKey || '')) {
+        summaryActionChanged = true;
+      }
     });
+  }
+
+  const meaningfulLiveTransition =
+    prevStatus !== String(currentCycle.status || '') ||
+    prevActionKey !== String(currentCycle.actionKey || '') ||
+    prevHadSignatureAction !==
+      (String(currentCycle.actionKey || '') === 'signature') ||
+    summaryActionChanged ||
+    String(live.status || '') === 'Finalizing' ||
+    String(live.status || '') === 'Complete';
+
+  if (meaningfulLiveTransition) {
+    refreshLocalSummaryViews_();
+  } else {
     try {
       updateSignatureNavCount_();
     } catch (error) {

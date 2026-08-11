@@ -288,6 +288,40 @@ function runV31LiveReviewTests_() {
     })
   );
 
+  results.push(
+    liveCase_('Index.html locks submit editability and refreshes on live transitions', function () {
+      const html = HtmlService.createHtmlOutputFromFile('Index').getContent();
+      assertLive_(
+        html.indexOf('function reconcileCurrentCyclePrimaryAction_') !== -1,
+        'reconcileCurrentCyclePrimaryAction_ must exist'
+      );
+      assertLive_(
+        html.indexOf('canEditManagerReview = false') !== -1,
+        'manager submit must clear canEditManagerReview'
+      );
+      assertLive_(
+        html.indexOf('canEditSelfEvaluation = false') !== -1,
+        'employee submit must clear canEditSelfEvaluation'
+      );
+      assertLive_(
+        html.indexOf('managerReview = deepClone') !== -1,
+        'manager submit must seal local draft into managerReview'
+      );
+      assertLive_(
+        html.indexOf('selfEvaluation = deepClone') !== -1,
+        'employee submit must seal local draft into selfEvaluation'
+      );
+      assertLive_(
+        html.indexOf('meaningfulLiveTransition') !== -1,
+        'live poll must gate summary rerender on meaningful transitions'
+      );
+      assertLive_(
+        html.indexOf('refreshLocalSummaryViews_()') !== -1,
+        'meaningful live transitions must call refreshLocalSummaryViews_'
+      );
+    })
+  );
+
   const failed = results.filter(function (row) {
     return !row.ok;
   });
