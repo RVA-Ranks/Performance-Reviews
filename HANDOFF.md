@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-correction-72` (also `backup/pre-live-ux-correction-91`)  
-Tip SHA: _(pending pre-OBS parser/critical-path fix)_
+Tip SHA: `feab13ced2acec55c4e46c55c7b2b4ebf7a5a148`
 
 Pre-OBS correction after Coach 72% (parser + critical path):
 
