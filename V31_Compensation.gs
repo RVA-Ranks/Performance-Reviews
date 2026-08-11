@@ -996,6 +996,10 @@ function submitNoCompensationAdjustment(cycleId, notes) {
       ok: true,
       decision: V31.COMPENSATION.NONE,
       compensationComplete: isV31CompensationComplete_(cycle),
+      compensationDecision: V31.COMPENSATION.NONE,
+      compensationStatus: String(
+        cycle['Compensation Status'] || V31_COMP.STATUS.COMPLETE
+      ),
       cycleStatus: String(cycle['Status']),
       message: 'No compensation adjustment recommended.',
       pendingAuditEvent: buildPendingAuditEvent_(
@@ -1154,7 +1158,12 @@ function submitCompensationRecommendation(cycleId, payload) {
       decision: V31.COMPENSATION.ADJUSTMENT,
       compensationRecordId: recordId,
       compensationComplete: isV31CompensationComplete_(cycle),
+      compensationDecision: V31.COMPENSATION.ADJUSTMENT,
+      compensationStatus: String(
+        cycle['Compensation Status'] || V31_COMP.STATUS.AWAITING_OWNER
+      ),
       cycleStatus: String(cycle['Status']),
+      record: toCompensationRecordView_(record, false),
       message: 'Compensation recommendation submitted.',
       pendingAuditEvent: buildPendingAuditEvent_(
         cycleId,

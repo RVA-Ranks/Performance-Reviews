@@ -137,13 +137,49 @@ function runV31LiveReviewTests_() {
   results.push(
     liveCase_('finalization continuation is HR-leader only', function () {
       assertLive_(
+        shouldKickFinalizationContinuationAsLeader_({ asLeader: true }) ===
+          true,
+        'HR signature leader kicks'
+      );
+      assertLive_(
+        shouldKickFinalizationContinuationAsLeader_({}) === false,
+        'empty options do not kick'
+      );
+      assertLive_(
+        shouldKickFinalizationContinuationAsLeader_({ asLeader: false }) ===
+          false,
+        'asLeader false does not kick'
+      );
+      assertLive_(
+        shouldKickFinalizationContinuationAsLeader_(null) === false,
+        'null options do not kick'
+      );
+      assertLive_(
         typeof continueReviewFinalization === 'function',
         'continueReviewFinalization exists'
       );
-      // Polling clients must not auto-kick; only asLeader signature path does.
+    })
+  );
+
+  results.push(
+    liveCase_('post-lock cycleStatus prefers reread Ready over saved Open', function () {
       assertLive_(
-        true,
-        'Manager/Employee poll path does not call asLeader kick'
+        preferAuthoritativeCycleStatus_(
+          PR.CYCLE.OPEN,
+          PR.CYCLE.READY
+        ) === PR.CYCLE.READY,
+        'reread Ready wins'
+      );
+      assertLive_(
+        preferAuthoritativeCycleStatus_(PR.CYCLE.OPEN, '') === PR.CYCLE.OPEN,
+        'blank reread falls back to saved'
+      );
+      assertLive_(
+        preferAuthoritativeCycleStatus_(
+          PR.DOC.SUBMITTED,
+          PR.CYCLE.READY
+        ) === PR.CYCLE.READY,
+        'never keep document Submitted when reread is Ready'
       );
     })
   );

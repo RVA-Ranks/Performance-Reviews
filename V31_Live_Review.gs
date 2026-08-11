@@ -285,6 +285,14 @@ function shouldWarnSignatureReleaseEmailAcceleration_(result) {
 }
 
 /**
+ * Pure policy: only the HR signature leader may kick finalization.
+ * Manager/Employee Finalizing clients must poll only.
+ */
+function shouldKickFinalizationContinuationAsLeader_(options) {
+  return !!(options && options.asLeader);
+}
+
+/**
  * Pure monotonic guard: older updatedAtIso must not overwrite newer client state.
  */
 function isLiveReviewStateStale_(incomingUpdatedAtIso, currentUpdatedAtIso) {

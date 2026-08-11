@@ -4951,20 +4951,77 @@ function applyReviewSubmitResult_(type, result) {
     currentCycle.status = result.cycleStatus;
   }
   if (result.savedAtIso) currentCycle.updatedAtIso = result.savedAtIso;
-  if (state && Array.isArray(state.cycles)) {
-    state.cycles.forEach(function(row) {
-      if (String(row.cycleId) !== String(currentCycle.cycleId)) return;
-      if (result.cycleStatus) row.status = result.cycleStatus;
-      if (type === 'manager') row.managerReviewStatus = documentStatus;
-      else row.selfEvaluationStatus = documentStatus;
-    });
-  }
+  reconcileCycleSummaryAfterReviewSubmit_(type, result);
   setSaveIndicator('saved', 'Submitted');
   renderCycleWorkspace();
   setTopbar(
     currentCycle.employeeName + ' — ' + currentCycle.reviewType,
     humanStatus(currentCycle.status)
   );
+  refreshLocalSummaryViews_();
+}
+
+function reconcileCycleSummaryAfterReviewSubmit_(type, result) {
+  if (!state || !Array.isArray(state.cycles) || !currentCycle) return;
+  const summary = state.cycles.find(function(item) {
+    return String(item.cycleId) === String(currentCycle.cycleId);
+  });
+  if (!summary) return;
+  const documentStatus =
+    result.documentStatus || result.status || 'Submitted';
+  if (result.cycleStatus) summary.status = result.cycleStatus;
+  if (result.savedAt) summary.updatedAt = result.savedAt;
+  if (result.savedAtIso) summary.updatedAtIso = result.savedAtIso;
+  if (type === 'manager') {
+    summary.managerReviewStatus = documentStatus;
+    if (!summary.managerProgress) summary.managerProgress = {};
+    summary.managerProgress.percent = 100;
+  } else {
+    summary.selfEvaluationStatus = documentStatus;
+    if (!summary.selfProgress) summary.selfProgress = {};
+    summary.selfProgress.percent = 100;
+  }
+  const ready =
+    String(result.cycleStatus || '') === 'Ready for Review Meeting';
+  if (
+    (type === 'manager' && summary.actionKey === 'manager-review') ||
+    (type === 'self' && summary.actionKey === 'self-evaluation')
+  ) {
+    if (ready && (summary.isManager || summary.isHr)) {
+      summary.actionKey = 'meeting';
+      summary.actionLabel = 'Start Review Meeting';
+      summary.actionTone = 'primary';
+      summary.actionRequired = true;
+    } else {
+      summary.actionRequired = false;
+      summary.actionKey = 'overview';
+      summary.actionLabel = 'Open Review';
+      summary.actionTone = 'outline';
+    }
+  } else if (ready && (summary.isManager || summary.isHr)) {
+    summary.actionKey = 'meeting';
+    summary.actionLabel = 'Start Review Meeting';
+    summary.actionTone = 'primary';
+    summary.actionRequired = true;
+  }
+}
+
+function refreshLocalSummaryViews_() {
+  try {
+    renderDashboard();
+  } catch (error) {}
+  try {
+    renderReviewsView();
+  } catch (error) {}
+  try {
+    renderSignaturesView();
+  } catch (error) {}
+  try {
+    rebuildNotifications();
+  } catch (error) {}
+  try {
+    updateSignatureNavCount_();
+  } catch (error) {}
 }
 
 function validateReviewDraft(draft, type) {
@@ -5816,31 +5873,70 @@ function liveStateIsStale_(incoming) {
   return nextMs < prevMs;
 }
 
+function shouldKickFinalizationContinuationAsLeader_(options) {
+  return !!(options && options.asLeader);
+}
+
 function maybeKickFinalizationContinuation_(live, options) {
-  const opts = options || {};
   // Only the HR signature leader kicks finalization. Other browsers poll.
-  if (!opts.asLeader) return;
+  if (!shouldKickFinalizationContinuationAsLeader_(options)) return;
   if (!live || String(live.status) !== 'Finalizing') return;
   const cycleId = String(live.cycleId || '');
   if (!cycleId) return;
   if (finalizationKickAttemptedForCycle === cycleId) return;
   finalizationKickAttemptedForCycle = cycleId;
-  server('continueReviewFinalization', cycleId)
-    .then(function(result) {
-      if (result && result.status) {
-        applyLiveReviewState_({
-          cycleId: cycleId,
-          status: result.status,
-          updatedAtIso: new Date().toISOString(),
-          signatureState: currentCycle && currentCycle.signatureState,
-          signatureTasks: [],
-          signatureTaskReady: false
-        });
-      }
-    })
-    .catch(function() {
-      // Retry remains available via System Health / Retry Finalization.
-    });
+  kickFinalizationContinuationWithRetry_(cycleId, 0);
+}
+
+function kickFinalizationContinuationWithRetry_(cycleId, attempt) {
+  const maxAttempts = 3;
+  const delaysMs = [0, 4000, 5000];
+  const run = function() {
+    server('continueReviewFinalization', cycleId)
+      .then(function(result) {
+        if (result && result.status) {
+          applyLiveReviewState_({
+            cycleId: cycleId,
+            status: result.status,
+            updatedAtIso: result.updatedAtIso || '',
+            signatureState: currentCycle && currentCycle.signatureState,
+            signatureTasks: [],
+            signatureTaskReady: false
+          });
+        }
+        if (result && result.ok === false && attempt + 1 < maxAttempts) {
+          setTimeout(function() {
+            kickFinalizationContinuationWithRetry_(cycleId, attempt + 1);
+          }, delaysMs[attempt + 1] || 5000);
+          return;
+        }
+        if (result && result.ok === false) {
+          showToast(
+            'warning',
+            'Signature recorded',
+            'Final document processing needs HR recovery. Use Retry Finalization from System Health if the review stays Finalizing.'
+          );
+        }
+      })
+      .catch(function() {
+        if (attempt + 1 < maxAttempts) {
+          setTimeout(function() {
+            kickFinalizationContinuationWithRetry_(cycleId, attempt + 1);
+          }, delaysMs[attempt + 1] || 5000);
+          return;
+        }
+        showToast(
+          'warning',
+          'Signature recorded',
+          'Final document processing needs HR recovery. Use Retry Finalization from System Health if the review stays Finalizing.'
+        );
+      });
+  };
+  if (!attempt) {
+    run();
+    return;
+  }
+  setTimeout(run, delaysMs[attempt] || 4000);
 }
 
 function patchCycleFromLiveState_(live) {
@@ -6818,7 +6914,10 @@ async function submitNoAdjustmentDecision(cycleId) {
       notes
     );
     showToast('success', 'Compensation decision recorded', result.message);
-    await loadCycle(cycleId, 'overview');
+    applyCompensationMutationResult_(cycleId, result, {
+      decision: 'No Adjustment Recommended',
+      status: 'Complete'
+    });
   } catch (error) {
     showToast('error', 'Could not record decision', errorMessage(error));
   }
@@ -6953,20 +7052,77 @@ async function submitCompensationRecommendationForm(cycleId) {
 }
 
 function applyCompensationMutationResult_(cycleId, result, defaults) {
-  if (!currentCycle || String(currentCycle.cycleId) !== String(cycleId)) {
-    return;
+  const onCycle =
+    currentCycle && String(currentCycle.cycleId) === String(cycleId);
+  if (onCycle) {
+    if (!currentCycle.v31) currentCycle.v31 = {};
+    if (result.cycleStatus) currentCycle.status = result.cycleStatus;
+    if (typeof result.compensationComplete === 'boolean') {
+      currentCycle.v31.compensationComplete = result.compensationComplete;
+    }
+    if (
+      result.compensationDecision ||
+      result.decision ||
+      (defaults && defaults.decision)
+    ) {
+      currentCycle.v31.compensationDecision =
+        result.compensationDecision ||
+        result.decision ||
+        defaults.decision;
+    }
+    if (
+      result.compensationStatus ||
+      result.status ||
+      (defaults && defaults.status)
+    ) {
+      currentCycle.v31.compensationStatus =
+        result.compensationStatus || result.status || defaults.status;
+    }
+    if (result.record) {
+      currentCycle.v31.compensationRecord = result.record;
+    } else if (result.ownerDecision && currentCycle.v31.compensationRecord) {
+      currentCycle.v31.compensationRecord.ownerDecision = result.ownerDecision;
+      if (result.status) {
+        currentCycle.v31.compensationRecord.status = result.status;
+      }
+    }
+    renderCycleWorkspace();
+    setTopbar(
+      currentCycle.employeeName + ' — ' + currentCycle.reviewType,
+      humanStatus(currentCycle.status)
+    );
   }
-  if (!currentCycle.v31) currentCycle.v31 = {};
-  if (result.cycleStatus) currentCycle.status = result.cycleStatus;
+
+  reconcileCycleSummaryAfterCompensationMutation_(cycleId, result, defaults);
+  refreshLocalSummaryViews_();
+
+  // Administration Compensation Queue must update without opening the cycle.
+  if (currentView === 'admin') {
+    refreshCompensationQueue();
+  }
+}
+
+function reconcileCycleSummaryAfterCompensationMutation_(
+  cycleId,
+  result,
+  defaults
+) {
+  if (!state || !Array.isArray(state.cycles)) return;
+  const summary = state.cycles.find(function(item) {
+    return String(item.cycleId) === String(cycleId);
+  });
+  if (!summary) return;
+  if (!summary.v31) summary.v31 = {};
+  if (result.cycleStatus) summary.status = result.cycleStatus;
   if (typeof result.compensationComplete === 'boolean') {
-    currentCycle.v31.compensationComplete = result.compensationComplete;
+    summary.v31.compensationComplete = result.compensationComplete;
   }
   if (
     result.compensationDecision ||
     result.decision ||
     (defaults && defaults.decision)
   ) {
-    currentCycle.v31.compensationDecision =
+    summary.v31.compensationDecision =
       result.compensationDecision ||
       result.decision ||
       defaults.decision;
@@ -6976,22 +7132,21 @@ function applyCompensationMutationResult_(cycleId, result, defaults) {
     result.status ||
     (defaults && defaults.status)
   ) {
-    currentCycle.v31.compensationStatus =
+    summary.v31.compensationStatus =
       result.compensationStatus || result.status || defaults.status;
   }
   if (result.record) {
-    currentCycle.v31.compensationRecord = result.record;
-  } else if (result.ownerDecision && currentCycle.v31.compensationRecord) {
-    currentCycle.v31.compensationRecord.ownerDecision = result.ownerDecision;
-    if (result.status) {
-      currentCycle.v31.compensationRecord.status = result.status;
-    }
+    summary.v31.compensationRecord = result.record;
   }
-  renderCycleWorkspace();
-  setTopbar(
-    currentCycle.employeeName + ' — ' + currentCycle.reviewType,
-    humanStatus(currentCycle.status)
-  );
+  if (
+    summary.actionKey === 'compensation' &&
+    (result.compensationComplete || result.record)
+  ) {
+    summary.actionRequired = false;
+    summary.actionKey = 'overview';
+    summary.actionLabel = 'Open Review';
+    summary.actionTone = 'outline';
+  }
 }
 
 async function openOwnerDecisionModal(cycleId, isEdit) {

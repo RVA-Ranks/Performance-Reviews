@@ -868,12 +868,16 @@ function saveIndependentReview_(
 
   // Ready emails / compensation alerts are accelerated off the submit
   // critical path via accelerateReviewSubmissionNotifications.
+  // Prefer post-lock reread so concurrent peer submits surface Ready.
   const cycleAfter = findCycle_(cycleId).object;
-  return {
+  const payload = {
     ok: saved.ok,
     status: saved.status,
     documentStatus: saved.documentStatus || saved.status,
-    cycleStatus: saved.cycleStatus || String(cycleAfter['Status'] || ''),
+    cycleStatus: preferAuthoritativeCycleStatus_(
+      saved.cycleStatus,
+      cycleAfter['Status']
+    ),
     savedAt: saved.savedAt,
     savedAtIso: saved.savedAtIso,
     message: saved.message,
@@ -896,6 +900,8 @@ function saveIndependentReview_(
           )
         : '',
   };
+  assertReviewSubmitResultContract_(payload);
+  return payload;
 }
 
 /**
@@ -3126,6 +3132,7 @@ function continueReviewFinalization(cycleId) {
       alreadyComplete: true,
       cycleId: id,
       status: status,
+      updatedAtIso: toIsoString_(cycle['Updated At']),
       message: 'This review is already complete.',
     };
   }
@@ -3149,14 +3156,16 @@ function continueReviewFinalization(cycleId) {
   }
 
   const finalizeResult = attemptFinalizationAfterSignature_(id);
+  const after = findCycle_(id).object;
+  const complete =
+    (finalizeResult && finalizeResult.alreadyComplete) ||
+    (finalizeResult && finalizeResult.ok);
   return {
-    ok: !!(finalizeResult && finalizeResult.ok),
+    ok: !!complete,
     cycleId: id,
-    status:
-      (finalizeResult && finalizeResult.alreadyComplete) ||
-      (finalizeResult && finalizeResult.ok)
-        ? PR.CYCLE.COMPLETE
-        : PR.CYCLE.FINALIZING,
+    status: String(after['Status'] || '') ||
+      (complete ? PR.CYCLE.COMPLETE : PR.CYCLE.FINALIZING),
+    updatedAtIso: toIsoString_(after['Updated At']),
     finalization: finalizeResult,
     compensationPdf: compensationPdfResult,
     partial:
@@ -7140,6 +7149,13 @@ function assertReviewSubmitResultContract_(result) {
     );
   }
   return true;
+}
+
+/**
+ * After concurrent peer submits, prefer the post-lock reread Status.
+ */
+function preferAuthoritativeCycleStatus_(savedCycleStatus, rereadCycleStatus) {
+  return String(rereadCycleStatus || '') || String(savedCycleStatus || '');
 }
 
 function findLiveCycleRow_(cycleId) {

@@ -1,5 +1,16 @@
 # V3.1 Changelog
 
+## Live UX — pre-OBS fast-ACK reconciliation
+
+- Refresh HR Compensation Queue asynchronously after Owner Decision (admin path).
+- Return Manager-safe CompensationRecord DTO after recommendation.
+- Prefer post-commit authoritative Review Cycle status on review submit.
+- Add bounded HR-only finalization continuation retry with recovery toast.
+- Use authoritative server `updatedAtIso` for finalization live state.
+- Reconcile Dashboard/Reviews summaries after fast-ACK mutations.
+- Fast-ACK No Adjustment without blocking cycle reload.
+- Replace placeholder finalization-leader test with executable policy coverage.
+
 ## Live UX — fast-ACK correction
 
 - Fixed fast review submission patching document `Submitted` into Cycle Status;

@@ -8,17 +8,17 @@ highest-priority source of truth.
 ## Active work — Live UX / performance orchestration
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
-Backup: `backup/pre-live-ux-correction-88` (also `backup/pre-live-ux-perf-package`)  
-Tip SHA: `41826d2d4d6124ddd523cfffe4d8ec18c743b11e`
+Backup: `backup/pre-live-ux-correction-91` (also `backup/pre-live-ux-correction-88`)  
+Tip SHA: _(pending pre-OBS correction)_
 
-UX-0 accepted. UX-1–UX-6 shipped, then Coach 88% correction:
+UX-0 + performance package + 88% correction accepted path. Pre-OBS 91% fixes:
 
-- Review submit returns `documentStatus` + `cycleStatus` (never patches
-  document Submitted into cycle status)
-- Review notification acceleration off submit critical path
-- Owner Decision returns compact compensation record DTO for immediate UI
-- HR-only `continueReviewFinalization` leader (no three-browser fan-out)
-- Live Cycle-ID range shape fixed (`numRows = lastRow - 1`, one column)
+- Admin Owner Decision refreshes Compensation Queue async (no loadCycle)
+- Recommendation returns Manager-safe `record` DTO
+- Review submit prefers post-lock reread `cycleStatus` (Open→Ready)
+- HR finalization leader: bounded retry; server `updatedAtIso` only
+- Local Dashboard/Reviews summary reconciliation after fast-ACK
+- No Adjustment uses the same fast-ACK path
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
 New generations use the employee-safe body. No silent regeneration of signed
@@ -28,7 +28,7 @@ Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
 design and frozen finalization/PDF/signature Attempt-ID architecture.
 
 Run Lifecycle, Compensation, Live Review, Performance, Security suites in
-Apps Script. Rerun the three-screen OBS AFTER test only after Coach review.
+Apps Script. Rerun the three-screen OBS AFTER test only after Coach approval.
 Keep Automation Preview.
 
 ## Active work — Lifecycle transactional closure

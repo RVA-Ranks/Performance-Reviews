@@ -581,6 +581,36 @@ function runV31CompensationTests_() {
     assert_(view.canEditOwnerDecision === true, 'can edit after approve');
   });
 
+  check('Manager recommendation DTO includes awaiting-owner record', function () {
+    const record = {
+      'Compensation Record ID': 'REC-MGR',
+      Status: V31_COMP.STATUS.AWAITING_OWNER,
+      'Owner Decision': '',
+      'Original Pay Rate': 40,
+      'Original Annual Salary': 83200,
+      'Manager Recommended Pay Rate': 44,
+      'Manager Recommended Annual Salary': 91520,
+      'Manager Recommended Percent': 0.1,
+      'Manager Business Justification': 'MANAGER_INTERNAL_SECRET_123',
+      'Final Approved Pay Rate': '',
+      'Final Approved Annual Salary': '',
+      'Final Approved Percent': '',
+      'Compensation Effective Date': '',
+      'CAF PDF Status': V31_COMP.PDF.PENDING,
+      'Rate Update Status': V31_COMP.RATE_UPDATE.PENDING,
+    };
+    const view = toCompensationRecordView_(record, false);
+    assert_(view.status === V31_COMP.STATUS.AWAITING_OWNER, 'status');
+    assert_(view.finalApprovedPayRate === null, 'no final yet');
+    assert_(view.canEditOwnerDecision === false, 'manager cannot edit owner');
+    assert_(
+      String(view.managerBusinessJustification || '').indexOf(
+        'MANAGER_INTERNAL_SECRET_123'
+      ) !== -1,
+      'manager still sees own justification in HR/manager record view'
+    );
+  });
+
   check('Finalization disposition: not required → skip', function () {
     assert_(
       compensationFinalizationDisposition_(
