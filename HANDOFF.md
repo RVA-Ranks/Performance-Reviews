@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-transactional-closure`  
-Tip SHA: *(set after commit)*
+Tip SHA: `98b0c871ce3130872d4eb840b091319deb13f922`
 
 Closes Coach 76% blockers: revision-safe meeting save/ACK, release
 attribution via `releaseRequestedBy`, compensation reset→replacement +
