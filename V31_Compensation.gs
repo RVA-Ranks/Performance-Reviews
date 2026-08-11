@@ -215,6 +215,62 @@ function ensureCompensationDataModel_() {
   }
 }
 
+/**
+ * Lightweight interactive prerequisite: required sheets/columns exist.
+ * Does NOT format, protect, migrate, or reconcile. Use
+ * ensureCompensationDataModel_ for upgrade/setup/admin maintenance.
+ */
+function assertCompensationDataModelReady_() {
+  const ss = getSpreadsheet_();
+  const cycles = ss.getSheetByName(PR.SHEETS.CYCLES);
+  const records = ss.getSheetByName(V31_COMP.RECORDS_SHEET);
+  const history = ss.getSheetByName(V31_COMP.HISTORY_SHEET);
+  if (!cycles || !records || !history) {
+    throw new Error(
+      'Compensation data model is not set up. HR must complete compensation setup before continuing.'
+    );
+  }
+  assertSheetHasRequiredHeaders_(
+    records,
+    V31_COMP.RECORD_HEADERS,
+    V31_COMP.RECORDS_SHEET
+  );
+  assertSheetHasRequiredHeaders_(
+    history,
+    V31_COMP.HISTORY_HEADERS,
+    V31_COMP.HISTORY_SHEET
+  );
+  assertSheetHasRequiredHeaders_(
+    cycles,
+    [
+      'Compensation Decision',
+      'Compensation Status',
+      'Compensation Record ID',
+      'CAF Final PDF ID',
+    ],
+    PR.SHEETS.CYCLES
+  );
+}
+
+function assertSheetHasRequiredHeaders_(sheet, requiredHeaders, sheetName) {
+  const headers = getHeaders_(sheet).map(String);
+  const missing = [];
+  (requiredHeaders || []).forEach(function (header) {
+    if (headers.indexOf(String(header)) < 0) {
+      missing.push(String(header));
+    }
+  });
+  if (missing.length) {
+    throw new Error(
+      'Compensation sheet "' +
+        sheetName +
+        '" is missing required columns: ' +
+        missing.join(', ') +
+        '. HR must complete compensation setup before continuing.'
+    );
+  }
+}
+
 function migrateLegacyCompensationDecisions_() {
   const cycles = getAllObjects_(PR.SHEETS.CYCLES);
   cycles.forEach(function (cycle) {
@@ -940,7 +996,7 @@ function toCompensationRecordView_(record, isHr) {
 function submitNoCompensationAdjustment(cycleId, notes) {
   return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
-    ensureCompensationDataModel_();
+    assertCompensationDataModelReady_();
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
     const cycle = location.object;
@@ -1033,7 +1089,7 @@ function submitNoCompensationAdjustment(cycleId, notes) {
 function submitCompensationRecommendation(cycleId, payload) {
   return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
-    ensureCompensationDataModel_();
+    assertCompensationDataModelReady_();
     const email = getCurrentUserEmail_();
     const location = findCycle_(cycleId);
     const cycle = location.object;
@@ -1305,7 +1361,7 @@ function validateCompensationRecommendation_(payload, currentRate) {
 function recordCompensationOwnerDecision(cycleId, payload) {
   return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
-    ensureCompensationDataModel_();
+    assertCompensationDataModelReady_();
     const email = getCurrentUserEmail_();
     if (!isHrUser_(email)) {
       throw new Error('Only HR may record the owner compensation decision.');
@@ -1560,7 +1616,7 @@ function validateOwnerDecisionPayload_(payload, record) {
 function editCompensationOwnerDecision(cycleId, payload) {
   return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
-    ensureCompensationDataModel_();
+    assertCompensationDataModelReady_();
     const email = getCurrentUserEmail_();
     if (!isHrUser_(email)) {
       throw new Error('Only HR may edit the owner compensation decision.');

@@ -611,6 +611,32 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Interactive compensation mutations use lightweight readiness assert', function () {
+    assert_(
+      typeof assertCompensationDataModelReady_ === 'function',
+      'assertCompensationDataModelReady_ exists'
+    );
+    const originalGetSpreadsheet = getSpreadsheet_;
+    getSpreadsheet_ = function () {
+      return {
+        getSheetByName: function () {
+          return null;
+        },
+      };
+    };
+    try {
+      let threw = false;
+      try {
+        assertCompensationDataModelReady_();
+      } catch (error) {
+        threw = /not set up/i.test(String(error.message || error));
+      }
+      assert_(threw, 'missing sheets fail closed without formatting');
+    } finally {
+      getSpreadsheet_ = originalGetSpreadsheet;
+    }
+  });
+
   check('Finalization disposition: not required → skip', function () {
     assert_(
       compensationFinalizationDisposition_(

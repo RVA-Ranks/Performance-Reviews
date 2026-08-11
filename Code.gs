@@ -870,7 +870,7 @@ function saveIndependentReview_(
   // critical path via accelerateReviewSubmissionNotifications.
   // Prefer post-lock reread so concurrent peer submits surface Ready.
   const cycleAfter = findCycle_(cycleId).object;
-  const payload = {
+  const resultPayload = {
     ok: saved.ok,
     status: saved.status,
     documentStatus: saved.documentStatus || saved.status,
@@ -900,8 +900,8 @@ function saveIndependentReview_(
           )
         : '',
   };
-  assertReviewSubmitResultContract_(payload);
-  return payload;
+  assertReviewSubmitResultContract_(resultPayload);
+  return resultPayload;
 }
 
 /**
@@ -3107,7 +3107,7 @@ function attemptFinalizationAfterSignature_(cycleId) {
 
 /**
  * Continue crash-safe finalization after HR signature was already committed.
- * Safe for Manager/Employee/HR live clients to kick (idempotent claims).
+ * HR-only: Manager/Employee clients poll Finalizing and do not kick this.
  * Does not redesign PDF/CAF provenance or Delivery Unknown recovery.
  */
 function continueReviewFinalization(cycleId) {

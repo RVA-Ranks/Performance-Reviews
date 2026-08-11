@@ -8,28 +8,25 @@ highest-priority source of truth.
 ## Active work — Live UX / performance orchestration
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
-Backup: `backup/pre-live-ux-correction-91` (also `backup/pre-live-ux-correction-88`)  
-Tip SHA: `6a579d5` (reconcile package `5f5b880`)
+Backup: `backup/pre-live-ux-correction-72` (also `backup/pre-live-ux-correction-91`)  
+Tip SHA: _(pending pre-OBS parser/critical-path fix)_
 
-UX-0 + performance package + 88% correction accepted path. Pre-OBS 91% fixes:
+Pre-OBS correction after Coach 72% (parser + critical path):
 
-- Admin Owner Decision refreshes Compensation Queue async (no loadCycle)
-- Recommendation returns Manager-safe `record` DTO
-- Review submit prefers post-lock reread `cycleStatus` (Open→Ready)
-- HR finalization leader: bounded retry; server `updatedAtIso` only
-- Local Dashboard/Reviews summary reconciliation after fast-ACK
-- No Adjustment uses the same fast-ACK path
+- `saveIndependentReview_` returns `resultPayload` (Code.gs parses again)
+- Interactive compensation mutations use `assertCompensationDataModelReady_`
+  (no format/protect/migrate/reconcile under the mutation lock)
+- Fast-ACK reconciles `canStartMeeting` and Ready → Start Review Meeting
+- Live poll clears stale signature actions/nav badges when tasks resolve
+- Finalization continuation comment is HR-only
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
-New generations use the employee-safe body. No silent regeneration of signed
-historical agreements.
 
 Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
 design and frozen finalization/PDF/signature Attempt-ID architecture.
 
-Run Lifecycle, Compensation, Live Review, Performance, Security suites in
-Apps Script. Rerun the three-screen OBS AFTER test only after Coach approval.
-Keep Automation Preview.
+Run static parse, then Lifecycle / Compensation / Live Review / Performance /
+Security suites. Three-screen OBS only after Coach approval. Automation Preview.
 
 ## Active work — Lifecycle transactional closure
 

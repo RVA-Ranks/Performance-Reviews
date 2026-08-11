@@ -185,6 +185,16 @@ function runV31LiveReviewTests_() {
   );
 
   results.push(
+    liveCase_('live Cycle-ID lookup range is one column / lastRow-1 rows', function () {
+      const args = liveCycleIdLookupRangeArgs_(4, 12);
+      assertLive_(args.row === 2, 'row');
+      assertLive_(args.column === 4, 'column');
+      assertLive_(args.numRows === 11, 'numRows');
+      assertLive_(args.numColumns === 1, 'numColumns');
+    })
+  );
+
+  results.push(
     liveCase_('live access prefers assignment before HR', function () {
       const cycle = {
         'Manager Email': 'mgr@example.com',

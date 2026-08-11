@@ -4951,6 +4951,7 @@ function applyReviewSubmitResult_(type, result) {
     currentCycle.status = result.cycleStatus;
   }
   if (result.savedAtIso) currentCycle.updatedAtIso = result.savedAtIso;
+  reconcileCurrentCycleDerivedState_(result.cycleStatus);
   reconcileCycleSummaryAfterReviewSubmit_(type, result);
   setSaveIndicator('saved', 'Submitted');
   renderCycleWorkspace();
@@ -4983,27 +4984,62 @@ function reconcileCycleSummaryAfterReviewSubmit_(type, result) {
   }
   const ready =
     String(result.cycleStatus || '') === 'Ready for Review Meeting';
+  if (applyReadyMeetingActionToSummary_(summary, result.cycleStatus)) {
+    return;
+  }
   if (
     (type === 'manager' && summary.actionKey === 'manager-review') ||
     (type === 'self' && summary.actionKey === 'self-evaluation')
   ) {
-    if (ready && (summary.isManager || summary.isHr)) {
-      summary.actionKey = 'meeting';
-      summary.actionLabel = 'Start Review Meeting';
-      summary.actionTone = 'primary';
-      summary.actionRequired = true;
-    } else {
-      summary.actionRequired = false;
-      summary.actionKey = 'overview';
-      summary.actionLabel = 'Open Review';
-      summary.actionTone = 'outline';
-    }
-  } else if (ready && (summary.isManager || summary.isHr)) {
+    summary.actionRequired = false;
+    summary.actionKey = 'overview';
+    summary.actionLabel = 'Open Review';
+    summary.actionTone = 'outline';
+  }
+}
+
+function reconcileCurrentCycleDerivedState_(cycleStatus) {
+  if (!currentCycle) return;
+  const status = String(cycleStatus || currentCycle.status || '');
+  const ready = status === 'Ready for Review Meeting';
+  const meeting = status === 'Review Meeting Open';
+  const signatures = status === 'Awaiting Signatures';
+  const finalizing = status === 'Finalizing';
+  const complete = status === 'Complete';
+
+  currentCycle.canStartMeeting =
+    ready && !!(currentCycle.isManager || currentCycle.isHr);
+
+  if (signatures || finalizing || complete) {
+    currentCycle.canReleaseSignatures = false;
+    currentCycle.canEditManagerMeeting = false;
+    currentCycle.canEditEmployeeMeeting = false;
+  } else if (meeting) {
+    currentCycle.canEditManagerMeeting = !!(
+      currentCycle.isManager || currentCycle.isHr
+    );
+    currentCycle.canEditEmployeeMeeting = !!(
+      currentCycle.isEmployee || currentCycle.isHr
+    );
+    currentCycle.canReleaseSignatures =
+      !!(currentCycle.isManager || currentCycle.isHr) &&
+      !!(currentCycle.v31 && currentCycle.v31.compensationComplete);
+  } else {
+    currentCycle.canReleaseSignatures = false;
+  }
+}
+
+function applyReadyMeetingActionToSummary_(summary, cycleStatus) {
+  if (!summary) return false;
+  const ready = String(cycleStatus || '') === 'Ready for Review Meeting';
+  if (ready && (summary.isManager || summary.isHr)) {
+    summary.actionRequired = true;
     summary.actionKey = 'meeting';
     summary.actionLabel = 'Start Review Meeting';
     summary.actionTone = 'primary';
-    summary.actionRequired = true;
+    return true;
   }
+  return false;
 }
 
 function refreshLocalSummaryViews_() {
@@ -5965,8 +6001,13 @@ function patchCycleFromLiveState_(live) {
     currentCycle.canEditManagerMeeting = false;
     currentCycle.canEditEmployeeMeeting = false;
   }
-  if (live.signatureTaskReady) {
-    currentCycle.actionKey = 'signature';
+  reconcileCurrentCycleDerivedState_(live.status);
+  if (typeof live.signatureTaskReady !== 'undefined') {
+    if (live.signatureTaskReady) {
+      currentCycle.actionKey = 'signature';
+    } else if (currentCycle.actionKey === 'signature') {
+      clearStaleSignatureActionOnCycle_(currentCycle, live.status);
+    }
   }
   if (String(live.status) === 'Complete') {
     stopLiveReviewPolling_();
@@ -5981,8 +6022,15 @@ function patchCycleFromLiveState_(live) {
       if (typeof live.signaturesReleasedAt !== 'undefined') {
         row.signaturesReleasedAt = live.signaturesReleasedAt;
       }
-      if (live.signatureTaskReady) {
-        row.actionKey = 'signature';
+      if (typeof live.signatureTaskReady !== 'undefined') {
+        if (live.signatureTaskReady) {
+          row.actionKey = 'signature';
+          row.actionRequired = true;
+          row.actionLabel = row.actionLabel || 'Sign Review Packet';
+          row.actionTone = 'primary';
+        } else if (row.actionKey === 'signature') {
+          clearStaleSignatureActionOnCycle_(row, live.status);
+        }
       }
     });
     try {
@@ -5990,6 +6038,23 @@ function patchCycleFromLiveState_(live) {
     } catch (error) {
       // Optional UI sync.
     }
+  }
+}
+
+function clearStaleSignatureActionOnCycle_(target, status) {
+  if (!target) return;
+  const cycleStatus = String(status || target.status || '');
+  target.actionRequired = false;
+  target.actionTone = 'outline';
+  if (cycleStatus === 'Complete') {
+    target.actionKey = 'overview';
+    target.actionLabel = 'View Completed Review';
+  } else if (cycleStatus === 'Finalizing') {
+    target.actionKey = 'overview';
+    target.actionLabel = 'Open Review';
+  } else {
+    target.actionKey = 'overview';
+    target.actionLabel = 'Open Review';
   }
 }
 
@@ -7079,6 +7144,7 @@ function applyCompensationMutationResult_(cycleId, result, defaults) {
         currentCycle.v31.compensationRecord.status = result.status;
       }
     }
+    reconcileCurrentCycleDerivedState_(result.cycleStatus || currentCycle.status);
     renderCycleWorkspace();
     setTopbar(
       currentCycle.employeeName + ' — ' + currentCycle.reviewType,
@@ -7130,6 +7196,9 @@ function reconcileCycleSummaryAfterCompensationMutation_(
   }
   if (result.record) {
     summary.v31.compensationRecord = result.record;
+  }
+  if (applyReadyMeetingActionToSummary_(summary, result.cycleStatus)) {
+    return;
   }
   if (
     summary.actionKey === 'compensation' &&

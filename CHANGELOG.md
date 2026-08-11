@@ -1,5 +1,20 @@
 # V3.1 Changelog
 
+## Live UX — pre-OBS parser and critical-path fixes
+
+- Fixed review-submit result variable redeclaration that prevented Code.gs parsing.
+- Removed full compensation schema/migration/reconcile maintenance from normal
+  interactive recommendation and owner-decision critical paths
+  (`assertCompensationDataModelReady_`).
+- Reconciled current-cycle Start Review Meeting eligibility after fast-ACK
+  transitions (`canStartMeeting`).
+- Promoted compensation-complete Ready cycles to Start Review Meeting in local
+  summaries.
+- Cleared stale signature tasks and navigation counts when live tasks resolve.
+- Added live Cycle-ID range-shape coverage in Live Review tests and interactive
+  readiness-assert regression.
+- Updated finalization continuation documentation to reflect HR-only leadership.
+
 ## Live UX — pre-OBS fast-ACK reconciliation
 
 - Refresh HR Compensation Queue asynchronously after Owner Decision (admin path).
