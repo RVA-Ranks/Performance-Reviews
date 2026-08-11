@@ -127,8 +127,24 @@ function accelerateSignatureReleaseNotifications(cycleId) {
 
   const results = [];
   try {
-    sendCombinedSignatureEmail_(id, PR.ROLE.MANAGER);
-    results.push({ key: 'signatureManager', ok: true });
+    const managerResult = sendCombinedSignatureEmail_(
+      id,
+      PR.ROLE.MANAGER
+    );
+    const managerOk = isSignatureNotificationAccelerationOk_(managerResult);
+    results.push({
+      key: 'signatureManager',
+      ok: managerOk,
+      action: managerResult && managerResult.action,
+      reason: managerResult && managerResult.reason,
+      error: managerOk
+        ? ''
+        : String(
+            (managerResult &&
+              (managerResult.error || managerResult.reason)) ||
+              'Signature manager notification did not complete'
+          ),
+    });
   } catch (error) {
     results.push({
       key: 'signatureManager',
@@ -137,8 +153,25 @@ function accelerateSignatureReleaseNotifications(cycleId) {
     });
   }
   try {
-    sendCombinedSignatureEmail_(id, PR.ROLE.EMPLOYEE);
-    results.push({ key: 'signatureEmployee', ok: true });
+    const employeeResult = sendCombinedSignatureEmail_(
+      id,
+      PR.ROLE.EMPLOYEE
+    );
+    const employeeOk =
+      isSignatureNotificationAccelerationOk_(employeeResult);
+    results.push({
+      key: 'signatureEmployee',
+      ok: employeeOk,
+      action: employeeResult && employeeResult.action,
+      reason: employeeResult && employeeResult.reason,
+      error: employeeOk
+        ? ''
+        : String(
+            (employeeResult &&
+              (employeeResult.error || employeeResult.reason)) ||
+              'Signature employee notification did not complete'
+          ),
+    });
   } catch (error) {
     results.push({
       key: 'signatureEmployee',

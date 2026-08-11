@@ -648,6 +648,136 @@ function runV31LifecycleTests_() {
     )
   );
 
+  results.push(
+    lifeCase_(
+      'signature acceleration classifies durable outbox outcomes',
+      function () {
+        assertLife_(
+          isSignatureNotificationAccelerationOk_({ action: 'sent' }) === true,
+          'sent ok'
+        );
+        assertLife_(
+          isSignatureNotificationAccelerationOk_({
+            action: 'skip',
+            reason: 'in-progress',
+          }) === true,
+          'in-progress ok'
+        );
+        assertLife_(
+          isSignatureNotificationAccelerationOk_({
+            action: 'skip',
+            reason: 'sent',
+          }) === true,
+          'already-sent ok'
+        );
+        assertLife_(
+          isSignatureNotificationAccelerationOk_({
+            action: 'skip',
+            reason: 'unknown',
+          }) === false,
+          'Delivery Unknown fails'
+        );
+        assertLife_(
+          isSignatureNotificationAccelerationOk_({ action: 'error' }) === false,
+          'error fails'
+        );
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_(
+      'accelerateSignatureReleaseNotifications aggregates partial failure',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-ACCEL');
+        store.Status = PR.CYCLE.SIGNATURES;
+        store['Signatures Released At'] = new Date();
+        const originals = {
+          getCurrentUserEmail_: getCurrentUserEmail_,
+          assertDomain_: assertDomain_,
+          findCycle_: findCycle_,
+          isHrUser_: isHrUser_,
+          sendCombinedSignatureEmail_: sendCombinedSignatureEmail_,
+        };
+        getCurrentUserEmail_ = function () {
+          return 'mgr@aitheras.com';
+        };
+        assertDomain_ = function () {};
+        findCycle_ = function () {
+          return { rowNumber: 2, object: store };
+        };
+        isHrUser_ = function () {
+          return false;
+        };
+        sendCombinedSignatureEmail_ = function (cycleId, role) {
+          if (role === PR.ROLE.MANAGER) {
+            return { action: 'sent' };
+          }
+          return { action: 'error', error: 'smtp failed' };
+        };
+        try {
+          const result = accelerateSignatureReleaseNotifications(
+            store['Cycle ID']
+          );
+          assertLife_(result.ok === false, 'aggregate ok false');
+          assertLife_(
+            result.results[0].ok === true && result.results[1].ok === false,
+            'manager ok employee fail'
+          );
+        } finally {
+          getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+          assertDomain_ = originals.assertDomain_;
+          findCycle_ = originals.findCycle_;
+          isHrUser_ = originals.isHrUser_;
+          sendCombinedSignatureEmail_ = originals.sendCombinedSignatureEmail_;
+        }
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_(
+      'accelerateSignatureReleaseNotifications fails on Delivery Unknown',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-ACCEL-UNK');
+        store.Status = PR.CYCLE.SIGNATURES;
+        store['Signatures Released At'] = new Date();
+        const originals = {
+          getCurrentUserEmail_: getCurrentUserEmail_,
+          assertDomain_: assertDomain_,
+          findCycle_: findCycle_,
+          isHrUser_: isHrUser_,
+          sendCombinedSignatureEmail_: sendCombinedSignatureEmail_,
+        };
+        getCurrentUserEmail_ = function () {
+          return 'emp@aitheras.com';
+        };
+        assertDomain_ = function () {};
+        findCycle_ = function () {
+          return { rowNumber: 2, object: store };
+        };
+        isHrUser_ = function () {
+          return false;
+        };
+        sendCombinedSignatureEmail_ = function () {
+          return { action: 'skip', reason: 'unknown' };
+        };
+        try {
+          const result = accelerateSignatureReleaseNotifications(
+            store['Cycle ID']
+          );
+          assertLife_(result.ok === false, 'unknown => ok false');
+        } finally {
+          getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+          assertDomain_ = originals.assertDomain_;
+          findCycle_ = originals.findCycle_;
+          isHrUser_ = originals.isHrUser_;
+          sendCombinedSignatureEmail_ = originals.sendCombinedSignatureEmail_;
+        }
+      }
+    )
+  );
+
   const failed = results.filter(function (row) {
     return !row.ok;
   });

@@ -8,20 +8,21 @@ highest-priority source of truth.
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
-Backup: `backup/pre-lifecycle-pass3-91` (also `backup/pre-lifecycle-pass2-87`)  
-Tip SHA: `57b211ca14c5c6653ad36958a61f8895cf86a74f`
+Backup: `backup/pre-lifecycle-pass4-92` (also `backup/pre-lifecycle-pass3-91`)  
+Tip SHA: *(set after commit)*
 
-Pass 3 closes Coach 91% majors: deferred multi-active System Health (no nested
-lock), lifecycle compensation gate fail-closed on multi-active, zero-active
-Failed-mirror crash recovery, public `getCompensationContext` release-stage
-privacy, second-ACK signature email acceleration without duplicate polling.
+Pass 4 closes Coach 92% majors: request-scoped compensation integrity counts
+(one CompensationRecords read per request), truthful signature-email
+acceleration outcomes, expanded integrity-alert flush coverage, and
+performance/acceleration regressions.
 
 Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
 design and frozen finalization/PDF/signature Attempt-ID architecture.
 
-Run `runV31LifecycleTests_()`, `runV31CompensationTests_()`, and
-`runV31SecurityTests_()` in Apps Script. Complete the three Blocking Sandbox
-authorization cases before merge. Stop for Coach before merge.
+Run `runV31LifecycleTests_()`, `runV31CompensationTests_()`,
+`runV31SecurityTests_()`, and `runV31PerformanceTests_()` in Apps Script.
+Complete the three Blocking Sandbox authorization cases before merge.
+Stop for Coach before merge.
 
 ## Active work — Concurrent signature handoff
 

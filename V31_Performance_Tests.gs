@@ -152,6 +152,18 @@ function runV31PerformanceTests_() {
       testPublicPerformanceProfileEntry_
     )
   );
+  results.push(
+    runPerfCase_(
+      'compensation integrity uses one Sheet read per request',
+      testCompensationIntegrityOneReadPerRequest_
+    )
+  );
+  results.push(
+    runPerfCase_(
+      'compensation integrity cache invalidates after mutation',
+      testCompensationIntegrityCacheInvalidation_
+    )
+  );
 
   const failed = results.filter(function (row) {
     return !row.ok;
@@ -235,6 +247,10 @@ function testPerfRequestCacheInvalidation_() {
   invalidatePerfSheetCache_();
   assertPerf_(req.cache.settings === undefined, 'full invalidate clears settings');
   assertPerf_(req.cache.compensationByCycleId === undefined, 'full invalidate clears compensation');
+  assertPerf_(
+    req.cache.compensationIntegrityByCycleId === undefined,
+    'full invalidate clears compensation integrity'
+  );
   perfEndRequest_();
 }
 
@@ -462,4 +478,98 @@ function summarizePerformanceProfileAlert_(report) {
 function formatMs_(value) {
   if (value == null || !isFinite(Number(value))) return 'n/a';
   return Number(value) + 'ms';
+}
+
+function testCompensationIntegrityOneReadPerRequest_() {
+  perfBeginRequest_('comp-integrity-reads');
+  let recordsReads = 0;
+  const originalTimed = perfTimedSheetValues_;
+  const originalGetSs = getSpreadsheet_;
+  const headers = [
+    'Compensation Record ID',
+    'Review Cycle ID',
+    'Status',
+  ];
+  const values = [headers];
+  for (let i = 0; i < 25; i++) {
+    values.push([
+      'REC-' + i,
+      'CYCLE-' + i,
+      V31_COMP.STATUS.AWAITING_OWNER,
+    ]);
+  }
+  // One multi-active cycle for fail-closed check.
+  values.push(['REC-M1', 'CYCLE-MULTI', V31_COMP.STATUS.AWAITING_OWNER]);
+  values.push(['REC-M2', 'CYCLE-MULTI', V31_COMP.STATUS.AWAITING_OWNER]);
+
+  getSpreadsheet_ = function () {
+    return {
+      getSheetByName: function () {
+        return {
+          getName: function () {
+            return V31_COMP.RECORDS_SHEET;
+          },
+        };
+      },
+    };
+  };
+  perfTimedSheetValues_ = function (sheet, sheetName) {
+    if (String(sheetName) === V31_COMP.RECORDS_SHEET) {
+      recordsReads += 1;
+    }
+    return values;
+  };
+  try {
+    for (let i = 0; i < 25; i++) {
+      assertPerf_(
+        countActiveCompensationRecordsForCycle_('CYCLE-' + i) === 1,
+        'single-active count'
+      );
+      assertPerf_(
+        isV31CompensationComplete_({
+          'Cycle ID': 'CYCLE-' + i,
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_OWNER,
+        }) === false,
+        'awaiting owner incomplete'
+      );
+    }
+    assertPerf_(
+      isV31CompensationComplete_({
+        'Cycle ID': 'CYCLE-MULTI',
+        'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+        'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+      }) === false,
+      'multi-active remains incomplete'
+    );
+    assertPerf_(
+      recordsReads === 1,
+      'CompensationRecords getValues must run once, not per cycle (got ' +
+        recordsReads +
+        ')'
+    );
+  } finally {
+    perfTimedSheetValues_ = originalTimed;
+    getSpreadsheet_ = originalGetSs;
+    perfEndRequest_();
+  }
+}
+
+function testCompensationIntegrityCacheInvalidation_() {
+  perfBeginRequest_('comp-integrity-invalidate');
+  const req = perfGetRequest_();
+  req.cache.compensationIntegrityByCycleId = {
+    C1: { activeCount: 1, actives: [] },
+  };
+  req.cache.compensationByCycleId = { C1: { rowNumber: 2, object: {} } };
+  invalidateCompensationIntegrityCache_();
+  assertPerf_(
+    req.cache.compensationIntegrityByCycleId === undefined,
+    'integrity cleared'
+  );
+  assertPerf_(
+    req.cache.compensationByCycleId === undefined,
+    'byCycle cleared'
+  );
+  perfEndRequest_();
 }

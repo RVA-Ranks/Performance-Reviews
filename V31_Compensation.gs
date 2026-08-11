@@ -329,14 +329,17 @@ function findCompensationRecordByCycle_(cycleId) {
 
 function writeCompensationRecord_(rowNumber, object) {
   writeObject_(V31_COMP.RECORDS_SHEET, rowNumber, object);
+  invalidateCompensationIntegrityCache_();
 }
 
 function appendCompensationRecord_(object) {
-  return appendObject_(
+  const result = appendObject_(
     V31_COMP.RECORDS_SHEET,
     V31_COMP.RECORD_HEADERS,
     object
   );
+  invalidateCompensationIntegrityCache_();
+  return result;
 }
 
 function historyExistsForRecord_(recordId) {
@@ -407,6 +410,7 @@ function appendCompensationHistoryOnce_(record, finalizedBy) {
  * Progress is tracked in a dedicated durable "Compensation History Status".
  */
 function ensureCompensationHistory_(cycleId) {
+  try {
   ensureCompensationDataModel_();
   return withLock_(function () {
     const recordLoc = findCompensationRecordByCycle_(cycleId);
@@ -467,6 +471,9 @@ function ensureCompensationHistory_(cycleId) {
       throw error;
     }
   });
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /* ============================ GATE ============================ */
@@ -1673,10 +1680,7 @@ function resetCompensationDecision(cycleId, reason) {
     writeCycle_(location.rowNumber, cycle);
 
     // Clear request-scoped compensation cache so Failed no longer shadows.
-    const req = typeof perfGetRequest_ === 'function' ? perfGetRequest_() : null;
-    if (req && req.cache) {
-      delete req.cache.compensationByCycleId;
-    }
+    invalidateCompensationIntegrityCache_();
 
     return {
       ok: true,
@@ -1725,6 +1729,7 @@ function recordCompensationDecision(cycleId, decision, notes) {
 }
 
 function getCompensationQueue() {
+  try {
   ensureCompensationDataModel_();
   const email = getCurrentUserEmail_();
   if (!isHrUser_(email)) {
@@ -1811,6 +1816,9 @@ function getCompensationQueue() {
         return String(b.submittedAt).localeCompare(String(a.submittedAt));
       }),
   };
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /**
@@ -1842,6 +1850,7 @@ function compensationOwnerAlertKey_(cycleId) {
  * Event identity: COMP_RECOMMENDATION_READY:<CompensationRecordId>
  */
 function ensureCompensationRecommendationHrEmail_(cycleId, options) {
+  try {
   ensureCompensationDataModel_();
   const opts = options || {};
   const claimed = withLock_(function () {
@@ -1977,6 +1986,9 @@ function ensureCompensationRecommendationHrEmail_(cycleId, options) {
       SpreadsheetApp.flush();
     });
     throw error;
+  }
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
   }
 }
 
@@ -2248,6 +2260,7 @@ function resolveCompensationOwnerAlert_(cycleId, actorEmail) {
  * duplicate the email. Delivery Unknown never auto-resends.
  */
 function ensureCompensationManagerOutcomeEmail_(cycleId, options) {
+  try {
   ensureCompensationDataModel_();
   const opts = options || {};
   const claimed = withLock_(function () {
@@ -2368,6 +2381,9 @@ function ensureCompensationManagerOutcomeEmail_(cycleId, options) {
     });
     throw error;
   }
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /**
@@ -2375,6 +2391,7 @@ function ensureCompensationManagerOutcomeEmail_(cycleId, options) {
  * Never sends email.
  */
 function markCompensationManagerOutcomeEmailConfirmed(cycleId, payload) {
+  try {
   const actor = assertActiveHrDomain_();
   const input = payload || {};
   const evidenceNote = String(input.evidenceNote || '').trim();
@@ -2433,6 +2450,9 @@ function markCompensationManagerOutcomeEmailConfirmed(cycleId, payload) {
     SpreadsheetApp.flush();
   });
   return { ok: true, eventId: eventId, status: V31.DELIVERY.SENT };
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /**
@@ -2440,6 +2460,7 @@ function markCompensationManagerOutcomeEmailConfirmed(cycleId, payload) {
  * Requires exact confirmation; never automatic.
  */
 function resendCompensationManagerOutcomeEmailUnknown(cycleId, payload) {
+  try {
   const actor = assertActiveHrDomain_();
   const input = payload || {};
   if (
@@ -2483,6 +2504,9 @@ function resendCompensationManagerOutcomeEmailUnknown(cycleId, payload) {
     allowUnknownResend: true,
     expectedAttemptId: String(input.originalAttemptId || ''),
   });
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 function formatCompensationMoney_(value) {
@@ -2966,6 +2990,7 @@ function applyCompensationRateUpdateOnce_(cycleId) {
         conflictAlert.finalRate
       );
     }
+    flushPendingCompensationIntegrityAlerts_();
   }
 }
 

@@ -1,5 +1,18 @@
 # V3.1 Changelog
 
+## Lifecycle transactional closure (Pass 4)
+
+- Request-scoped compensation integrity index shares one CompensationRecords
+  Sheet read with the cycle-list map (no N+1 `isV31CompensationComplete_` reads).
+- Integrity/by-cycle caches invalidate after CompensationRecords mutations.
+- `sendCombinedSignatureEmail_` returns durable outbox outcomes;
+  `accelerateSignatureReleaseNotifications` reports `ok:false` for
+  error/Delivery Unknown without rolling back release.
+- Expanded integrity-alert flush coverage across compensation recovery/email
+  public boundaries.
+- Regressions: compensation read-count, cache invalidation, second-ACK
+  acceleration success/partial-failure/unknown.
+
 ## Lifecycle transactional closure (Pass 3)
 
 - Multi-active compensation alerts are queued and flushed outside `withLock_`

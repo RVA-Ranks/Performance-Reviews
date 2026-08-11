@@ -58,6 +58,7 @@ function perfBeginRequest_(label) {
       settings: undefined,
       sheets: {},
       compensationByCycleId: undefined,
+      compensationIntegrityByCycleId: undefined,
     },
   };
   return V31_PERF_REQUEST_;
@@ -152,6 +153,7 @@ function invalidatePerfSheetCache_(sheetName) {
     req.cache.settings = undefined;
     req.cache.sheets = {};
     req.cache.compensationByCycleId = undefined;
+    req.cache.compensationIntegrityByCycleId = undefined;
     return;
   }
   if (sheetName === PR.SHEETS.SETTINGS) {
@@ -165,7 +167,97 @@ function invalidatePerfSheetCache_(sheetName) {
     sheetName === V31_COMP.RECORDS_SHEET
   ) {
     req.cache.compensationByCycleId = undefined;
+    req.cache.compensationIntegrityByCycleId = undefined;
   }
+}
+
+/**
+ * Clear request-scoped compensation indexes after CompensationRecords mutations.
+ */
+function invalidateCompensationIntegrityCache_() {
+  const req = perfGetRequest_();
+  if (!req || !req.cache) return;
+  req.cache.compensationIntegrityByCycleId = undefined;
+  req.cache.compensationByCycleId = undefined;
+}
+
+/**
+ * One CompensationRecords Sheet read populates both request-scoped indexes:
+ * - compensationByCycleId (display/summary; prefers non-Failed)
+ * - compensationIntegrityByCycleId (authoritative activeCount + actives[])
+ */
+function loadCompensationRecordsIndexes_() {
+  const req = perfGetRequest_();
+  const mapReady =
+    req && req.cache.compensationByCycleId !== undefined;
+  const integrityReady =
+    req && req.cache.compensationIntegrityByCycleId !== undefined;
+  if (mapReady && integrityReady) {
+    return {
+      byCycleId: req.cache.compensationByCycleId,
+      integrityByCycleId: req.cache.compensationIntegrityByCycleId,
+    };
+  }
+
+  const map = {};
+  const integrity = {};
+  const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
+  if (!sheet) {
+    if (req) {
+      req.cache.compensationByCycleId = map;
+      req.cache.compensationIntegrityByCycleId = integrity;
+    }
+    return { byCycleId: map, integrityByCycleId: integrity };
+  }
+
+  const values = perfTimedSheetValues_(sheet, V31_COMP.RECORDS_SHEET);
+  if (values.length >= 2) {
+    const headers = values[0].map(String);
+    const cycleIndex = headers.indexOf('Review Cycle ID');
+    if (cycleIndex >= 0) {
+      for (let row = 1; row < values.length; row++) {
+        const object = {};
+        headers.forEach(function (header, index) {
+          object[header] = values[row][index];
+        });
+        const cycleId = String(values[row][cycleIndex] || '');
+        if (!cycleId) continue;
+        const candidate = { rowNumber: row + 1, object: object };
+
+        // Display map: prefer newest non-Failed over Failed.
+        const existing = map[cycleId];
+        if (!existing) {
+          map[cycleId] = candidate;
+        } else {
+          const existingFailed =
+            String(existing.object['Status'] || '') ===
+            V31_COMP.STATUS.FAILED;
+          const candidateFailed =
+            String(object['Status'] || '') === V31_COMP.STATUS.FAILED;
+          if (existingFailed && !candidateFailed) {
+            map[cycleId] = candidate;
+          } else if (!existingFailed && !candidateFailed) {
+            map[cycleId] = candidate;
+          }
+        }
+
+        // Integrity index: every active row (fail-closed when >1).
+        if (isCompensationRecordActive_(object)) {
+          if (!integrity[cycleId]) {
+            integrity[cycleId] = { activeCount: 0, actives: [] };
+          }
+          integrity[cycleId].activeCount += 1;
+          integrity[cycleId].actives.push(candidate);
+        }
+      }
+    }
+  }
+
+  if (req) {
+    req.cache.compensationByCycleId = map;
+    req.cache.compensationIntegrityByCycleId = integrity;
+  }
+  return { byCycleId: map, integrityByCycleId: integrity };
 }
 
 /**
@@ -174,52 +266,7 @@ function invalidatePerfSheetCache_(sheetName) {
  * shadow an active recommendation.
  */
 function getCompensationRecordsByCycleId_() {
-  const req = perfGetRequest_();
-  if (req && req.cache.compensationByCycleId !== undefined) {
-    return req.cache.compensationByCycleId;
-  }
-
-  const map = {};
-  const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
-  if (!sheet) {
-    if (req) req.cache.compensationByCycleId = map;
-    return map;
-  }
-
-  const values = perfTimedSheetValues_(sheet, V31_COMP.RECORDS_SHEET);
-  if (values.length >= 2) {
-    const headers = values[0].map(String);
-    const cycleIndex = headers.indexOf('Review Cycle ID');
-    for (let row = 1; row < values.length; row++) {
-      const object = {};
-      headers.forEach(function (header, index) {
-        object[header] = values[row][index];
-      });
-      const cycleId = String(values[row][cycleIndex] || '');
-      if (!cycleId) continue;
-      const candidate = { rowNumber: row + 1, object: object };
-      const existing = map[cycleId];
-      if (!existing) {
-        map[cycleId] = candidate;
-        continue;
-      }
-      const existingFailed =
-        String(existing.object['Status'] || '') ===
-        V31_COMP.STATUS.FAILED;
-      const candidateFailed =
-        String(object['Status'] || '') === V31_COMP.STATUS.FAILED;
-      if (existingFailed && !candidateFailed) {
-        map[cycleId] = candidate;
-      } else if (!existingFailed && !candidateFailed) {
-        // Prefer newest active row.
-        map[cycleId] = candidate;
-      }
-      // existing active + candidate failed → keep existing
-    }
-  }
-
-  if (req) req.cache.compensationByCycleId = map;
-  return map;
+  return loadCompensationRecordsIndexes_().byCycleId;
 }
 
 function isCompensationRecordActive_(record) {
@@ -229,30 +276,25 @@ function isCompensationRecordActive_(record) {
 }
 
 /**
+ * Request-scoped integrity index:
+ *   cycleId → { activeCount, actives: [{ rowNumber, object }] }
+ * Shares the single CompensationRecords read with getCompensationRecordsByCycleId_.
+ */
+function getCompensationIntegrityByCycleId_() {
+  return loadCompensationRecordsIndexes_().integrityByCycleId;
+}
+
+/**
  * Sheet-backed list of active (non-Failed) CompensationRecords for one cycle.
+ * Uses the request-scoped integrity index (one Sheet read per request).
  * Never applies a newest-wins heuristic — callers must fail closed on length > 1.
  */
 function listActiveCompensationRecordLocationsForCycle_(cycleId) {
   const id = String(cycleId || '');
-  const out = [];
-  if (!id) return out;
-  const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
-  if (!sheet) return out;
-  const values = perfTimedSheetValues_(sheet, V31_COMP.RECORDS_SHEET);
-  if (values.length < 2) return out;
-  const headers = values[0].map(String);
-  const cycleIndex = headers.indexOf('Review Cycle ID');
-  if (cycleIndex < 0) return out;
-  for (let row = 1; row < values.length; row++) {
-    if (String(values[row][cycleIndex] || '') !== id) continue;
-    const object = {};
-    headers.forEach(function (header, index) {
-      object[header] = values[row][index];
-    });
-    if (!isCompensationRecordActive_(object)) continue;
-    out.push({ rowNumber: row + 1, object: object });
-  }
-  return out;
+  if (!id) return [];
+  const entry = getCompensationIntegrityByCycleId_()[id];
+  if (!entry || !entry.actives || !entry.actives.length) return [];
+  return entry.actives.slice();
 }
 
 /**
@@ -387,7 +429,10 @@ function findActiveCompensationRecordByCycleOptional_(cycleId) {
  * Count active (non-Failed) CompensationRecords for one cycle.
  */
 function countActiveCompensationRecordsForCycle_(cycleId) {
-  return listActiveCompensationRecordLocationsForCycle_(cycleId).length;
+  const id = String(cycleId || '');
+  if (!id) return 0;
+  const entry = getCompensationIntegrityByCycleId_()[id];
+  return entry ? Number(entry.activeCount || 0) : 0;
 }
 
 function findCompensationRecordObjectById_(records, recordId) {

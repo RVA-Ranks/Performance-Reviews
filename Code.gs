@@ -6689,7 +6689,7 @@ function sendCombinedSignatureEmail_(cycleIdOrCycle, role) {
       ? 'signatureEmployee'
       : 'signatureHr';
 
-  deliverWorkflowNotification_(
+  return deliverWorkflowNotification_(
     cycleId,
     getWorkflowNotificationComponent_(key),
     function (cycle) {
@@ -6697,6 +6697,33 @@ function sendCombinedSignatureEmail_(cycleIdOrCycle, role) {
     },
     {}
   );
+}
+
+/**
+ * Classify durable workflow-notification outcomes for signature acceleration.
+ * sent / already-sent / in-progress → acceptable.
+ * error / unknown / Delivery Unknown → failure (release stays committed).
+ */
+function isSignatureNotificationAccelerationOk_(result) {
+  if (!result || typeof result !== 'object') return false;
+  const action = String(result.action || '');
+  if (action === 'sent') return true;
+  if (action === 'error') return false;
+  if (action === 'skip') {
+    const reason = String(result.reason || '');
+    if (
+      reason === 'sent' ||
+      reason === 'already-sent' ||
+      reason === 'in-progress' ||
+      reason === 'ineligible' ||
+      reason === 'superseded'
+    ) {
+      return true;
+    }
+    if (reason === 'unknown') return false;
+    return false;
+  }
+  return false;
 }
 
 function sendCombinedSignatureEmailBody_(cycle, role) {
