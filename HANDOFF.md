@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
 Backup: `backup/pre-lifecycle-transactional-closure`  
-Tip: see latest commit SHA on this branch (meeting handshake + audit recovery)
+Tip SHA: `7c10543a3974b651b03d7e2df6706742c213f168`
 
 Closes Coach P0–P3 plus the 78% blocker (employee meeting-note data loss):
 meeting-close draft-sync handshake before seal, preserve local drafts when
