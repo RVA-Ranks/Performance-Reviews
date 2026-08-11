@@ -1,5 +1,22 @@
 # V3.1 Changelog
 
+## Lifecycle transactional closure (Pass 3)
+
+- Multi-active compensation alerts are queued and flushed outside `withLock_`
+  (no nested ScriptLock on the corruption path).
+- `isV31CompensationComplete_` fails closed when >1 active CompensationRecords
+  exist (pure; no alert side effects).
+- Reconciliation repairs Failed mirrors with zero active replacements
+  (Pending/blank + Ready→Open).
+- Public `getCompensationContext()` employee branch reuses the release-stage
+  acknowledgement gate.
+- Second-participant ACK seal accelerates durable signature notices from the
+  common release-detected path (Employee/Manager/HR authorized; one-cycle
+  client guard; no duplicate polling).
+- Release wait timeout names the missing ACK role(s).
+- Endpoint regressions for multi-active lifecycle gates, zero-active crash
+  recovery, public employee disclosure, and unauthorized ACK.
+
 ## Lifecycle transactional closure (Pass 2)
 
 - Removed duplicate release-pending live polling; Manager wait uses the single

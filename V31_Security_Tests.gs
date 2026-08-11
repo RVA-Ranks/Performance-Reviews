@@ -446,9 +446,28 @@ function testSecurityEmployeeCompAckPrivacy_() {
     'Compensation Record ID': 'REC-SECRET',
   };
   const originalFind = findActiveCompensationRecordByCycleOptional_;
+  const originalGetUser = getCurrentUserEmail_;
+  const originalFindCycle = findCycle_;
+  const originalEnsure = ensureCompensationDataModel_;
+  const originalPay = getAssignmentPayRate_;
+  const originalIsHr = isHrUser_;
+  const originalFlush = flushPendingCompensationIntegrityAlerts_;
+
   findActiveCompensationRecordByCycleOptional_ = function () {
     return { rowNumber: 2, object: approved };
   };
+  ensureCompensationDataModel_ = function () {};
+  flushPendingCompensationIntegrityAlerts_ = function () {};
+  getAssignmentPayRate_ = function () {
+    return { found: true, rate: 40, annual: 83200 };
+  };
+  isHrUser_ = function () {
+    return false;
+  };
+  getCurrentUserEmail_ = function () {
+    return 'emp@aitheras.com';
+  };
+
   try {
     const openAck = getEmployeeCompensationAcknowledgement_({
       Status: PR.CYCLE.OPEN,
@@ -460,24 +479,63 @@ function testSecurityEmployeeCompAckPrivacy_() {
       'Pre-release employee acknowledgement must be null'
     );
 
-    const ack = getEmployeeCompensationAcknowledgement_({
-      Status: PR.CYCLE.SIGNATURES,
-      'Cycle ID': 'C-PRIV-SIG',
-      'Signatures Released At': new Date(),
-    });
-    assertTriggerTest_(!!ack, 'Post-release acknowledgement is visible');
+    findCycle_ = function () {
+      return {
+        rowNumber: 2,
+        object: {
+          'Cycle ID': 'C-PRIV-CTX',
+          Status: PR.CYCLE.OPEN,
+          'Manager Email': 'mgr@aitheras.com',
+          'Employee Email': 'emp@aitheras.com',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+          'Signatures Released At': '',
+        },
+      };
+    };
+    const openCtx = getCompensationContext('C-PRIV-CTX');
     assertTriggerTest_(
-      Number(ack.finalApprovedPayRate) === 50,
+      openCtx.acknowledgement === null,
+      'Public getCompensationContext must hide acknowledgement before release'
+    );
+
+    findCycle_ = function () {
+      return {
+        rowNumber: 2,
+        object: {
+          'Cycle ID': 'C-PRIV-CTX-SIG',
+          Status: PR.CYCLE.SIGNATURES,
+          'Manager Email': 'mgr@aitheras.com',
+          'Employee Email': 'emp@aitheras.com',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+          'Signatures Released At': new Date(),
+        },
+      };
+    };
+    const sigCtx = getCompensationContext('C-PRIV-CTX-SIG');
+    assertTriggerTest_(
+      !!sigCtx.acknowledgement,
+      'Public getCompensationContext may disclose after release'
+    );
+    assertTriggerTest_(
+      Number(sigCtx.acknowledgement.finalApprovedPayRate) === 50,
       'Approved rate is disclosed'
     );
     assertTriggerTest_(
-      typeof ack.managerBusinessJustification === 'undefined' &&
-        typeof ack.ownerDecisionNotes === 'undefined' &&
-        typeof ack.compensationRecordId === 'undefined' &&
-        typeof ack['Manager Business Justification'] === 'undefined',
+      typeof sigCtx.acknowledgement.managerBusinessJustification ===
+        'undefined' &&
+        typeof sigCtx.acknowledgement.ownerDecisionNotes === 'undefined' &&
+        typeof sigCtx.acknowledgement.compensationRecordId === 'undefined',
       'Private recommendation/owner/recovery fields must not be exposed'
     );
   } finally {
     findActiveCompensationRecordByCycleOptional_ = originalFind;
+    getCurrentUserEmail_ = originalGetUser;
+    findCycle_ = originalFindCycle;
+    ensureCompensationDataModel_ = originalEnsure;
+    getAssignmentPayRate_ = originalPay;
+    isHrUser_ = originalIsHr;
+    flushPendingCompensationIntegrityAlerts_ = originalFlush;
   }
 }

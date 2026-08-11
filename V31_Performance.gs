@@ -255,56 +255,114 @@ function listActiveCompensationRecordLocationsForCycle_(cycleId) {
   return out;
 }
 
+/**
+ * Pending System Health alerts for compensation integrity.
+ * Never write alerts from helpers that may run under withLock_ — nested
+ * ScriptLock acquisition can stall the corruption path.
+ */
+var pendingCompensationIntegrityAlerts_ = [];
+
+function queueCompensationIntegrityAlert_(payload) {
+  const item = payload || {};
+  const key = String(item.alertKey || '');
+  if (!key) return;
+  for (let i = 0; i < pendingCompensationIntegrityAlerts_.length; i++) {
+    if (
+      String(pendingCompensationIntegrityAlerts_[i].alertKey || '') === key
+    ) {
+      pendingCompensationIntegrityAlerts_[i] = item;
+      return;
+    }
+  }
+  pendingCompensationIntegrityAlerts_.push(item);
+}
+
+function flushPendingCompensationIntegrityAlerts_() {
+  const batch = pendingCompensationIntegrityAlerts_;
+  pendingCompensationIntegrityAlerts_ = [];
+  batch.forEach(function (item) {
+    try {
+      upsertSystemAlert_(item);
+    } catch (alertError) {
+      Logger.log(
+        'Compensation integrity alert flush failed: ' +
+          String(alertError.message || alertError)
+      );
+    }
+  });
+}
+
 function raiseMultiActiveCompensationAlert_(cycleId, actives) {
   const rows = actives || [];
-  try {
-    upsertSystemAlert_({
-      alertKey: buildSystemAlertKey_(
-        cycleId,
-        'Compensation',
-        'multiple_active_records'
-      ),
-      cycleId: String(cycleId || ''),
-      severity: 'Blocking',
-      component: 'Compensation',
-      subject:
-        'Multiple active compensation records for cycle ' + cycleId,
-      lastError:
-        'Found ' +
-        rows.length +
-        ' active CompensationRecords. Fail closed until HR reconciles.',
-      details: {
-        recordIds: rows.map(function (row) {
-          return String(
-            (row && row.object && row.object['Compensation Record ID']) ||
-              (row && row['Compensation Record ID']) ||
-              ''
-          );
-        }),
-      },
-    });
-  } catch (alertError) {
-    Logger.log(
-      'multi-active compensation alert failed: ' +
-        String(alertError.message || alertError)
-    );
-  }
+  queueCompensationIntegrityAlert_({
+    alertKey: buildSystemAlertKey_(
+      cycleId,
+      'Compensation',
+      'multiple_active_records'
+    ),
+    cycleId: String(cycleId || ''),
+    severity: 'Blocking',
+    component: 'Compensation',
+    subject: 'Multiple active compensation records for cycle ' + cycleId,
+    lastError:
+      'Found ' +
+      rows.length +
+      ' active CompensationRecords. Fail closed until HR reconciles.',
+    details: {
+      recordIds: rows.map(function (row) {
+        return String(
+          (row && row.object && row.object['Compensation Record ID']) ||
+            (row && row['Compensation Record ID']) ||
+            ''
+        );
+      }),
+    },
+  });
+}
+
+function queueAmbiguousCompensationMirrorAlert_(cycleId, mirrorId, recordId) {
+  queueCompensationIntegrityAlert_({
+    alertKey: buildSystemAlertKey_(
+      cycleId,
+      'Compensation',
+      'ambiguous_compensation_mirror'
+    ),
+    cycleId: String(cycleId || ''),
+    severity: 'Blocking',
+    component: 'Compensation',
+    subject: 'Ambiguous compensation mirror for cycle ' + cycleId,
+    lastError:
+      'Cycle Compensation Record ID does not match the single active record and is not a Failed historical row.',
+    details: {
+      mirrorId: String(mirrorId || ''),
+      activeRecordId: String(recordId || ''),
+    },
+  });
 }
 
 /**
  * Authoritative active-record gate for compensation money/approval mutations.
  * 0 active → null when allowZero, else throw.
  * 1 active → that location.
- * >1 active → System Health + throw (never pick newest).
+ * >1 active → queue System Health alert (flushed outside lock) + throw.
+ * Never calls upsertSystemAlert_ directly (nested lock hazard).
  */
 function requireSingleActiveCompensationRecord_(cycleId, options) {
   const opts = options || {};
   const actives = listActiveCompensationRecordLocationsForCycle_(cycleId);
   if (actives.length > 1) {
     raiseMultiActiveCompensationAlert_(cycleId, actives);
-    throw new Error(
+    const error = new Error(
       'Multiple active compensation records exist for this cycle. HR must reconcile before continuing.'
     );
+    error.code = 'MULTIPLE_ACTIVE_COMPENSATION_RECORDS';
+    error.cycleId = String(cycleId || '');
+    error.recordIds = actives.map(function (row) {
+      return String(
+        (row.object && row.object['Compensation Record ID']) || ''
+      );
+    });
+    throw error;
   }
   if (actives.length === 0) {
     if (opts.allowZero) return null;
@@ -313,13 +371,16 @@ function requireSingleActiveCompensationRecord_(cycleId, options) {
   return actives[0];
 }
 
+/**
+ * Soft lookup. Multi-active → null (no alert; pure readers / gates).
+ * Mutations must use requireSingleActiveCompensationRecord_.
+ */
 function findActiveCompensationRecordByCycleOptional_(cycleId) {
   const actives = listActiveCompensationRecordLocationsForCycle_(cycleId);
-  if (actives.length > 1) {
-    raiseMultiActiveCompensationAlert_(cycleId, actives);
+  if (actives.length !== 1) {
     return null;
   }
-  return actives[0] || null;
+  return actives[0];
 }
 
 /**
@@ -340,10 +401,25 @@ function findCompensationRecordObjectById_(records, recordId) {
   return null;
 }
 
+function clearStaleFailedCompensationMirror_(cycle) {
+  cycle['Compensation Decision'] = V31.COMPENSATION.PENDING;
+  cycle['Compensation Decision Notes'] = '';
+  cycle['Compensation Decision At'] = '';
+  cycle['Compensation Decision By'] = '';
+  cycle['Compensation Status'] = V31_COMP.STATUS.PENDING;
+  cycle['Compensation Record ID'] = '';
+  cycle['CAF Final PDF ID'] = '';
+  if (String(cycle['Status'] || '') === PR.CYCLE.READY) {
+    cycle['Status'] = PR.CYCLE.OPEN;
+  }
+}
+
 /**
  * Relink ReviewCycles to exactly one active CompensationRecord when the
  * cycle mirror is blank/stale and the active record is unambiguous.
+ * Also repairs Failed mirrors with zero active replacements (reset crash).
  * After a successful relink, recalculates ordinary readiness.
+ * System Alerts are queued — callers must flush outside withLock_.
  */
 function reconcileCompensationCycleLinks_() {
   const cycles = getAllObjects_(PR.SHEETS.CYCLES);
@@ -353,7 +429,12 @@ function reconcileCompensationCycleLinks_() {
   });
   const sheet = getSpreadsheet_().getSheetByName(V31_COMP.RECORDS_SHEET);
   if (!sheet) {
-    return { relinked: 0, multiActive: 0, readinessFixed: 0 };
+    return {
+      relinked: 0,
+      multiActive: 0,
+      readinessFixed: 0,
+      failedMirrorsCleared: 0,
+    };
   }
   const records = getAllObjects_(V31_COMP.RECORDS_SHEET);
   const activeByCycle = {};
@@ -371,6 +452,7 @@ function reconcileCompensationCycleLinks_() {
   let relinked = 0;
   let multiActive = 0;
   let readinessFixed = 0;
+  let failedMirrorsCleared = 0;
 
   Object.keys(activeByCycle).forEach(function (cycleId) {
     const actives = activeByCycle[cycleId];
@@ -399,34 +481,9 @@ function reconcileCompensationCycleLinks_() {
         mirrorId
       );
       if (mirrored && !isCompensationRecordActive_(mirrored)) {
-        // Stale Failed/historical mirror + exactly one active → repair.
         needsRelink = true;
       } else {
-        try {
-          upsertSystemAlert_({
-            alertKey: buildSystemAlertKey_(
-              cycleId,
-              'Compensation',
-              'ambiguous_compensation_mirror'
-            ),
-            cycleId: cycleId,
-            severity: 'Blocking',
-            component: 'Compensation',
-            subject:
-              'Ambiguous compensation mirror for cycle ' + cycleId,
-            lastError:
-              'Cycle Compensation Record ID does not match the single active record and is not a Failed historical row.',
-            details: {
-              mirrorId: mirrorId,
-              activeRecordId: recordId,
-            },
-          });
-        } catch (alertError) {
-          Logger.log(
-            'ambiguous compensation mirror alert failed: ' +
-              String(alertError.message || alertError)
-          );
-        }
+        queueAmbiguousCompensationMirrorAlert_(cycleId, mirrorId, recordId);
         return;
       }
     }
@@ -460,9 +517,41 @@ function reconcileCompensationCycleLinks_() {
     }
   });
 
+  // Zero-active crash recovery: Failed/historical mirror with no replacement.
+  Object.keys(byId).forEach(function (cycleId) {
+    if (activeByCycle[cycleId] && activeByCycle[cycleId].length) return;
+    const cycle = byId[cycleId];
+    const mirrorId = String(cycle['Compensation Record ID'] || '');
+    if (!mirrorId) return;
+    const mirrored = findCompensationRecordObjectById_(
+      allByCycle[cycleId] || [],
+      mirrorId
+    );
+    if (!mirrored || isCompensationRecordActive_(mirrored)) return;
+    try {
+      const location = findCycle_(cycleId);
+      const beforeStatus = String(location.object['Status'] || '');
+      clearStaleFailedCompensationMirror_(location.object);
+      location.object['Updated At'] = new Date();
+      writeCycle_(location.rowNumber, location.object);
+      failedMirrorsCleared += 1;
+      if (beforeStatus !== String(location.object['Status'] || '')) {
+        readinessFixed += 1;
+      }
+    } catch (error) {
+      Logger.log(
+        'Failed-mirror compensation clear failed for ' +
+          cycleId +
+          ': ' +
+          String(error.message || error)
+      );
+    }
+  });
+
   return {
     relinked: relinked,
     multiActive: multiActive,
     readinessFixed: readinessFixed,
+    failedMirrorsCleared: failedMirrorsCleared,
   };
 }

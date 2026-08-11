@@ -682,6 +682,16 @@ function ensureCompensationSealedForFinalization_(cycleId) {
 }
 
 function isV31CompensationComplete_(cycle) {
+  const cycleId = String((cycle && cycle['Cycle ID']) || '');
+  // Pure gate: multi-active corruption must never be treated as complete.
+  // Do not raise System Alerts here (may run under withLock_).
+  if (
+    cycleId &&
+    countActiveCompensationRecordsForCycle_(cycleId) > 1
+  ) {
+    return false;
+  }
+
   const decision = normalizeCompensationDecision_(
     cycle['Compensation Decision']
   );
@@ -699,9 +709,7 @@ function isV31CompensationComplete_(cycle) {
     );
   }
 
-  const active = findActiveCompensationRecordByCycleOptional_(
-    cycle['Cycle ID']
-  );
+  const active = findActiveCompensationRecordByCycleOptional_(cycleId);
   if (
     active &&
     String(active.object['Status'] || '') ===
@@ -763,74 +771,71 @@ function isApprovedCompensationAdjustment_(record) {
 
 /* ============================ PUBLIC APIS ============================ */
 
-function getCompensationContext(cycleId) {
-  ensureCompensationDataModel_();
-  const email = getCurrentUserEmail_();
-  const cycle = findCycle_(cycleId).object;
-  const isHr = isHrUser_(email);
-  const isManager =
-    normalizeEmail_(cycle['Manager Email']) === normalizeEmail_(email);
-  const isEmployee =
-    normalizeEmail_(cycle['Employee Email']) === normalizeEmail_(email);
-
-  if (!isHr && !isManager && !isEmployee) {
-    throw new Error('You are not authorized to view compensation context.');
+/**
+ * Public compensation mutations may detect multi-active under withLock_.
+ * Flush queued System Health alerts only after the lock is released.
+ */
+function runCompensationPublicMutation_(fn) {
+  try {
+    return fn();
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
   }
+}
 
-  const pay = getAssignmentPayRate_(cycle['Employee Email']);
-  const recordLoc = findCompensationRecordByCycleOptional_(cycleId);
-  const record = recordLoc ? recordLoc.object : null;
-  const decision = normalizeCompensationDecision_(
-    cycle['Compensation Decision']
-  );
+function getCompensationContext(cycleId) {
+  try {
+    ensureCompensationDataModel_();
+    const email = getCurrentUserEmail_();
+    const cycle = findCycle_(cycleId).object;
+    const isHr = isHrUser_(email);
+    const isManager =
+      normalizeEmail_(cycle['Manager Email']) === normalizeEmail_(email);
+    const isEmployee =
+      normalizeEmail_(cycle['Employee Email']) === normalizeEmail_(email);
 
-  const base = {
-    cycleId: String(cycleId),
-    decision: isEmployee ? '' : decision,
-    status: isEmployee
-      ? ''
-      : String(cycle['Compensation Status'] || V31_COMP.STATUS.PENDING),
-    compensationRequired: v31Boolean_(
-      getSettings_().COMPENSATION_DECISION_REQUIRED,
-      true
-    ),
-    canManage: isManager || isHr,
-    canHrDecide: isHr,
-    currentPayRateConfigured: !!(pay.found && pay.rate),
-    standardAnnualHours: V31_COMP.STANDARD_ANNUAL_HOURS,
-  };
+    if (!isHr && !isManager && !isEmployee) {
+      throw new Error('You are not authorized to view compensation context.');
+    }
 
-  if (isEmployee) {
-    // Hard privacy: denied / pending / no-adjustment → employee sees nothing.
-    if (
-      record &&
-      isApprovedCompensationAdjustment_(record) &&
-      record['Final Approved Pay Rate'] !== '' &&
-      record['Final Approved Pay Rate'] != null
-    ) {
+    const pay = getAssignmentPayRate_(cycle['Employee Email']);
+    const recordLoc = findCompensationRecordByCycleOptional_(cycleId);
+    const record = recordLoc ? recordLoc.object : null;
+    const decision = normalizeCompensationDecision_(
+      cycle['Compensation Decision']
+    );
+
+    const base = {
+      cycleId: String(cycleId),
+      decision: isEmployee ? '' : decision,
+      status: isEmployee
+        ? ''
+        : String(cycle['Compensation Status'] || V31_COMP.STATUS.PENDING),
+      compensationRequired: v31Boolean_(
+        getSettings_().COMPENSATION_DECISION_REQUIRED,
+        true
+      ),
+      canManage: isManager || isHr,
+      canHrDecide: isHr,
+      currentPayRateConfigured: !!(pay.found && pay.rate),
+      standardAnnualHours: V31_COMP.STANDARD_ANNUAL_HOURS,
+    };
+
+    if (isEmployee) {
+      // Same release-stage gate as getEmployeeCompensationAcknowledgement_.
       return Object.assign(base, {
-        acknowledgement: {
-          currentPayRate: Number(record['Original Pay Rate']),
-          currentAnnualSalary: Number(record['Original Annual Salary']),
-          finalApprovedPayRate: Number(record['Final Approved Pay Rate']),
-          finalApprovedAnnualSalary: Number(
-            record['Final Approved Annual Salary']
-          ),
-          approvedIncreasePercent: roundPercent_(
-            Number(record['Final Approved Percent'] || 0) * 100
-          ),
-          effectiveDate: formatDate_(record['Compensation Effective Date']),
-        },
+        acknowledgement: getEmployeeCompensationAcknowledgement_(cycle),
       });
     }
-    return Object.assign(base, { acknowledgement: null });
-  }
 
-  return Object.assign(base, {
-    currentPayRate: pay.rate,
-    currentAnnualSalary: pay.rate ? pay.annual : null,
-    record: record ? toCompensationRecordView_(record, isHr) : null,
-  });
+    return Object.assign(base, {
+      currentPayRate: pay.rate,
+      currentAnnualSalary: pay.rate ? pay.annual : null,
+      record: record ? toCompensationRecordView_(record, isHr) : null,
+    });
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 function toCompensationRecordView_(record, isHr) {
@@ -903,6 +908,7 @@ function toCompensationRecordView_(record, isHr) {
 }
 
 function submitNoCompensationAdjustment(cycleId, notes) {
+  return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
@@ -987,9 +993,11 @@ function submitNoCompensationAdjustment(cycleId, notes) {
   }
   result.auditWarning = auditWarning;
   return result;
+  });
 }
 
 function submitCompensationRecommendation(cycleId, payload) {
+  return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
@@ -1163,6 +1171,7 @@ function submitCompensationRecommendation(cycleId, payload) {
   }
 
   return result;
+  });
 }
 
 function validateCompensationRecommendation_(payload, currentRate) {
@@ -1218,6 +1227,7 @@ function validateCompensationRecommendation_(payload, currentRate) {
 }
 
 function recordCompensationOwnerDecision(cycleId, payload) {
+  return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
@@ -1330,6 +1340,7 @@ function recordCompensationOwnerDecision(cycleId, payload) {
   }
 
   return result;
+  });
 }
 
 function validateOwnerDecisionPayload_(payload, record) {
@@ -1437,6 +1448,7 @@ function validateOwnerDecisionPayload_(payload, record) {
 }
 
 function editCompensationOwnerDecision(cycleId, payload) {
+  return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
@@ -1577,9 +1589,11 @@ function editCompensationOwnerDecision(cycleId, payload) {
   }
 
   return result;
+  });
 }
 
 function resetCompensationDecision(cycleId, reason) {
+  return runCompensationPublicMutation_(function () {
   const result = withLock_(function () {
     ensureCompensationDataModel_();
     const email = getCurrentUserEmail_();
@@ -1691,6 +1705,7 @@ function resetCompensationDecision(cycleId, reason) {
   }
   result.auditWarning = auditWarning;
   return result;
+  });
 }
 
 /**
@@ -2997,6 +3012,7 @@ function recoverCompensationRateUpdate(cycleId) {
 }
 
 function recoverCompensationRateUpdate_(cycleId) {
+  return runCompensationPublicMutation_(function () {
   const email = getCurrentUserEmail_();
   if (!isHrUser_(email)) {
     throw new Error('Only HR may recover compensation rate updates.');
@@ -3029,4 +3045,5 @@ function recoverCompensationRateUpdate_(cycleId) {
     return { ok: true, skipped: true, status: reset.status };
   }
   return applyCompensationRateUpdateOnce_(cycleId);
+  });
 }

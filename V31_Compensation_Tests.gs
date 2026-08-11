@@ -789,8 +789,7 @@ function runV31CompensationTests_() {
 
   check('requireSingleActiveCompensationRecord_ fails closed on multi-active', function () {
     const originalList = listActiveCompensationRecordLocationsForCycle_;
-    const originalAlert = raiseMultiActiveCompensationAlert_;
-    let alerted = false;
+    pendingCompensationIntegrityAlerts_ = [];
     listActiveCompensationRecordLocationsForCycle_ = function () {
       return [
         {
@@ -809,9 +808,6 @@ function runV31CompensationTests_() {
         },
       ];
     };
-    raiseMultiActiveCompensationAlert_ = function () {
-      alerted = true;
-    };
     try {
       let failed = false;
       try {
@@ -824,10 +820,98 @@ function runV31CompensationTests_() {
         );
       }
       assert_(failed, 'multi-active must throw');
-      assert_(alerted, 'System Health alert raised');
+      assert_(
+        pendingCompensationIntegrityAlerts_.length >= 1,
+        'alert queued (not written under lock)'
+      );
+      assert_(
+        pendingCompensationIntegrityAlerts_[0].alertKey.indexOf(
+          'multiple_active_records'
+        ) !== -1,
+        'queued multi-active alert key'
+      );
     } finally {
       listActiveCompensationRecordLocationsForCycle_ = originalList;
-      raiseMultiActiveCompensationAlert_ = originalAlert;
+      pendingCompensationIntegrityAlerts_ = [];
+    }
+  });
+
+  check('isV31CompensationComplete_ fails closed on multi-active mirror', function () {
+    const originalCount = countActiveCompensationRecordsForCycle_;
+    countActiveCompensationRecordsForCycle_ = function () {
+      return 2;
+    };
+    try {
+      assert_(
+        isV31CompensationComplete_({
+          'Cycle ID': 'C-MULTI-GATE',
+          'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+          'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+        }) === false,
+        'resolved mirror must not override multi-active'
+      );
+    } finally {
+      countActiveCompensationRecordsForCycle_ = originalCount;
+    }
+  });
+
+  check('reconcile clears Failed mirror with zero active records', function () {
+    const store = {
+      'Cycle ID': 'C-ZERO',
+      Status: PR.CYCLE.READY,
+      'Compensation Decision': V31.COMPENSATION.ADJUSTMENT,
+      'Compensation Status': V31_COMP.STATUS.AWAITING_SIGNATURES,
+      'Compensation Record ID': 'REC-FAIL',
+      'CAF Final PDF ID': 'caf-old',
+    };
+    const originals = {
+      getAllObjects_: getAllObjects_,
+      getSpreadsheet_: getSpreadsheet_,
+      findCycle_: findCycle_,
+      writeCycle_: writeCycle_,
+    };
+    getSpreadsheet_ = function () {
+      return {
+        getSheetByName: function () {
+          return { getName: function () { return V31_COMP.RECORDS_SHEET; } };
+        },
+      };
+    };
+    getAllObjects_ = function (sheetName) {
+      if (sheetName === PR.SHEETS.CYCLES) return [store];
+      if (sheetName === V31_COMP.RECORDS_SHEET) {
+        return [
+          {
+            'Compensation Record ID': 'REC-FAIL',
+            'Review Cycle ID': 'C-ZERO',
+            Status: V31_COMP.STATUS.FAILED,
+          },
+        ];
+      }
+      return [];
+    };
+    findCycle_ = function () {
+      return { rowNumber: 2, object: store };
+    };
+    writeCycle_ = function () {};
+    try {
+      const result = reconcileCompensationCycleLinks_();
+      assert_(result.failedMirrorsCleared >= 1, 'failed mirror cleared');
+      assert_(
+        String(store['Compensation Decision']) === V31.COMPENSATION.PENDING,
+        'decision pending'
+      );
+      assert_(
+        String(store['Compensation Record ID']) === '',
+        'record id blank'
+      );
+      assert_(String(store['CAF Final PDF ID']) === '', 'caf blank');
+      assert_(String(store['Status']) === PR.CYCLE.OPEN, 'Ready demoted');
+    } finally {
+      getAllObjects_ = originals.getAllObjects_;
+      getSpreadsheet_ = originals.getSpreadsheet_;
+      findCycle_ = originals.findCycle_;
+      writeCycle_ = originals.writeCycle_;
     }
   });
 

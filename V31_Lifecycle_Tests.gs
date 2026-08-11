@@ -565,6 +565,89 @@ function runV31LifecycleTests_() {
     })
   );
 
+  results.push(
+    lifeCase_(
+      'prepareRelease and startMeeting reject multi-active compensation',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-MULTI');
+        store['Compensation Decision'] = V31.COMPENSATION.ADJUSTMENT;
+        store['Compensation Status'] = V31_COMP.STATUS.AWAITING_SIGNATURES;
+        const originalCount = countActiveCompensationRecordsForCycle_;
+        countActiveCompensationRecordsForCycle_ = function () {
+          return 2;
+        };
+        try {
+          assertLife_(
+            isV31CompensationComplete_(store) === false,
+            'gate false'
+          );
+          withLifecycleEndpointDoubles_(
+            store,
+            'mgr@aitheras.com',
+            {},
+            function () {
+              store.Status = PR.CYCLE.MEETING;
+              let prepFailed = false;
+              try {
+                prepareReleaseReviewSignatures(store['Cycle ID']);
+              } catch (error) {
+                prepFailed = /compensation/i.test(
+                  String(error.message || error)
+                );
+              }
+              assertLife_(prepFailed, 'prepareRelease rejects');
+
+              store.Status = PR.CYCLE.READY;
+              let startFailed = false;
+              try {
+                startReviewMeeting(store['Cycle ID']);
+              } catch (error) {
+                startFailed = /compensation/i.test(
+                  String(error.message || error)
+                );
+              }
+              assertLife_(startFailed, 'startReviewMeeting rejects');
+            }
+          );
+        } finally {
+          countActiveCompensationRecordsForCycle_ = originalCount;
+        }
+      }
+    )
+  );
+
+  results.push(
+    lifeCase_(
+      'unauthorized acknowledgeMeetingRelease is rejected',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-UNAUTH');
+        withLifecycleEndpointDoubles_(store, 'mgr@aitheras.com', {}, function () {
+          prepareReleaseReviewSignatures(store['Cycle ID']);
+        });
+        withLifecycleEndpointDoubles_(
+          store,
+          'other@aitheras.com',
+          {},
+          function () {
+            const meeting = parseMeetingJson_(store);
+            let rejected = false;
+            try {
+              acknowledgeMeetingRelease(store['Cycle ID'], {
+                releaseRequestId: meeting.releaseRequestId,
+                contentRevision: meeting.contentRevision,
+              });
+            } catch (error) {
+              rejected = /not authorized/i.test(
+                String(error.message || error)
+              );
+            }
+            assertLife_(rejected, 'unauthorized ACK rejected');
+          }
+        );
+      }
+    )
+  );
+
   const failed = results.filter(function (row) {
     return !row.ok;
   });

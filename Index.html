@@ -5483,10 +5483,19 @@ function scheduleMeetingReleaseWaitTimeout_(cycleId) {
     if (!currentCycle.meetingReleasePending && !currentCycle.releaseRequestId) {
       return;
     }
+    const missing = currentCycle.missingReleaseAcks || [];
+    let waitingFor = 'the other participant';
+    if (missing.length === 1) {
+      waitingFor = 'the ' + missing[0];
+    } else if (missing.length > 1) {
+      waitingFor = missing.join(' and ');
+    }
     showToast(
       'warning',
       'Waiting for participant sync',
-      'The packet is not sealed yet. Keep this page open until the Employee acknowledges.'
+      'The packet is not sealed yet. Keep this page open until ' +
+        waitingFor +
+        ' acknowledges.'
     );
   }, MEETING_RELEASE_ACK_WAIT_MS);
 }
@@ -5524,11 +5533,22 @@ function warnSignatureReleaseEmailAcceleration_(emailResult, error) {
 }
 
 function accelerateSignatureReleaseEmails_(cycleId) {
-  server('accelerateSignatureReleaseNotifications', cycleId)
+  const id = String(cycleId || '');
+  if (!id) return;
+  if (!window.__signatureEmailAccelByCycle) {
+    window.__signatureEmailAccelByCycle = {};
+  }
+  if (window.__signatureEmailAccelByCycle[id]) {
+    return;
+  }
+  window.__signatureEmailAccelByCycle[id] = true;
+  server('accelerateSignatureReleaseNotifications', id)
     .then(function(emailResult) {
       warnSignatureReleaseEmailAcceleration_(emailResult);
     })
     .catch(function(error) {
+      // Allow one retry if the first attempt failed before outbox claim.
+      window.__signatureEmailAccelByCycle[id] = false;
       warnSignatureReleaseEmailAcceleration_(null, error);
     });
 }
@@ -5988,6 +6008,13 @@ function handleSignatureReleaseDetection_(live) {
   const isEmployee = !!(currentCycle && currentCycle.isEmployee);
   const isManager = !!(currentCycle && currentCycle.isManager);
   const isHr = !!(currentCycle && currentCycle.isHr);
+  const cycleId = currentCycle && currentCycle.cycleId;
+
+  // Common second-ACK seal path: accelerate durable signature notices once
+  // per browser/cycle without reintroducing a second polling loop.
+  if (cycleId) {
+    accelerateSignatureReleaseEmails_(cycleId);
+  }
 
   if (document.hidden) {
     document.title = 'Signature Ready — AITHERAS Review';

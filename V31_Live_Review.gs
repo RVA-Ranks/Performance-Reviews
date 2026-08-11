@@ -111,10 +111,11 @@ function accelerateSignatureReleaseNotifications(cycleId) {
   const cycle = findCycle_(id).object;
   const authorized =
     isHrUser_(email) ||
-    normalizeEmail_(cycle['Manager Email']) === normalizeEmail_(email);
+    normalizeEmail_(cycle['Manager Email']) === normalizeEmail_(email) ||
+    normalizeEmail_(cycle['Employee Email']) === normalizeEmail_(email);
   if (!authorized) {
     throw new Error(
-      'Only the assigned manager or HR may accelerate signature notifications.'
+      'Only the assigned manager, employee, or HR may accelerate signature notifications after release.'
     );
   }
 

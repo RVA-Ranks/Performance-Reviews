@@ -8,20 +8,20 @@ highest-priority source of truth.
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
-Backup: `backup/pre-lifecycle-pass2-87` (also `backup/pre-lifecycle-transactional-closure`)  
-Tip SHA: `9bad34a5b35b8e2046d4166326f7f42810a396d2`
+Backup: `backup/pre-lifecycle-pass3-91` (also `backup/pre-lifecycle-pass2-87`)  
+Tip SHA: *(set after commit)*
 
-Pass 2 closes Coach 87% majors: single live-review poller (no duplicate release
-RPC loop), fail-closed multi-active compensation mutations, orphan relink
-readiness recalculation, pending/deterministic compensation + lifecycle audit
-IDs, shared release-flush Promise, server-required reset reason, public
-endpoint orchestration tests, security ACK/privacy regressions.
+Pass 3 closes Coach 91% majors: deferred multi-active System Health (no nested
+lock), lifecycle compensation gate fail-closed on multi-active, zero-active
+Failed-mirror crash recovery, public `getCompensationContext` release-stage
+privacy, second-ACK signature email acceleration without duplicate polling.
 
-Preserve finalization/PDF/signature Attempt-ID architecture and the working
-release ACK / `meetingLocalRevision` design.
+Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
+design and frozen finalization/PDF/signature Attempt-ID architecture.
 
 Run `runV31LifecycleTests_()`, `runV31CompensationTests_()`, and
-`runV31SecurityTests_()` in Apps Script. Stop for Coach before merge.
+`runV31SecurityTests_()` in Apps Script. Complete the three Blocking Sandbox
+authorization cases before merge. Stop for Coach before merge.
 
 ## Active work — Concurrent signature handoff
 
