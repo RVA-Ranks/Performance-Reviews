@@ -5518,7 +5518,7 @@ function warnSignatureReleaseEmailAcceleration_(emailResult, error) {
     showToast(
       'warning',
       'Signature emails',
-      'Signatures are available now. One or more email notices are still pending and will retry through the durable notification system. ' +
+      'Signatures are available now. One or more email notices are pending in the durable workflow queue and may require HR recovery. ' +
         errorMessage(error)
     );
     return;
@@ -5527,7 +5527,7 @@ function warnSignatureReleaseEmailAcceleration_(emailResult, error) {
     showToast(
       'warning',
       'Signature emails',
-      'Signatures are available now. One or more email notices are still pending and will retry through the durable notification system.'
+      'Signatures are available now. One or more email notices are pending in the durable workflow queue and may require HR recovery.'
     );
   }
 }
@@ -6371,7 +6371,7 @@ async function submitSignature() {
             showToast(
               'warning',
               'HR notification',
-              'Your signature is recorded. The HR signature notice is still pending and will retry automatically.'
+              'Your signature is recorded. The HR signature notice is pending in the durable workflow queue and may require HR recovery.'
             );
           }
         })
@@ -6379,7 +6379,7 @@ async function submitSignature() {
           showToast(
             'warning',
             'HR notification',
-            'Your signature is recorded. The HR signature notice is still pending and will retry automatically.'
+            'Your signature is recorded. The HR signature notice is pending in the durable workflow queue and may require HR recovery.'
           );
         });
     }

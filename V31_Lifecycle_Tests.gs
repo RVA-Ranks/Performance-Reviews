@@ -778,6 +778,93 @@ function runV31LifecycleTests_() {
     )
   );
 
+  results.push(
+    lifeCase_(
+      'accelerateHrSignatureNotification propagates durable outbox outcomes',
+      function () {
+        const store = lifeEndpointMeetingCycle_('LIFE-HR-ACCEL');
+        store.Status = PR.CYCLE.SIGNATURES;
+        store['Signatures Released At'] = new Date();
+        store['Manager Signature File ID'] = 'mgr-sig';
+        store['Employee Signature File ID'] = 'emp-sig';
+        store['MGR Manager Signature ID'] = 'mgr-sig';
+        store['SELF Manager Signature ID'] = 'mgr-sig';
+        store['MGR Employee Signature ID'] = 'emp-sig';
+        store['SELF Employee Signature ID'] = 'emp-sig';
+        const originals = {
+          getCurrentUserEmail_: getCurrentUserEmail_,
+          assertDomain_: assertDomain_,
+          findCycle_: findCycle_,
+          assertLiveReviewAccess_: assertLiveReviewAccess_,
+          getCombinedSignatureState_: getCombinedSignatureState_,
+          sendCombinedSignatureEmail_: sendCombinedSignatureEmail_,
+        };
+        getCurrentUserEmail_ = function () {
+          return 'mgr@aitheras.com';
+        };
+        assertDomain_ = function () {};
+        findCycle_ = function () {
+          return { rowNumber: 2, object: store };
+        };
+        assertLiveReviewAccess_ = function () {
+          return PR.ROLE.MANAGER;
+        };
+        getCombinedSignatureState_ = function () {
+          return {
+            managerSigned: true,
+            employeeSigned: true,
+            hrSigned: false,
+          };
+        };
+        try {
+          sendCombinedSignatureEmail_ = function () {
+            return { action: 'sent' };
+          };
+          assertLife_(
+            accelerateHrSignatureNotification(store['Cycle ID']).ok === true,
+            'sent => ok'
+          );
+
+          sendCombinedSignatureEmail_ = function () {
+            return { action: 'error', error: 'Injected mail failure' };
+          };
+          const errResult = accelerateHrSignatureNotification(
+            store['Cycle ID']
+          );
+          assertLife_(errResult.ok === false, 'error => ok false');
+          assertLife_(
+            getCombinedSignatureState_(store).managerSigned === true &&
+              getCombinedSignatureState_(store).employeeSigned === true,
+            'participant signatures remain'
+          );
+
+          sendCombinedSignatureEmail_ = function () {
+            return { action: 'skip', reason: 'unknown' };
+          };
+          assertLife_(
+            accelerateHrSignatureNotification(store['Cycle ID']).ok === false,
+            'Delivery Unknown => ok false'
+          );
+
+          sendCombinedSignatureEmail_ = function () {
+            return { action: 'skip', reason: 'sent' };
+          };
+          assertLife_(
+            accelerateHrSignatureNotification(store['Cycle ID']).ok === true,
+            'already-sent => ok'
+          );
+        } finally {
+          getCurrentUserEmail_ = originals.getCurrentUserEmail_;
+          assertDomain_ = originals.assertDomain_;
+          findCycle_ = originals.findCycle_;
+          assertLiveReviewAccess_ = originals.assertLiveReviewAccess_;
+          getCombinedSignatureState_ = originals.getCombinedSignatureState_;
+          sendCombinedSignatureEmail_ = originals.sendCombinedSignatureEmail_;
+        }
+      }
+    )
+  );
+
   const failed = results.filter(function (row) {
     return !row.ok;
   });

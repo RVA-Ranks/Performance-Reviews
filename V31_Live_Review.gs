@@ -229,18 +229,30 @@ function accelerateHrSignatureNotification(cycleId) {
   }
 
   try {
-    sendCombinedSignatureEmail_(id, PR.ROLE.HR);
+    const delivery = sendCombinedSignatureEmail_(id, PR.ROLE.HR);
+    const notificationOk =
+      isSignatureNotificationAccelerationOk_(delivery);
     return {
-      ok: true,
+      ok: notificationOk,
       cycleId: id,
-      message: 'HR signature notification accelerated.',
+      action: delivery && delivery.action,
+      reason: delivery && delivery.reason,
+      error: notificationOk
+        ? ''
+        : String(
+            (delivery && (delivery.error || delivery.reason)) ||
+              'HR signature notification did not complete'
+          ),
+      message: notificationOk
+        ? 'HR signature notification accelerated.'
+        : 'HR signature notification is pending in the durable workflow queue and may require HR recovery.',
     };
   } catch (error) {
     return {
       ok: false,
       cycleId: id,
       message:
-        'HR signature notification is pending retry through the durable outbox.',
+        'HR signature notification is pending in the durable workflow queue and may require HR recovery.',
       error: String(error.message || error),
     };
   }

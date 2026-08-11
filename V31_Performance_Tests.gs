@@ -571,5 +571,45 @@ function testCompensationIntegrityCacheInvalidation_() {
     req.cache.compensationByCycleId === undefined,
     'byCycle cleared'
   );
+
+  // Mutation-boundary coverage: write/append must clear both caches.
+  const originalWrite = writeObject_;
+  const originalAppend = appendObject_;
+  writeObject_ = function () {};
+  appendObject_ = function () {
+    return 3;
+  };
+  try {
+    req.cache.compensationIntegrityByCycleId = {
+      C1: { activeCount: 1, actives: [] },
+    };
+    req.cache.compensationByCycleId = { C1: { rowNumber: 2, object: {} } };
+    writeCompensationRecord_(2, {
+      'Compensation Record ID': 'REC-1',
+      Status: V31_COMP.STATUS.AWAITING_OWNER,
+    });
+    assertPerf_(
+      req.cache.compensationIntegrityByCycleId === undefined &&
+        req.cache.compensationByCycleId === undefined,
+      'writeCompensationRecord_ clears both caches'
+    );
+
+    req.cache.compensationIntegrityByCycleId = {
+      C1: { activeCount: 1, actives: [] },
+    };
+    req.cache.compensationByCycleId = { C1: { rowNumber: 2, object: {} } };
+    appendCompensationRecord_({
+      'Compensation Record ID': 'REC-2',
+      Status: V31_COMP.STATUS.AWAITING_OWNER,
+    });
+    assertPerf_(
+      req.cache.compensationIntegrityByCycleId === undefined &&
+        req.cache.compensationByCycleId === undefined,
+      'appendCompensationRecord_ clears both caches'
+    );
+  } finally {
+    writeObject_ = originalWrite;
+    appendObject_ = originalAppend;
+  }
   perfEndRequest_();
 }

@@ -8,13 +8,12 @@ highest-priority source of truth.
 ## Active work — Lifecycle transactional closure
 
 Branch: `fix/lifecycle-transactional-closure` (from concurrent tip `edb705f`)  
-Backup: `backup/pre-lifecycle-pass4-92` (also `backup/pre-lifecycle-pass3-91`)  
-Tip SHA: `f83a7b6101a60498363966cb6c0b6988309b90a7`
+Backup: `backup/pre-lifecycle-pass5-94` (also `backup/pre-lifecycle-pass4-92`)  
+Tip SHA: *(set after commit)*
 
-Pass 4 closes Coach 92% majors: request-scoped compensation integrity counts
-(one CompensationRecords read per request), truthful signature-email
-acceleration outcomes, expanded integrity-alert flush coverage, and
-performance/acceleration regressions.
+Pass 5 closes Coach 94% majors: truthful HR signature-notification acceleration
+outcomes, remaining HR recommendation recovery integrity-alert flushes, and
+mutation-boundary compensation cache regressions.
 
 Preserve meetingLocalRevision / releaseRequestId / releaseRequestedBy ACK
 design and frozen finalization/PDF/signature Attempt-ID architecture.

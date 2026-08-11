@@ -1,5 +1,16 @@
 # V3.1 Changelog
 
+## Lifecycle transactional closure (Pass 5)
+
+- HR signature-notification acceleration now propagates durable outbox
+  error/Delivery Unknown outcomes without rolling back participant signatures.
+- Completed deferred compensation-integrity alert flushing for HR
+  recommendation email reconciliation endpoints.
+- Added HR signature acceleration regressions for Sent, Error, and
+  Delivery Unknown outcomes.
+- Strengthened compensation cache tests through real write/append boundaries.
+- Softened Preview-safe signature-email warning copy.
+
 ## Lifecycle transactional closure (Pass 4)
 
 - Request-scoped compensation integrity index shares one CompensationRecords

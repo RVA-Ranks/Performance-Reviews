@@ -2046,6 +2046,7 @@ function sendCompensationRecommendationHrEmailBody_(cycle, record, recipient) {
  * Never sends email.
  */
 function markCompensationRecommendationHrEmailConfirmed(cycleId, payload) {
+  try {
   const actor = assertActiveHrDomain_();
   const input = payload || {};
   const evidenceNote = String(input.evidenceNote || '').trim();
@@ -2104,6 +2105,9 @@ function markCompensationRecommendationHrEmailConfirmed(cycleId, payload) {
     SpreadsheetApp.flush();
   });
   return { ok: true, eventId: eventId, status: V31.DELIVERY.SENT };
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /**
@@ -2111,6 +2115,7 @@ function markCompensationRecommendationHrEmailConfirmed(cycleId, payload) {
  * Requires exact confirmation; never automatic.
  */
 function resendCompensationRecommendationHrEmailUnknown(cycleId, payload) {
+  try {
   const actor = assertActiveHrDomain_();
   const input = payload || {};
   if (
@@ -2154,6 +2159,9 @@ function resendCompensationRecommendationHrEmailUnknown(cycleId, payload) {
     allowUnknownResend: true,
     expectedAttemptId: String(input.originalAttemptId || ''),
   });
+  } finally {
+    flushPendingCompensationIntegrityAlerts_();
+  }
 }
 
 /**

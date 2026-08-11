@@ -1300,6 +1300,91 @@ function runV31CompensationTests_() {
     }
   });
 
+  check('HR recommendation recovery flushes multi-active integrity alerts', function () {
+    pendingCompensationIntegrityAlerts_ = [];
+    let flushed = 0;
+    const originals = {
+      assertActiveHrDomain_: assertActiveHrDomain_,
+      findCompensationRecordByCycle_: findCompensationRecordByCycle_,
+      flushPendingCompensationIntegrityAlerts_:
+        flushPendingCompensationIntegrityAlerts_,
+      listActiveCompensationRecordLocationsForCycle_:
+        listActiveCompensationRecordLocationsForCycle_,
+    };
+    assertActiveHrDomain_ = function () {
+      return 'hr@aitheras.com';
+    };
+    listActiveCompensationRecordLocationsForCycle_ = function () {
+      return [
+        {
+          rowNumber: 2,
+          object: {
+            'Compensation Record ID': 'A',
+            Status: V31_COMP.STATUS.AWAITING_OWNER,
+          },
+        },
+        {
+          rowNumber: 3,
+          object: {
+            'Compensation Record ID': 'B',
+            Status: V31_COMP.STATUS.AWAITING_OWNER,
+          },
+        },
+      ];
+    };
+    findCompensationRecordByCycle_ = function (cycleId) {
+      return requireSingleActiveCompensationRecord_(cycleId, {
+        allowZero: false,
+      });
+    };
+    flushPendingCompensationIntegrityAlerts_ = function () {
+      flushed += 1;
+      pendingCompensationIntegrityAlerts_ = [];
+    };
+    try {
+      let markRejected = false;
+      try {
+        markCompensationRecommendationHrEmailConfirmed('C-FLUSH', {
+          confirmed: true,
+          confirmationToken: V31_COMP.HR_RECOMMENDATION_CONFIRM_TOKEN,
+          evidenceNote: 'evidence',
+          originalAttemptId: 'attempt-1',
+        });
+      } catch (error) {
+        markRejected = /Multiple active compensation records/i.test(
+          String(error.message || error)
+        );
+      }
+      assert_(markRejected, 'mark confirm rejects multi-active');
+      assert_(flushed >= 1, 'mark confirm flushes integrity alerts');
+
+      flushed = 0;
+      pendingCompensationIntegrityAlerts_ = [];
+      let resendRejected = false;
+      try {
+        resendCompensationRecommendationHrEmailUnknown('C-FLUSH', {
+          confirmed: true,
+          confirmationToken: V31_COMP.HR_RECOMMENDATION_RESEND_TOKEN,
+          originalAttemptId: 'attempt-1',
+        });
+      } catch (error) {
+        resendRejected = /Multiple active compensation records/i.test(
+          String(error.message || error)
+        );
+      }
+      assert_(resendRejected, 'resend rejects multi-active');
+      assert_(flushed >= 1, 'resend flushes integrity alerts');
+    } finally {
+      assertActiveHrDomain_ = originals.assertActiveHrDomain_;
+      findCompensationRecordByCycle_ = originals.findCompensationRecordByCycle_;
+      flushPendingCompensationIntegrityAlerts_ =
+        originals.flushPendingCompensationIntegrityAlerts_;
+      listActiveCompensationRecordLocationsForCycle_ =
+        originals.listActiveCompensationRecordLocationsForCycle_;
+      pendingCompensationIntegrityAlerts_ = [];
+    }
+  });
+
   const failed = results.filter(function (item) {
     return !item.ok;
   });
