@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-correction-88` (also `backup/pre-live-ux-perf-package`)  
-Tip SHA: _(pending correction commit)_
+Tip SHA: `41826d2d4d6124ddd523cfffe4d8ec18c743b11e`
 
 UX-0 accepted. UX-1–UX-6 shipped, then Coach 88% correction:
 
