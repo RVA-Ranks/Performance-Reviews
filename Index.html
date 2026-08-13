@@ -7263,14 +7263,34 @@ async function submitOfflineReviewOverride_(reason) {
   }
 }
 
+function applyLiveSignatureReadinessToCycle_(target, status, signatureTaskReady) {
+  if (!target) return;
+  if (signatureTaskReady) {
+    target.actionKey = 'signature';
+    target.actionRequired = true;
+    target.actionLabel = 'Sign Review Packet';
+    target.actionTone = 'primary';
+    return;
+  }
+  if (String(status || target.status || '') === 'Awaiting Signatures') {
+    target.actionRequired = false;
+    target.actionTone = 'outline';
+    target.actionKey = 'overview';
+    target.actionLabel = 'View Signature Status';
+    return;
+  }
+  if (target.actionKey === 'signature') {
+    clearStaleSignatureActionOnCycle_(target, status);
+  }
+}
+
 function applyOfflineReviewReleaseResult_(result) {
   if (!currentCycle || !result) return;
-  if (result.liveState) {
-    patchCycleFromLiveState_(result.liveState);
+  const live = result.liveState || null;
+  if (live) {
+    patchCycleFromLiveState_(live);
   } else {
     currentCycle.status = result.cycleStatus || 'Awaiting Signatures';
-    currentCycle.actionKey = 'signature';
-    currentCycle.actionLabel = 'Sign Review Packet';
   }
   currentCycle.signatureReleaseMode =
     result.signatureReleaseMode || 'Offline Review Override';
@@ -7283,6 +7303,13 @@ function applyOfflineReviewReleaseResult_(result) {
   currentCycle.canOfflineReviewOverride = false;
   currentCycle.canReleaseSignatures = false;
   currentCycle.canStartMeeting = false;
+  const signatureTaskReady = !!(live && live.signatureTaskReady);
+  applyLiveSignatureReadinessToCycle_(
+    currentCycle,
+    currentCycle.status,
+    signatureTaskReady
+  );
+  reconcileCurrentCyclePrimaryAction_();
   if (state && Array.isArray(state.cycles)) {
     state.cycles.forEach(function(row) {
       if (String(row.cycleId) !== String(currentCycle.cycleId)) return;
@@ -7292,10 +7319,11 @@ function applyOfflineReviewReleaseResult_(result) {
       row.canOfflineReviewOverride = false;
       row.canReleaseSignatures = false;
       row.canStartMeeting = false;
-      row.actionKey = 'signature';
-      row.actionRequired = true;
-      row.actionLabel = 'Sign Review Packet';
-      row.actionTone = 'primary';
+      applyLiveSignatureReadinessToCycle_(
+        row,
+        currentCycle.status,
+        signatureTaskReady
+      );
     });
   }
   currentCycleTab = 'signatures';

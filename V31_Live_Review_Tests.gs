@@ -420,6 +420,46 @@ function runV31LiveReviewTests_() {
           applyFn.indexOf('state.cycles') !== -1,
         'offline release must reconcile override state even when liveState exists'
       );
+      assertLive_(
+        html.indexOf('function applyLiveSignatureReadinessToCycle_') !== -1 &&
+          applyFn.indexOf('signatureTaskReady') !== -1 &&
+          applyFn.indexOf("row.actionKey = 'signature'") === -1 &&
+          applyFn.indexOf("row.actionRequired = true") === -1,
+        'offline release must not hard-code an HR signature task'
+      );
+      assertLive_(
+        html.indexOf("actionLabel = 'View Signature Status'") !== -1,
+        'HR waiting after offline release must use View Signature Status'
+      );
+    })
+  );
+
+  results.push(
+    liveCase_('Offline release summary uses live signature readiness', function () {
+      const waiting = liveApplySignatureReadiness_({
+        actionKey: 'meeting',
+        actionRequired: true,
+        actionLabel: 'Start Review Meeting',
+        actionTone: 'primary',
+      }, 'Awaiting Signatures', false);
+      assertLive_(
+        waiting.actionRequired === false &&
+          waiting.actionKey === 'overview' &&
+          waiting.actionLabel === 'View Signature Status',
+        'HR with 0 participant signatures must not get Sign Review Packet'
+      );
+      const ready = liveApplySignatureReadiness_({
+        actionKey: 'overview',
+        actionRequired: false,
+        actionLabel: 'View Signature Status',
+        actionTone: 'outline',
+      }, 'Awaiting Signatures', true);
+      assertLive_(
+        ready.actionRequired === true &&
+          ready.actionKey === 'signature' &&
+          ready.actionLabel === 'Sign Review Packet',
+        'HR becomes Sign Review Packet only when signatureTaskReady'
+      );
     })
   );
 
@@ -503,6 +543,25 @@ function liveCase_(name, fn) {
       error: String(error.message || error),
     };
   }
+}
+
+function liveApplySignatureReadiness_(target, status, signatureTaskReady) {
+  const row = target || {};
+  if (signatureTaskReady) {
+    row.actionKey = 'signature';
+    row.actionRequired = true;
+    row.actionLabel = 'Sign Review Packet';
+    row.actionTone = 'primary';
+    return row;
+  }
+  if (String(status || '') === 'Awaiting Signatures') {
+    row.actionRequired = false;
+    row.actionTone = 'outline';
+    row.actionKey = 'overview';
+    row.actionLabel = 'View Signature Status';
+    return row;
+  }
+  return row;
 }
 
 function liveShouldPrintLocalDraft_(cycle, type) {

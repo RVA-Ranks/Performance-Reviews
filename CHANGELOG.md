@@ -1,5 +1,14 @@
 # V3.1 Changelog
 
+## Pass 3 — offline signature readiness and audit attribution
+
+- Preserved role-specific signature readiness after Offline Review Override
+  instead of creating an immediate HR signature task.
+- Reconciled offline-release summary actions from authoritative live state.
+- Preserved the original override actor when recovering a missing deterministic
+  audit event; recovery caller may be recorded separately as recoveredBy.
+- Added regressions for HR signature readiness and cross-HR audit recovery.
+
 ## Pass 2 — offline release and print reconciliation
 
 - Reconciled Offline Review Override state immediately after live release,

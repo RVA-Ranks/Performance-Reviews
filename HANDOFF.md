@@ -11,6 +11,15 @@ Branch: `feat/offline-signature-print-mobile` (from accepted OBS tip `1871e23`)
 Backup: `backup/pre-offline-signature-print-mobile`  
 OBS performance baseline: `perf/live-ux-orchestration` @ `69b4a4e` / `1871e23`
 
+Pass 3 correction (Coach 95% → surgical only; architecture accepted):
+
+- Offline Override summary/nav actions follow `liveState.signatureTaskReady`.
+  HR immediately after release sees **View Signature Status**, not a false
+  **Sign Review Packet** task. The real HR task appears after Manager +
+  Employee have signed.
+- Recovered offline-override audit Actor Email stays `Offline Override By`.
+  The recovery caller may be recorded as `recoveredBy` only.
+
 Pass 2 correction (Coach 91% → localized only; architecture accepted):
 
 - Offline Override client always patches `signatureReleaseMode`,

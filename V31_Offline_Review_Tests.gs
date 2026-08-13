@@ -361,6 +361,11 @@ function runV31OfflineReviewTests_() {
             -1,
           'recovered marker'
         );
+        assert_(
+          normalizeEmail_(store.__audits[0].actorEmail) ===
+            'hr@aitheras.com',
+          'same-HR recovery keeps original actor'
+        );
       }
     );
 
@@ -380,6 +385,109 @@ function runV31OfflineReviewTests_() {
         });
         assert_((store.__audits || []).length === 1, 'no duplicate audit');
         assert_(store['Offline Override Reason'] === firstReason, 'reason still unchanged');
+      }
+    );
+  });
+
+  check('HR live state is not signature-ready immediately after offline release', function () {
+    const cycle = sampleOfflineCycle_({
+      Status: PR.CYCLE.SIGNATURES,
+      'Signature Release Mode': V31_OFFLINE.MODE_OVERRIDE,
+      'HR Email': 'hr-a@aitheras.com',
+      'Manager Email': 'mgr@aitheras.com',
+      'Employee Email': 'emp@aitheras.com',
+    });
+    const live = buildLiveReviewStatePayload_(
+      cycle,
+      'hr-a@aitheras.com',
+      PR.ROLE.HR
+    );
+    assert_(live.status === PR.CYCLE.SIGNATURES, 'Awaiting Signatures');
+    assert_(live.signatureTaskReady === false, 'HR not yet eligible');
+    assert_((live.signatureTasks || []).length === 0, 'no HR signature task');
+  });
+
+  check('HR live state becomes signature-ready after both participants sign', function () {
+    const cycle = sampleOfflineCycle_({
+      Status: PR.CYCLE.SIGNATURES,
+      'Signature Release Mode': V31_OFFLINE.MODE_OVERRIDE,
+      'HR Email': 'hr-a@aitheras.com',
+      'Manager Email': 'mgr@aitheras.com',
+      'Employee Email': 'emp@aitheras.com',
+      'Manager Signature File ID': 'sig-m',
+      'Employee Signature File ID': 'sig-e',
+      'MGR Manager Signature ID': 'sig-m',
+      'SELF Manager Signature ID': 'sig-m',
+      'MGR Employee Signature ID': 'sig-e',
+      'SELF Employee Signature ID': 'sig-e',
+    });
+    const live = buildLiveReviewStatePayload_(
+      cycle,
+      'hr-a@aitheras.com',
+      PR.ROLE.HR
+    );
+    assert_(live.signatureTaskReady === true, 'HR now eligible');
+    assert_((live.signatureTasks || []).length === 1, 'HR signature task present');
+  });
+
+  check('Audit recovery preserves original override actor across HR users', function () {
+    const when = new Date('2026-08-13T16:00:00.000Z');
+    const store = sampleOfflineCycle_({
+      Status: PR.CYCLE.SIGNATURES,
+      'Signature Release Mode': V31_OFFLINE.MODE_OVERRIDE,
+      'Signatures Released At': when,
+      'Signatures Released By': 'hr-a@aitheras.com',
+      'Offline Override At': when,
+      'Offline Override By': 'hr-a@aitheras.com',
+      'Offline Override Reason': 'Printed copies were used.',
+      'HR Email': 'hr-a@aitheras.com',
+      'Meeting JSON': JSON.stringify({
+        releaseRequestId: 'rel-offline-1',
+        signatureReleaseMode: V31_OFFLINE.MODE_OVERRIDE,
+      }),
+    });
+    const firstAt = store['Offline Override At'];
+    const firstBy = store['Offline Override By'];
+    const firstReason = store['Offline Override Reason'];
+    const firstRequest = parseMeetingJson_(store).releaseRequestId;
+
+    withOfflineEndpointDoubles_(
+      store,
+      'hr-b@aitheras.com',
+      {
+        isHr: true,
+        compensationComplete: true,
+        existingAudits: [],
+      },
+      function () {
+        const result = releaseOfflineReviewForSignatures(store['Cycle ID'], {
+          confirmed: true,
+          confirmationToken: V31_OFFLINE.CONFIRMATION_TOKEN,
+          reason: 'Different reason should not overwrite.',
+        });
+        assert_(result.alreadyReleased === true, 'alreadyReleased');
+        assert_(store['Offline Override At'] === firstAt, 'At unchanged');
+        assert_(store['Offline Override By'] === firstBy, 'By unchanged');
+        assert_(
+          store['Offline Override Reason'] === firstReason,
+          'Reason unchanged'
+        );
+        assert_(
+          parseMeetingJson_(store).releaseRequestId === firstRequest,
+          'releaseRequestId unchanged'
+        );
+        assert_((store.__audits || []).length === 1, 'exactly one audit');
+        assert_(
+          normalizeEmail_(store.__audits[0].actorEmail) ===
+            'hr-a@aitheras.com',
+          'Actor Email remains HR-A'
+        );
+        assert_(
+          String(store.__audits[0].details || '').indexOf(
+            '"recoveredBy":"hr-b@aitheras.com"'
+          ) !== -1,
+          'recoveredBy records HR-B'
+        );
       }
     );
   });
