@@ -379,6 +379,96 @@ function runV31LiveReviewTests_() {
         ) === false,
         'print model must not include compensation internals'
       );
+      assertLive_(
+        html.indexOf('function shouldPrintLocalReviewDraft_') !== -1 &&
+          html.indexOf('canEditManagerReview') !== -1 &&
+          html.indexOf('canEditSelfEvaluation') !== -1,
+        'print source must require an editable owned draft'
+      );
+      assertLive_(
+        html.indexOf('/compensation|owner decision|manager recommendation/i') ===
+          -1,
+        'print privacy must not scan participant comment values'
+      );
+      assertLive_(
+        html.indexOf('function printableReviewModelIsSafe_') !== -1 &&
+          html.indexOf('compensationRecord') !== -1 &&
+          html.indexOf('cafFinalPdfId') !== -1 &&
+          html.indexOf('ownerDecisionNotes') !== -1,
+        'print privacy must forbid internal compensation keys'
+      );
+      assertLive_(
+        html.indexOf("addEventListener('afterprint'") !== -1 &&
+          html.indexOf('setTimeout(closePrintReview_, 400)') === -1,
+        'print cleanup must use afterprint rather than a 400ms timer'
+      );
+      assertLive_(
+        html.indexOf('aitherasLogoFileId') !== -1 &&
+          html.indexOf('AITHERAS Logo File ID') !== -1,
+        'Administration must expose AITHERAS Logo File ID'
+      );
+
+      const applyFn = html.slice(
+        html.indexOf('function applyOfflineReviewReleaseResult_'),
+        html.indexOf('async function downloadPdf')
+      );
+      assertLive_(
+        applyFn.indexOf('if (result.liveState)') !== -1 &&
+          applyFn.lastIndexOf('canOfflineReviewOverride = false') >
+            applyFn.indexOf('if (result.liveState)') &&
+          applyFn.indexOf('offlineReviewDisclosure') !== -1 &&
+          applyFn.indexOf('state.cycles') !== -1,
+        'offline release must reconcile override state even when liveState exists'
+      );
+    })
+  );
+
+  results.push(
+    liveCase_('Print source and privacy contracts', function () {
+      assertLive_(
+        liveShouldPrintLocalDraft_({
+          managerReviewStatus: 'Draft',
+          canEditManagerReview: true,
+        }, 'manager') === true,
+        'editable draft may print local editor state'
+      );
+      assertLive_(
+        liveShouldPrintLocalDraft_({
+          managerReviewStatus: 'Submitted',
+          canEditManagerReview: false,
+        }, 'manager') === false,
+        'submitted review must not print local editor state'
+      );
+      assertLive_(
+        liveShouldPrintLocalDraft_({
+          selfEvaluationStatus: 'Draft',
+          canEditSelfEvaluation: false,
+        }, 'self') === false,
+        'read-only viewer must print authoritative cycle content'
+      );
+      assertLive_(
+        livePrintModelIsSafe_({
+          overallComments:
+            'Compensation discussions are outside the scope of this performance rating.',
+          factors: [
+            {
+              comments:
+                'Employee has taken on additional responsibilities that may warrant future compensation review.',
+            },
+          ],
+        }) === true,
+        'participant comments containing compensation must still print'
+      );
+      assertLive_(
+        livePrintModelIsSafe_({
+          overallComments: 'AUTHORITATIVE_SUBMITTED_TEXT',
+          compensationRecord: {},
+          managerRecommendedPayRate: 44,
+          ownerDecisionNotes: 'internal',
+          cafFinalPdfId: 'file',
+        }) === false,
+        'internal compensation keys must fail the print allow-list'
+      );
     })
   );
 
@@ -413,6 +503,44 @@ function liveCase_(name, fn) {
       error: String(error.message || error),
     };
   }
+}
+
+function liveShouldPrintLocalDraft_(cycle, type) {
+  if (!cycle) return false;
+  const isManager = type === 'manager';
+  const docStatus = isManager
+    ? cycle.managerReviewStatus
+    : cycle.selfEvaluationStatus;
+  const draft = docStatus === 'Not Started' || docStatus === 'Draft';
+  const ownsEditable = isManager
+    ? !!cycle.canEditManagerReview
+    : !!cycle.canEditSelfEvaluation;
+  return draft && ownsEditable;
+}
+
+function livePrintModelIsSafe_(model) {
+  const forbidden = [
+    'compensationRecord',
+    'managerRecommendedPayRate',
+    'managerRecommendedPercent',
+    'ownerDecision',
+    'ownerDecisionNotes',
+    'cafFinalPdfId',
+    'compensationDecisionNotes',
+  ];
+  function collectKeys_(value, acc) {
+    acc = acc || [];
+    if (!value || typeof value !== 'object') return acc;
+    Object.keys(value).forEach(function (key) {
+      acc.push(key);
+      collectKeys_(value[key], acc);
+    });
+    return acc;
+  }
+  const keys = collectKeys_(model);
+  return forbidden.every(function (key) {
+    return keys.indexOf(key) === -1;
+  });
 }
 
 function assertLive_(condition, message) {

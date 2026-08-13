@@ -637,6 +637,21 @@ function runV31CompensationTests_() {
       ),
       'AITHERAS_LOGO_FILE_ID setting must exist'
     );
+    assert_(
+      String(getAitherasLogoBlob_).indexOf(
+        'AITHERAS_DOCUMENT_BRANDING.LOGO_SETTING'
+      ) !== -1 &&
+        String(applyAitherasDocumentBranding_).indexOf('appendInlineImage') !==
+          -1,
+      'configured logo blob path must be exercised'
+    );
+    assert_(
+      String(validateReviewAutomationSettings_).indexOf(
+        'AITHERAS_LOGO_FILE_ID'
+      ) !== -1 &&
+        String(getAutomationAdminData_).indexOf('aitherasLogoFileId') !== -1,
+      'Administration must persist AITHERAS Logo File ID'
+    );
   });
 
   check('Owner decision result includes compact compensation record DTO', function () {

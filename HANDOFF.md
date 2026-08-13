@@ -11,18 +11,32 @@ Branch: `feat/offline-signature-print-mobile` (from accepted OBS tip `1871e23`)
 Backup: `backup/pre-offline-signature-print-mobile`  
 OBS performance baseline: `perf/live-ux-orchestration` @ `69b4a4e` / `1871e23`
 
-Pass 1 package:
+Pass 2 correction (Coach 91% → localized only; architecture accepted):
 
-- Employee CAF privacy + AITHERAS logo branding on newly generated finals
-  (`AITHERAS_LOGO_FILE_ID` Drive setting; historical sealed PDFs immutable)
-- HR **Release Signatures — Offline Review Override** into existing signature
-  workflow (no fabricated ACKs; compensation integrity still required)
-- Client-only Print Review (`window.print()`, no Drive write)
-- Mobile polish for Manager/Employee workflows (~390/412/768)
+- Offline Override client always patches `signatureReleaseMode`,
+  `offlineReviewDisclosure`, and `canOfflineReviewOverride = false` even when
+  `liveState` exists. Release result returns the disclosure.
+- Print uses local/editor draft only for owned editable Not Started/Draft
+  reviews; submitted/read-only printing uses `cycle.managerReview` /
+  `cycle.selfEvaluation`.
+- Print privacy is allow-listed keys, not comment-text regex. Cleanup uses
+  `afterprint` plus an 8s fallback.
+- Administration exposes **AITHERAS Logo File ID** (`AITHERAS_LOGO_FILE_ID`).
+  Historical sealed PDFs remain immutable.
+- Offline override audit Event ID is deterministic
+  (`OFFLINE_REVIEW_OVERRIDE:{cycleId}:{offlineOverrideAt}`). `alreadyReleased`
+  recovers a missing audit without rewriting attribution/reason/`releaseRequestId`.
 
-Do **not** reopen live-UX performance architecture.
+Do **not** reopen live-UX performance, ACK semantics, Attempt IDs, PDF/CAF
+provenance, finalization durability, Delivery Unknown, or rate-update conflict
+protection.
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
+
+**Deploy / setup before live feature tests:** run the V3.1 idempotent data-model
+upgrade; verify Offline Override columns exist; set `AITHERAS_LOGO_FILE_ID` in
+Administration or ReviewSettings to the approved Drive logo file ID; keep
+Automation in Preview.
 
 Run in Apps Script: `runV31OfflineReviewTests_()`, `runV31LifecycleTests_()`,
 `runV31CompensationTests_()`, `runV31LiveReviewTests_()`,
@@ -940,6 +954,7 @@ V3.1 settings:
 | `EVENT_POPUP_REMINDER_HOURS` | 24 |
 | `COMPENSATION_ADJUSTMENT_URL` | blank until configured |
 | `COMPENSATION_DECISION_REQUIRED` | TRUE |
+| `AITHERAS_LOGO_FILE_ID` | blank until configured (Administration: AITHERAS Logo File ID) |
 | `HELP_CENTER_ENABLED` | TRUE |
 | `AUTOMATION_LAST_RUN` | blank until run |
 
@@ -1006,6 +1021,10 @@ Core fields:
 - Meeting JSON
 - Signatures Released At
 - Signatures Released By
+- Signature Release Mode
+- Offline Override At
+- Offline Override By
+- Offline Override Reason
 - MGR Manager Signature ID
 - MGR Manager Signed At
 - MGR Employee Signature ID

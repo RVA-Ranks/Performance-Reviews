@@ -1,5 +1,20 @@
 # V3.1 Changelog
 
+## Pass 2 — offline release and print reconciliation
+
+- Reconciled Offline Review Override state immediately after live release,
+  removing the stale override action and surfacing the offline disclosure
+  without a full cycle reload.
+- Printed submitted/read-only reviews exclusively from authoritative server
+  content rather than recoverable local browser drafts.
+- Replaced value-based print privacy filtering with allow-listed field
+  enforcement so legitimate participant comments cannot block printing.
+- Switched print cleanup to afterprint with a safe fallback.
+- Added configured AITHERAS logo administration/setup and live branding
+  verification.
+- Added recoverable deterministic audit handling for committed Offline Review
+  Overrides.
+
 ## Offline override, Print Review, and mobile polish
 
 - HR-only Offline Review Override releases eligible pre-signature cycles into

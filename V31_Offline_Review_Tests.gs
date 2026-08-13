@@ -267,6 +267,123 @@ function runV31OfflineReviewTests_() {
     );
   });
 
+  check('Release result includes disclosure and clears override flag', function () {
+    const cycle = sampleOfflineCycle_({
+      Status: PR.CYCLE.SIGNATURES,
+      'Signature Release Mode': V31_OFFLINE.MODE_OVERRIDE,
+      'Offline Override At': new Date('2026-08-13T16:00:00.000Z'),
+      'Offline Override Reason': 'Printed copies were used.',
+    });
+    const originals = {
+      buildLiveReviewStatePayload_: buildLiveReviewStatePayload_,
+    };
+    buildLiveReviewStatePayload_ = function () {
+      return { status: PR.CYCLE.SIGNATURES };
+    };
+    try {
+      const result = buildOfflineReviewReleaseResult_(cycle, 'hr@aitheras.com', {
+        alreadyReleased: false,
+        message: 'ok',
+      });
+      assert_(
+        result.offlineReviewDisclosure === V31_OFFLINE.NOTICE,
+        'disclosure returned'
+      );
+      assert_(result.canOfflineReviewOverride === false, 'override flag cleared');
+      assert_(
+        result.signatureReleaseMode === V31_OFFLINE.MODE_OVERRIDE,
+        'mode returned'
+      );
+    } finally {
+      buildLiveReviewStatePayload_ = originals.buildLiveReviewStatePayload_;
+    }
+  });
+
+  check('Audit Event ID is deterministic from cycle and override at', function () {
+    const when = new Date('2026-08-13T16:00:00.000Z');
+    assert_(
+      offlineReviewOverrideAuditEventId_('OFF-1', when) ===
+        'OFFLINE_REVIEW_OVERRIDE:OFF-1:' + toIsoString_(when),
+      'deterministic id'
+    );
+  });
+
+  check('alreadyReleased recovers missing override audit without rewriting attribution', function () {
+    const when = new Date('2026-08-13T16:00:00.000Z');
+    const store = sampleOfflineCycle_({
+      Status: PR.CYCLE.SIGNATURES,
+      'Signature Release Mode': V31_OFFLINE.MODE_OVERRIDE,
+      'Signatures Released At': when,
+      'Signatures Released By': 'hr@aitheras.com',
+      'Offline Override At': when,
+      'Offline Override By': 'hr@aitheras.com',
+      'Offline Override Reason': 'Printed copies were used.',
+      'Meeting JSON': JSON.stringify({
+        releaseRequestId: 'rel-offline-1',
+        signatureReleaseMode: V31_OFFLINE.MODE_OVERRIDE,
+      }),
+    });
+    const firstAt = store['Offline Override At'];
+    const firstBy = store['Offline Override By'];
+    const firstReason = store['Offline Override Reason'];
+    const firstRequest = parseMeetingJson_(store).releaseRequestId;
+
+    withOfflineEndpointDoubles_(
+      store,
+      'hr@aitheras.com',
+      {
+        isHr: true,
+        compensationComplete: true,
+        existingAudits: [],
+      },
+      function () {
+        const result = releaseOfflineReviewForSignatures(store['Cycle ID'], {
+          confirmed: true,
+          confirmationToken: V31_OFFLINE.CONFIRMATION_TOKEN,
+          reason: 'Different reason should not overwrite.',
+        });
+        assert_(result.alreadyReleased === true, 'alreadyReleased');
+        assert_(store['Offline Override At'] === firstAt, 'At unchanged');
+        assert_(store['Offline Override By'] === firstBy, 'By unchanged');
+        assert_(store['Offline Override Reason'] === firstReason, 'Reason unchanged');
+        assert_(
+          parseMeetingJson_(store).releaseRequestId === firstRequest,
+          'releaseRequestId unchanged'
+        );
+        assert_((store.__audits || []).length === 1, 'recovered one audit');
+        assert_(
+          store.__audits[0].eventId ===
+            offlineReviewOverrideAuditEventId_(store['Cycle ID'], when),
+          'deterministic recovered event id'
+        );
+        assert_(
+          String(store.__audits[0].details || '').indexOf('"recovered":true') !==
+            -1,
+          'recovered marker'
+        );
+      }
+    );
+
+    withOfflineEndpointDoubles_(
+      store,
+      'hr@aitheras.com',
+      {
+        isHr: true,
+        compensationComplete: true,
+        existingAudits: store.__audits,
+      },
+      function () {
+        releaseOfflineReviewForSignatures(store['Cycle ID'], {
+          confirmed: true,
+          confirmationToken: V31_OFFLINE.CONFIRMATION_TOKEN,
+          reason: 'Different reason should not overwrite.',
+        });
+        assert_((store.__audits || []).length === 1, 'no duplicate audit');
+        assert_(store['Offline Override Reason'] === firstReason, 'reason still unchanged');
+      }
+    );
+  });
+
   check('Missing confirmation token rejects', function () {
     const store = sampleOfflineCycle_({ Status: PR.CYCLE.READY });
     let rejected = false;
@@ -355,7 +472,13 @@ function withOfflineEndpointDoubles_(store, actorEmail, extras, fn) {
     assertOfflineReviewDataModelReady_: assertOfflineReviewDataModelReady_,
     isV31CompensationComplete_: isV31CompensationComplete_,
     commitAuditEventOutsideLock_: commitAuditEventOutsideLock_,
+    findAuditByEventId_: findAuditByEventId_,
+    auditIdempotent_: auditIdempotent_,
+    buildLiveReviewStatePayload_: buildLiveReviewStatePayload_,
   };
+  store.__audits = opts.existingAudits
+    ? opts.existingAudits.slice()
+    : store.__audits || [];
   withLock_ = function (inner) {
     return inner();
   };
@@ -380,10 +503,51 @@ function withOfflineEndpointDoubles_(store, actorEmail, extras, fn) {
   isV31CompensationComplete_ = function () {
     return opts.compensationComplete !== false;
   };
+  findAuditByEventId_ = function (eventId) {
+    const wanted = String(eventId || '');
+    const rows = store.__audits || [];
+    for (let index = rows.length - 1; index >= 0; index--) {
+      if (
+        String(rows[index].eventId || rows[index]['Event ID'] || '') === wanted
+      ) {
+        return rows[index];
+      }
+    }
+    return null;
+  };
+  auditIdempotent_ = function (
+    cycleId,
+    action,
+    actorEmailValue,
+    previousStatus,
+    newStatus,
+    details,
+    eventId
+  ) {
+    const existing = findAuditByEventId_(eventId);
+    if (existing) return existing;
+    const event = {
+      eventId: String(eventId || ''),
+      cycleId: String(cycleId || ''),
+      action: String(action || ''),
+      actorEmail: String(actorEmailValue || ''),
+      previousStatus: String(previousStatus || ''),
+      newStatus: String(newStatus || ''),
+      details: details || '',
+    };
+    store.__audits.push(event);
+    return event;
+  };
   commitAuditEventOutsideLock_ = function (event) {
     store.__audits = store.__audits || [];
     store.__audits.push(event);
     return { ok: true, warning: '', eventId: event.eventId };
+  };
+  buildLiveReviewStatePayload_ = function () {
+    return {
+      status: String(store.Status || ''),
+      signatureReleaseMode: String(store['Signature Release Mode'] || ''),
+    };
   };
   try {
     return fn();
@@ -399,5 +563,8 @@ function withOfflineEndpointDoubles_(store, actorEmail, extras, fn) {
       originals.assertOfflineReviewDataModelReady_;
     isV31CompensationComplete_ = originals.isV31CompensationComplete_;
     commitAuditEventOutsideLock_ = originals.commitAuditEventOutsideLock_;
+    findAuditByEventId_ = originals.findAuditByEventId_;
+    auditIdempotent_ = originals.auditIdempotent_;
+    buildLiveReviewStatePayload_ = originals.buildLiveReviewStatePayload_;
   }
 }

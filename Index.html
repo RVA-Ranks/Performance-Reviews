@@ -1695,6 +1695,16 @@ const LIVE_REVIEW_POLL_VISIBLE_MS = 2500;
 const LIVE_REVIEW_POLL_HIDDEN_MS = 9000;
 const LIVE_REVIEW_POLL_RELEASE_PENDING_MS = 1000;
 const MEETING_RELEASE_ACK_WAIT_MS = 120000;
+const PRINT_FORBIDDEN_INTERNAL_KEYS_ = [
+  'compensationRecord',
+  'managerRecommendedPayRate',
+  'managerRecommendedPercent',
+  'ownerDecision',
+  'ownerDecisionNotes',
+  'cafFinalPdfId',
+  'compensationDecisionNotes'
+];
+let printReviewCleanupTimer_ = 0;
 
 const editorState = {
   manager: createEditorState(),
@@ -3411,6 +3421,7 @@ function renderAutomationPanel(automation) {
     '<div><label for="autoEmailReminder">Calendar email reminder (days)</label><input id="autoEmailReminder" type="number" min="0" max="28" value="' + escapeAttr(automation.eventEmailReminderDays || 7) + '"></div>' +
     '<div><label for="autoPopupReminder">Calendar pop-up reminder (hours)</label><input id="autoPopupReminder" type="number" min="0" max="672" value="' + escapeAttr(automation.eventPopupReminderHours || 24) + '"></div>' +
     '<div class="wide"><label for="compensationFolderId">Compensation Drive Folder ID</label><input id="compensationFolderId" placeholder="Google Drive folder ID" value="' + escapeAttr(automation.compensationFolderId || '') + '"><div class="field-help">HR-only folder for sealed CAF PDFs (COMPENSATION_FOLDER_ID).</div></div>' +
+    '<div class="wide"><label for="aitherasLogoFileId">AITHERAS Logo File ID</label><input id="aitherasLogoFileId" placeholder="Google Drive file ID of the approved logo" value="' + escapeAttr(automation.aitherasLogoFileId || '') + '"><div class="field-help">Used on newly generated Manager, Self-Evaluation, and CAF PDFs. Leave blank for text branding. Historical sealed PDFs stay immutable.</div></div>' +
     '<div class="wide"><label for="compensationAdjustmentUrl">Legacy standalone CAF URL (optional)</label><input id="compensationAdjustmentUrl" type="url" placeholder="https://..." value="' + escapeAttr(automation.compensationAdjustmentUrl || '') + '"><div class="field-help">Kept for unrelated standalone CAF use. Not shown to managers in the review workflow.</div></div>' +
     '<div><label class="modal-check"><input id="shiftWeekendMeetings" type="checkbox" ' + (automation.shiftWeekendMeetings ? 'checked' : '') + '><span>Shift Saturday/Sunday meetings to Monday</span></label></div>' +
     '<div><label class="modal-check"><input id="compensationDecisionRequired" type="checkbox" ' + (automation.compensationDecisionRequired ? 'checked' : '') + '><span>Require a compensation decision before the meeting and signatures</span></label></div>' +
@@ -3444,6 +3455,7 @@ async function saveAutomationSettings(event) {
     eventPopupReminderHours: Number(valueOf('autoPopupReminder')),
     compensationAdjustmentUrl: valueOf('compensationAdjustmentUrl'),
     compensationFolderId: valueOf('compensationFolderId'),
+    aitherasLogoFileId: valueOf('aitherasLogoFileId'),
     shiftWeekendMeetings: document.getElementById('shiftWeekendMeetings').checked,
     compensationDecisionRequired: document.getElementById('compensationDecisionRequired').checked
   };
@@ -7017,15 +7029,45 @@ function printReviewButtonHtml_(type) {
     '\')">Print Review</button>';
 }
 
+function collectPrintModelKeys_(value, acc) {
+  acc = acc || [];
+  if (!value || typeof value !== 'object') return acc;
+  Object.keys(value).forEach(function(key) {
+    acc.push(key);
+    collectPrintModelKeys_(value[key], acc);
+  });
+  return acc;
+}
+
+function printableReviewModelIsSafe_(model) {
+  const keys = collectPrintModelKeys_(model);
+  for (let i = 0; i < PRINT_FORBIDDEN_INTERNAL_KEYS_.length; i++) {
+    if (keys.indexOf(PRINT_FORBIDDEN_INTERNAL_KEYS_[i]) !== -1) return false;
+  }
+  return true;
+}
+
+function shouldPrintLocalReviewDraft_(cycle, type) {
+  if (!cycle) return false;
+  const isManager = type === 'manager';
+  const docStatus = isManager ? cycle.managerReviewStatus : cycle.selfEvaluationStatus;
+  const draft = docStatus === 'Not Started' || docStatus === 'Draft';
+  const ownsEditable = isManager ? !!cycle.canEditManagerReview : !!cycle.canEditSelfEvaluation;
+  return draft && ownsEditable;
+}
+
 function buildPrintableReviewModel_(cycle, type) {
   const isManager = type === 'manager';
   const visible = isManager ? cycle.managerReviewVisible : cycle.selfEvaluationVisible;
   if (!cycle || !visible) {
     throw new Error('You are not authorized to print this review.');
   }
-  const review = isManager
-    ? (editorState.manager && editorState.manager.draft) || cycle.managerReview
-    : (editorState.self && editorState.self.draft) || cycle.selfEvaluation;
+  const useLocalDraft = shouldPrintLocalReviewDraft_(cycle, type);
+  const review = useLocalDraft
+    ? (isManager
+        ? (editorState.manager && editorState.manager.draft) || cycle.managerReview
+        : (editorState.self && editorState.self.draft) || cycle.selfEvaluation)
+    : (isManager ? cycle.managerReview : cycle.selfEvaluation);
   if (!review) {
     throw new Error('Review content is not loaded.');
   }
@@ -7124,6 +7166,11 @@ function renderPrintReview_(model) {
 }
 
 function closePrintReview_() {
+  window.removeEventListener('afterprint', closePrintReview_);
+  if (printReviewCleanupTimer_) {
+    clearTimeout(printReviewCleanupTimer_);
+    printReviewCleanupTimer_ = 0;
+  }
   document.body.classList.remove('printing');
   const root = document.getElementById('printRoot');
   if (root) {
@@ -7138,17 +7185,18 @@ function openPrintReview_(html) {
   root.innerHTML = html;
   root.setAttribute('aria-hidden', 'false');
   document.body.classList.add('printing');
+  window.addEventListener('afterprint', closePrintReview_, { once: true });
   window.focus();
   window.print();
-  setTimeout(closePrintReview_, 400);
+  printReviewCleanupTimer_ = setTimeout(closePrintReview_, 8000);
 }
 
 function printReview_(type) {
   try {
     if (!currentCycle) throw new Error('Open a review before printing.');
     const model = buildPrintableReviewModel_(currentCycle, type);
-    if (/compensation|owner decision|manager recommendation/i.test(JSON.stringify(model))) {
-      throw new Error('Print model included internal compensation data.');
+    if (!printableReviewModelIsSafe_(model)) {
+      throw new Error('Print model included internal compensation fields.');
     }
     openPrintReview_(renderPrintReview_(model));
   } catch (error) {
@@ -7221,13 +7269,34 @@ function applyOfflineReviewReleaseResult_(result) {
     patchCycleFromLiveState_(result.liveState);
   } else {
     currentCycle.status = result.cycleStatus || 'Awaiting Signatures';
-    currentCycle.signatureReleaseMode = result.signatureReleaseMode || 'Offline Review Override';
-    currentCycle.canOfflineReviewOverride = false;
-    currentCycle.canReleaseSignatures = false;
-    currentCycle.canStartMeeting = false;
     currentCycle.actionKey = 'signature';
     currentCycle.actionLabel = 'Sign Review Packet';
-    reconcileCurrentCycleDerivedState_(currentCycle.status);
+  }
+  currentCycle.signatureReleaseMode =
+    result.signatureReleaseMode || 'Offline Review Override';
+  currentCycle.offlineReviewDisclosure =
+    result.offlineReviewDisclosure || currentCycle.offlineReviewDisclosure || '';
+  currentCycle.canOfflineReviewOverride = false;
+  currentCycle.canReleaseSignatures = false;
+  currentCycle.canStartMeeting = false;
+  reconcileCurrentCycleDerivedState_(currentCycle.status);
+  currentCycle.canOfflineReviewOverride = false;
+  currentCycle.canReleaseSignatures = false;
+  currentCycle.canStartMeeting = false;
+  if (state && Array.isArray(state.cycles)) {
+    state.cycles.forEach(function(row) {
+      if (String(row.cycleId) !== String(currentCycle.cycleId)) return;
+      row.status = currentCycle.status;
+      row.signatureReleaseMode = currentCycle.signatureReleaseMode;
+      row.offlineReviewDisclosure = currentCycle.offlineReviewDisclosure;
+      row.canOfflineReviewOverride = false;
+      row.canReleaseSignatures = false;
+      row.canStartMeeting = false;
+      row.actionKey = 'signature';
+      row.actionRequired = true;
+      row.actionLabel = 'Sign Review Packet';
+      row.actionTone = 'primary';
+    });
   }
   currentCycleTab = 'signatures';
   preferredCycleAction = 'signatures';

@@ -247,6 +247,66 @@ function commitOfflineReviewSignatureRelease_(stored, email, reason, now) {
   return stored;
 }
 
+function offlineReviewOverrideAuditEventId_(cycleId, overrideAt) {
+  return (
+    'OFFLINE_REVIEW_OVERRIDE:' +
+    String(cycleId || '') +
+    ':' +
+    toIsoString_(overrideAt)
+  );
+}
+
+function buildOfflineOverrideAuditEvent_(cycle, actorEmail, previousStatus, extraDetails) {
+  const details = extraDetails || {};
+  const meeting = parseMeetingJson_(cycle);
+  return buildPendingAuditEvent_(
+    String((cycle && cycle['Cycle ID']) || ''),
+    V31_OFFLINE.AUDIT_ACTION,
+    actorEmail || (cycle && cycle['Offline Override By']) || '',
+    String(previousStatus || ''),
+    String((cycle && cycle['Status']) || PR.CYCLE.SIGNATURES),
+    JSON.stringify({
+      releaseMode: V31_OFFLINE.MODE_OVERRIDE,
+      reason: String((cycle && cycle['Offline Override Reason']) || ''),
+      managerReviewSubmitted: details.managerReviewSubmitted === true,
+      selfEvaluationSubmitted: details.selfEvaluationSubmitted === true,
+      meetingOpened: details.meetingOpened === true,
+      compensationDecision: details.compensationDecision || '',
+      compensationStatus: details.compensationStatus || '',
+      compensationComplete: details.compensationComplete === true,
+      releaseRequestId: String((meeting && meeting.releaseRequestId) || ''),
+      managerAckPresent: false,
+      employeeAckPresent: false,
+      recovered: details.recovered === true,
+    }),
+    offlineReviewOverrideAuditEventId_(
+      cycle && cycle['Cycle ID'],
+      cycle && cycle['Offline Override At']
+    )
+  );
+}
+
+function buildOfflineOverrideAuditRecoveryEvent_(cycle, actorEmail) {
+  if (!isOfflineReviewRelease_(cycle) || !(cycle && cycle['Offline Override At'])) {
+    return null;
+  }
+  const eventId = offlineReviewOverrideAuditEventId_(
+    cycle['Cycle ID'],
+    cycle['Offline Override At']
+  );
+  try {
+    if (findAuditByEventId_(eventId)) return null;
+  } catch (error) {
+    Logger.log(
+      'Offline override audit lookup failed: ' + String(error.message || error)
+    );
+  }
+  return buildOfflineOverrideAuditEvent_(cycle, actorEmail, '', {
+    recovered: true,
+    compensationComplete: true,
+  });
+}
+
 function buildOfflineReviewReleaseResult_(cycle, email, extras) {
   const extra = extras || {};
   return {
@@ -257,6 +317,8 @@ function buildOfflineReviewReleaseResult_(cycle, email, extras) {
     signatureReleaseMode:
       String((cycle && cycle['Signature Release Mode']) || '') ||
       V31_OFFLINE.MODE_STANDARD,
+    offlineReviewDisclosure: buildOfflineReviewDisclosure_(cycle),
+    canOfflineReviewOverride: false,
     liveState: buildLiveReviewStatePayload_(cycle, email, PR.ROLE.HR),
     message: extra.message || '',
   };
@@ -322,34 +384,25 @@ function releaseOfflineReviewForSignatures(cycleId, payload) {
       stored: stored,
       message:
         'Signatures released via Offline Review Override. The manager and employee may now sign electronically.',
-      pendingAuditEvent: buildPendingAuditEvent_(
-        String(stored['Cycle ID']),
-        V31_OFFLINE.AUDIT_ACTION,
+      pendingAuditEvent: buildOfflineOverrideAuditEvent_(
+        stored,
         email,
         previousStatus,
-        stored['Status'],
-        JSON.stringify({
-          releaseMode: V31_OFFLINE.MODE_OVERRIDE,
-          reason: reason,
+        {
           managerReviewSubmitted: mgrSubmitted,
           selfEvaluationSubmitted: selfSubmitted,
           meetingOpened: meetingOpened,
           compensationDecision: compensation.decision,
           compensationStatus: compensation.status,
           compensationComplete: compensation.complete,
-          releaseRequestId: parseMeetingJson_(stored).releaseRequestId || '',
-          managerAckPresent: false,
-          employeeAckPresent: false,
-        }),
-        'OFFLINE_REVIEW_OVERRIDE:' +
-          String(stored['Cycle ID']) +
-          ':' +
-          toIsoString_(stored['Offline Override At'] || new Date())
+        }
       ),
     };
   });
 
-  if (locked.pendingAuditEvent) {
+  if (locked.alreadyReleased) {
+    recoverOfflineOverrideAuditIfMissing_(locked.stored, email);
+  } else if (locked.pendingAuditEvent) {
     commitAuditEventOutsideLock_(locked.pendingAuditEvent);
   }
 
@@ -357,4 +410,26 @@ function releaseOfflineReviewForSignatures(cycleId, payload) {
     alreadyReleased: locked.alreadyReleased,
     message: locked.message,
   });
+}
+
+function recoverOfflineOverrideAuditIfMissing_(cycle, actorEmail) {
+  const recovery = buildOfflineOverrideAuditRecoveryEvent_(cycle, actorEmail);
+  if (!recovery || !recovery.eventId) return null;
+  try {
+    return auditIdempotent_(
+      recovery.cycleId,
+      recovery.action,
+      recovery.actorEmail,
+      recovery.previousStatus,
+      recovery.newStatus,
+      recovery.details,
+      recovery.eventId
+    );
+  } catch (error) {
+    Logger.log(
+      'Offline override audit recovery failed: ' +
+        String(error.message || error)
+    );
+    return null;
+  }
 }

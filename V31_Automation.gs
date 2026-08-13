@@ -1847,6 +1847,7 @@ function getAutomationAdminData_() {
         settings.COMPENSATION_DECISION_REQUIRED,
         true
       ),
+    aitherasLogoFileId: String(settings.AITHERAS_LOGO_FILE_ID || ''),
     triggerInstalled:
       visibleTriggers.some(function (trigger) {
         return (
@@ -2034,6 +2035,7 @@ function validateReviewAutomationSettings_(payload) {
     ),
     COMPENSATION_DECISION_REQUIRED:
       payload.compensationDecisionRequired ? 'TRUE' : 'FALSE',
+    AITHERAS_LOGO_FILE_ID: cleanText_(payload.aitherasLogoFileId || ''),
   };
 }
 
