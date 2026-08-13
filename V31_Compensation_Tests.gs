@@ -541,6 +541,91 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Employee CAF shows 6% approval and hides 10% recommendation', function () {
+    const secretMgr = 'MANAGER_RECOMMENDATION_SECRET_123';
+    const secretMod = 'OWNER_MODIFICATION_SECRET_456';
+    const secretNote = 'OWNER_NOTE_SECRET_789';
+    const dto = buildEmployeeSafeCompensationCafDto_(
+      { 'Cycle ID': 'C-CAF-6PCT', 'Employee Job Title': 'Analyst' },
+      {
+        'Review Cycle ID': 'C-CAF-6PCT',
+        'Employee Name': 'Pat Employee',
+        'Employee Email': 'emp@aitheras.com',
+        'Manager Name': 'Mo Manager',
+        'Original Pay Rate': 40,
+        'Original Annual Salary': 83200,
+        'Manager Recommended Pay Rate': 44,
+        'Manager Recommended Annual Salary': 91520,
+        'Manager Recommended Percent': 0.1,
+        'Manager Business Justification': secretMgr,
+        'Final Approved Pay Rate': 42.4,
+        'Final Approved Annual Salary': 88192,
+        'Final Approved Percent': 0.06,
+        'Recommendation Accepted': 'No',
+        'Compensation Effective Date': '2026-10-01',
+        'Owner Decision': V31_COMP.OWNER_DECISION.MODIFIED,
+        'Owner Decision Notes': secretNote + ' ' + secretMod,
+      }
+    );
+    const text = serializeEmployeeSafeCompensationCafDto_(dto);
+    assertEmployeeSafeCompensationCafText_(text);
+    assert_(
+      text.indexOf('6.00%') !== -1,
+      'Employee CAF must show the final approved 6% increase'
+    );
+    assert_(
+      text.indexOf('10.00%') === -1,
+      'Employee CAF must not show the 10% recommendation'
+    );
+    assert_(
+      text.indexOf('Modified') === -1,
+      'Employee CAF must not say Modified'
+    );
+    assert_(
+      text.indexOf(secretMgr) === -1 &&
+        text.indexOf(secretMod) === -1 &&
+        text.indexOf(secretNote) === -1,
+      'Sentinel deliberation strings must be absent'
+    );
+    assert_(
+      text.toLowerCase().indexOf('owner decision') === -1,
+      'Owner Decision terminology must be absent'
+    );
+  });
+
+  check('Final document builders invoke AITHERAS branding helpers', function () {
+    assert_(
+      typeof applyAitherasDocumentBranding_ === 'function' &&
+        typeof ensureAitherasLogoOnGeneratedDocument_ === 'function' &&
+        typeof getAitherasLogoBlob_ === 'function',
+      'shared branding helpers must exist'
+    );
+    assert_(
+      String(renderEmployeeSafeCompensationCafBody_).indexOf(
+        'applyAitherasDocumentBranding_'
+      ) !== -1,
+      'CAF renderer must apply shared branding'
+    );
+    assert_(
+      String(createReviewTemplate_).indexOf('applyAitherasDocumentBranding_') !==
+        -1,
+      'Review templates must apply shared branding'
+    );
+    assert_(
+      String(generateReviewPdf_).indexOf(
+        'ensureAitherasLogoOnGeneratedDocument_'
+      ) !== -1,
+      'Review PDF generation must ensure logo on new copies'
+    );
+    assert_(
+      Object.prototype.hasOwnProperty.call(
+        V31.SETTINGS_DEFAULTS,
+        'AITHERAS_LOGO_FILE_ID'
+      ),
+      'AITHERAS_LOGO_FILE_ID setting must exist'
+    );
+  });
+
   check('Owner decision result includes compact compensation record DTO', function () {
     const record = {
       'Compensation Record ID': 'REC-DTO',

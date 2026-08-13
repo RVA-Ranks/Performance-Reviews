@@ -1,5 +1,14 @@
 # V3.1 Changelog
 
+## Final documents — employee CAF privacy and branding
+
+- Employee-facing Compensation Adjustment Agreement shows only identity,
+  current pay, final approved terms, effective date, acknowledgement, and
+  signatures. Manager recommendation / owner deliberation stay internal.
+- Newly generated Manager Review, Self-Evaluation, and CAF PDFs use a shared
+  AITHERAS logo header when `AITHERAS_LOGO_FILE_ID` is configured.
+- Historical sealed PDFs remain immutable.
+
 ## Live UX — OBS-ready poll and signature-label fixes
 
 - Steady `Finalizing → Finalizing` live polls no longer rerender Home/Reviews/Signatures.

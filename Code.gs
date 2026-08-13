@@ -65,6 +65,7 @@ const PR = Object.freeze({
     SELF_TEMPLATE_ID: '',
     WEB_APP_URL: '',
     AUTOSAVE_DELAY_SECONDS: '5',
+    AITHERAS_LOGO_FILE_ID: '',
   },
 
   CYCLE_HEADERS: [
@@ -6116,6 +6117,121 @@ function describeFinalizationStatus_(cycle) {
 
 /* =============================== PDF ===================================== */
 
+/**
+ * Shared branding for newly generated final documents.
+ * Historical sealed PDFs are never regenerated solely to add the logo.
+ */
+var AITHERAS_DOCUMENT_BRANDING = Object.freeze({
+  TITLE: 'AITHERAS',
+  LOGO_SETTING: 'AITHERAS_LOGO_FILE_ID',
+  LOGO_MAX_WIDTH: 160,
+  LOGO_MAX_HEIGHT: 52,
+});
+
+function getAitherasLogoBlob_() {
+  try {
+    const settings = getSettings_();
+    const id = String(
+      (settings && settings[AITHERAS_DOCUMENT_BRANDING.LOGO_SETTING]) || ''
+    ).trim();
+    if (!id) return null;
+    return DriveApp.getFileById(id).getBlob();
+  } catch (error) {
+    Logger.log(
+      'AITHERAS logo unavailable: ' + String(error.message || error)
+    );
+    return null;
+  }
+}
+
+/**
+ * Insert logo (when configured) plus document title/subtitle.
+ * Falls back to text "AITHERAS" if the Drive logo ID is unset.
+ */
+function applyAitherasDocumentBranding_(body, options) {
+  const opts = options || {};
+  const title = String(opts.title || 'Performance Review');
+  const subtitle = String(opts.subtitle || '');
+  const logoBlob = opts.logoBlob || getAitherasLogoBlob_();
+
+  if (logoBlob) {
+    const logoPara = body.appendParagraph('');
+    logoPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    const image = logoPara.appendInlineImage(logoBlob);
+    const width = Math.max(image.getWidth(), 1);
+    const height = Math.max(image.getHeight(), 1);
+    const scale = Math.min(
+      AITHERAS_DOCUMENT_BRANDING.LOGO_MAX_WIDTH / width,
+      AITHERAS_DOCUMENT_BRANDING.LOGO_MAX_HEIGHT / height,
+      1
+    );
+    image.setWidth(Math.max(1, Math.round(width * scale)));
+    image.setHeight(Math.max(1, Math.round(height * scale)));
+  } else {
+    body
+      .appendParagraph(AITHERAS_DOCUMENT_BRANDING.TITLE)
+      .setHeading(DocumentApp.ParagraphHeading.TITLE)
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  }
+
+  body
+    .appendParagraph(title)
+    .setHeading(DocumentApp.ParagraphHeading.HEADING1)
+    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+
+  if (subtitle) {
+    body
+      .appendParagraph(subtitle)
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  }
+
+  return { branded: true, hasLogo: !!logoBlob };
+}
+
+/**
+ * Upgrade a copied review template that still starts with text "AITHERAS".
+ * Does not rewrite historical sealed PDFs.
+ */
+function ensureAitherasLogoOnGeneratedDocument_(body) {
+  const logoBlob = getAitherasLogoBlob_();
+  if (!logoBlob || !body) return false;
+  try {
+    if (!body.getNumChildren()) return false;
+    const first = body.getChild(0);
+    if (first.getType() !== DocumentApp.ElementType.PARAGRAPH) {
+      return false;
+    }
+    const para = first.asParagraph();
+    for (let i = 0; i < para.getNumChildren(); i++) {
+      if (para.getChild(i).getType() === DocumentApp.ElementType.INLINE_IMAGE) {
+        return true;
+      }
+    }
+    const text = String(para.getText() || '').trim();
+    if (text !== 'AITHERAS' && text !== '{{AITHERAS_LOGO}}') {
+      return false;
+    }
+    para.clear();
+    const image = para.appendInlineImage(logoBlob);
+    const width = Math.max(image.getWidth(), 1);
+    const height = Math.max(image.getHeight(), 1);
+    const scale = Math.min(
+      AITHERAS_DOCUMENT_BRANDING.LOGO_MAX_WIDTH / width,
+      AITHERAS_DOCUMENT_BRANDING.LOGO_MAX_HEIGHT / height,
+      1
+    );
+    image.setWidth(Math.max(1, Math.round(width * scale)));
+    image.setHeight(Math.max(1, Math.round(height * scale)));
+    para.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    return true;
+  } catch (error) {
+    Logger.log(
+      'AITHERAS logo insert skipped: ' + String(error.message || error)
+    );
+    return false;
+  }
+}
+
 function createReviewTemplate_(type, folderId) {
   const title =
     type === PR.TYPE.MANAGER
@@ -6130,17 +6246,10 @@ function createReviewTemplate_(type, folderId) {
   const body = doc.getBody();
   body.clear();
 
-  const brand = body.appendParagraph('AITHERAS');
-  brand.setHeading(DocumentApp.ParagraphHeading.TITLE);
-  brand.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-
-  const heading = body.appendParagraph(title);
-  heading.setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  heading.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-
-  body
-    .appendParagraph('Review Cycle ID: {{CYCLE_ID}}')
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  applyAitherasDocumentBranding_(body, {
+    title: title,
+    subtitle: 'Review Cycle ID: {{CYCLE_ID}}',
+  });
 
   body.appendHorizontalRule();
 
@@ -6353,6 +6462,7 @@ function generateReviewPdf_(cycleId, type) {
 
   const doc = DocumentApp.openById(copy.getId());
   const body = doc.getBody();
+  ensureAitherasLogoOnGeneratedDocument_(body);
   const managerReview = parseJson_(
     cycle['Manager Review JSON'],
     emptyManagerReview_()

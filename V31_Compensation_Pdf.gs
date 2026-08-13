@@ -603,9 +603,11 @@ function serializeEmployeeSafeCompensationCafDto_(dto) {
 function assertEmployeeSafeCompensationCafText_(text) {
   const forbidden = [
     'Manager Recommendation',
+    'Original Recommendation',
     'Recommended Pay Rate',
     'Recommended Annual Salary',
     'Recommended Increase',
+    'Recommended Rate',
     'Business Justification',
     'Proposed Effective Date',
     'Submitted By',
@@ -616,6 +618,8 @@ function assertEmployeeSafeCompensationCafText_(text) {
     'Decision date',
     'Decision notes',
     'Recommendation Accepted',
+    'Changed from',
+    'Override',
   ];
   const haystack = String(text || '');
   forbidden.forEach(function (label) {
@@ -625,21 +629,17 @@ function assertEmployeeSafeCompensationCafText_(text) {
       );
     }
   });
+  if (/\bModified\b/.test(haystack)) {
+    throw new Error('Employee CAF must not include Modified owner-decision language.');
+  }
   return true;
 }
 
 function renderEmployeeSafeCompensationCafBody_(body, dto) {
-  body
-    .appendParagraph('AITHERAS')
-    .setHeading(DocumentApp.ParagraphHeading.TITLE)
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  body
-    .appendParagraph('Compensation Adjustment Agreement')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING1)
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  body
-    .appendParagraph('Review Cycle ID: ' + String(dto.cycleId || ''))
-    .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  applyAitherasDocumentBranding_(body, {
+    title: 'Compensation Adjustment Agreement',
+    subtitle: 'Review Cycle ID: ' + String(dto.cycleId || ''),
+  });
   body.appendHorizontalRule();
 
   const identity = body.appendTable([
