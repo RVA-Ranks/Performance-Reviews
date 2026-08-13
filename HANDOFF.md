@@ -9,26 +9,23 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-client-93` (also `backup/pre-live-ux-correction-72`, `-91`)  
-Tip SHA: `d3d8bf3014eabd0e6e4a1fe8721a205b59cce7d5`
+Tip SHA: _(update after OBS-ready commit)_
 
-Pre-OBS client reconciliation after Coach 93% (Index.html only):
+OBS-ready Stage 0 micro-fixes (Index.html only):
 
-- Submit fast-ACK locks `canEditManagerReview` / `canEditSelfEvaluation` and
-  seals local draft into `managerReview` / `selfEvaluation`
-- `reconcileCurrentCyclePrimaryAction_` keeps Overview `primaryAction`
-  aligned with Ready / signature / Finalizing / Complete
-- Live poll calls `refreshLocalSummaryViews_()` only on meaningful status /
-  action / signature-task transitions (not every 2.5s poll)
-- Live Review suite asserts Index.html client contracts via HtmlService
+- Steady `Finalizing → Finalizing` polls do not call `refreshLocalSummaryViews_()`
+- Newly ready signature tasks set `actionLabel` to `Sign Review Packet` explicitly
+- Prior fast-ACK submit lock / `primaryAction` reconciliation remains
 
-Do **not** change server transactional architecture, compensation lock path,
-finalization, or frozen ACK/PDF/signature Attempt-ID models before OBS.
+Do **not** create `feat/offline-signature-print-mobile` or begin Pass 1 until
+Daniel’s three-screen OBS is reviewed and accepted.
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
 
-Run static parse, then Lifecycle / Compensation / Live Review / Performance /
-Security suites in Apps Script. **Stop for Coach.** Three-screen OBS only after
-approval. Automation Preview.
+Run in Apps Script, then **STOP for Daniel OBS**:
+`runV31LifecycleTests_()`, `runV31CompensationTests_()`,
+`runV31LiveReviewTests_()`, `runV31PerformanceTests_()`,
+`runV31SecurityTests_()`. Automation Preview.
 
 ## Active work — Lifecycle transactional closure
 

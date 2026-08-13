@@ -319,6 +319,27 @@ function runV31LiveReviewTests_() {
         html.indexOf('refreshLocalSummaryViews_()') !== -1,
         'meaningful live transitions must call refreshLocalSummaryViews_'
       );
+      assertLive_(
+        html.indexOf("row.actionLabel = 'Sign Review Packet'") !== -1,
+        'newly ready signature action must set Sign Review Packet explicitly'
+      );
+      assertLive_(
+        html.indexOf("currentCycle.actionLabel = 'Sign Review Packet'") !== -1,
+        'current cycle signature action must set Sign Review Packet explicitly'
+      );
+      assertLive_(
+        html.indexOf("row.actionLabel = row.actionLabel || 'Sign Review Packet'") ===
+          -1,
+        'must not retain a stale summary action label via falsy fallback'
+      );
+      assertLive_(
+        html.indexOf("String(live.status || '') === 'Finalizing' ||") === -1,
+        'steady Finalizing polls must not force summary rerender'
+      );
+      assertLive_(
+        html.indexOf("String(live.status || '') === 'Complete'") === -1,
+        'steady Complete polls must not force summary rerender'
+      );
     })
   );
 

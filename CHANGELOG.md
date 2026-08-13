@@ -1,5 +1,11 @@
 # V3.1 Changelog
 
+## Live UX — OBS-ready poll and signature-label fixes
+
+- Steady `Finalizing → Finalizing` live polls no longer rerender Home/Reviews/Signatures.
+- Newly available signature tasks explicitly display `Sign Review Packet`
+  instead of retaining a stale summary label.
+
 ## Live UX — finish fast-ACK client state reconciliation
 
 - Submitted Manager and Employee evaluations become read-only immediately

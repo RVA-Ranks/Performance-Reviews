@@ -6154,6 +6154,7 @@ function patchCycleFromLiveState_(live) {
   if (typeof live.signatureTaskReady !== 'undefined') {
     if (live.signatureTaskReady) {
       currentCycle.actionKey = 'signature';
+      currentCycle.actionLabel = 'Sign Review Packet';
       reconcileCurrentCyclePrimaryAction_();
     } else if (currentCycle.actionKey === 'signature') {
       clearStaleSignatureActionOnCycle_(currentCycle, live.status);
@@ -6178,7 +6179,7 @@ function patchCycleFromLiveState_(live) {
         if (live.signatureTaskReady) {
           row.actionKey = 'signature';
           row.actionRequired = true;
-          row.actionLabel = row.actionLabel || 'Sign Review Packet';
+          row.actionLabel = 'Sign Review Packet';
           row.actionTone = 'primary';
         } else if (row.actionKey === 'signature') {
           clearStaleSignatureActionOnCycle_(row, live.status);
@@ -6195,9 +6196,7 @@ function patchCycleFromLiveState_(live) {
     prevActionKey !== String(currentCycle.actionKey || '') ||
     prevHadSignatureAction !==
       (String(currentCycle.actionKey || '') === 'signature') ||
-    summaryActionChanged ||
-    String(live.status || '') === 'Finalizing' ||
-    String(live.status || '') === 'Complete';
+    summaryActionChanged;
 
   if (meaningfulLiveTransition) {
     refreshLocalSummaryViews_();
