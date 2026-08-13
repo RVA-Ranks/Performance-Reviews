@@ -1,5 +1,17 @@
 # V3.1 Changelog
 
+## Offline override, Print Review, and mobile polish
+
+- HR-only Offline Review Override releases eligible pre-signature cycles into
+  the existing Awaiting Signatures workflow with confirmation + reason + audit.
+  No fabricated participant ACKs; compensation completeness still required.
+- Final Manager/Self PDFs include an Offline Review Notice when that mode is set
+  (reason/HR notes/compensation remain internal).
+- Print Review renders authorized review content in the browser (DRAFT labeled;
+  no compensation/internal metadata; no Drive artifact).
+- Mobile review lists, editor footer, modals, inputs, and signature canvas are
+  usable at phone widths without extra server calls.
+
 ## Final documents — employee CAF privacy and branding
 
 - Employee-facing Compensation Adjustment Agreement shows only identity,

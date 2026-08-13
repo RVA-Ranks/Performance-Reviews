@@ -5,27 +5,29 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
-## Active work — Live UX / performance orchestration
+## Active work — Offline override / Print / Mobile
 
-Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
-Backup: `backup/pre-live-ux-client-93` (also `backup/pre-live-ux-correction-72`, `-91`)  
-Tip SHA: `69b4a4e20c08afb60b444b58fcada88535b665a4`
+Branch: `feat/offline-signature-print-mobile` (from accepted OBS tip `1871e23`)  
+Backup: `backup/pre-offline-signature-print-mobile`  
+OBS performance baseline: `perf/live-ux-orchestration` @ `69b4a4e` / `1871e23`
 
-OBS-ready Stage 0 micro-fixes (Index.html only):
+Pass 1 package:
 
-- Steady `Finalizing → Finalizing` polls do not call `refreshLocalSummaryViews_()`
-- Newly ready signature tasks set `actionLabel` to `Sign Review Packet` explicitly
-- Prior fast-ACK submit lock / `primaryAction` reconciliation remains
+- Employee CAF privacy + AITHERAS logo branding on newly generated finals
+  (`AITHERAS_LOGO_FILE_ID` Drive setting; historical sealed PDFs immutable)
+- HR **Release Signatures — Offline Review Override** into existing signature
+  workflow (no fabricated ACKs; compensation integrity still required)
+- Client-only Print Review (`window.print()`, no Drive write)
+- Mobile polish for Manager/Employee workflows (~390/412/768)
 
-Do **not** create `feat/offline-signature-print-mobile` or begin Pass 1 until
-Daniel’s three-screen OBS is reviewed and accepted.
+Do **not** reopen live-UX performance architecture.
 
 **Historical CAF policy:** already-sealed employee CAF PDFs are immutable.
 
-Run in Apps Script, then **STOP for Daniel OBS**:
-`runV31LifecycleTests_()`, `runV31CompensationTests_()`,
-`runV31LiveReviewTests_()`, `runV31PerformanceTests_()`,
-`runV31SecurityTests_()`. Automation Preview.
+Run in Apps Script: `runV31OfflineReviewTests_()`, `runV31LifecycleTests_()`,
+`runV31CompensationTests_()`, `runV31LiveReviewTests_()`,
+`runV31PerformanceTests_()`, `runV31SecurityTests_()`. Automation Preview.
+Stop for Coach.
 
 ## Active work — Lifecycle transactional closure
 

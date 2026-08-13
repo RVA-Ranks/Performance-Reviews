@@ -343,6 +343,45 @@ function runV31LiveReviewTests_() {
     })
   );
 
+  results.push(
+    liveCase_('Index.html offline override, print, and mobile contracts', function () {
+      const html = HtmlService.createHtmlOutputFromFile('Index').getContent();
+      assertLive_(
+        html.indexOf('Release Signatures — Offline Review Override') !== -1,
+        'HR offline override control must exist'
+      );
+      assertLive_(
+        html.indexOf('I confirm this review was completed outside the portal') !== -1,
+        'offline override confirmation copy must exist'
+      );
+      assertLive_(
+        html.indexOf('function printReview_') !== -1 &&
+          html.indexOf('function buildPrintableReviewModel_') !== -1,
+        'print review helpers must exist'
+      );
+      assertLive_(
+        html.indexOf('DRAFT — NOT SUBMITTED') !== -1,
+        'draft print indicator must exist'
+      );
+      assertLive_(
+        html.indexOf('@media print') !== -1 && html.indexOf('size: Letter') !== -1,
+        'print CSS must target US Letter'
+      );
+      assertLive_(
+        html.indexOf('review-card-list') !== -1 &&
+          html.indexOf('font-size: 16px !important') !== -1 &&
+          html.indexOf('env(safe-area-inset-bottom') !== -1,
+        'mobile CSS contracts must exist'
+      );
+      assertLive_(
+        /compensation recommendation|owner decision notes|CAF Final PDF ID/i.test(
+          html.slice(html.indexOf('function buildPrintableReviewModel_'), html.indexOf('function renderPrintReview_'))
+        ) === false,
+        'print model must not include compensation internals'
+      );
+    })
+  );
+
   const failed = results.filter(function (row) {
     return !row.ok;
   });
