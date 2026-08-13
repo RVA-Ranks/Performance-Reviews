@@ -206,6 +206,10 @@ const V31 = Object.freeze({
     'Compensation Status',
     'Compensation Record ID',
     'CAF Final PDF ID',
+    'Signature Release Mode',
+    'Offline Override At',
+    'Offline Override By',
+    'Offline Override Reason',
   ],
 
   LOG_HEADERS: [
@@ -3078,6 +3082,7 @@ function decidePublicAdminAuthorization_(actor) {
     canAdministerTriggers: isOwner,
     canSeeCompensation: isHr || isManager,
     canAccessOtherCycles: isHr,
+    canOfflineReviewOverride: isHr,
     canInvokePrivateSetupOrTestsFromWebClient: false,
   };
 }
@@ -4497,6 +4502,10 @@ function createAutomatedReviewCycle_(candidate) {
     'Compensation Status': V31_COMP.STATUS.PENDING,
     'Compensation Record ID': '',
     'CAF Final PDF ID': '',
+    'Signature Release Mode': '',
+    'Offline Override At': '',
+    'Offline Override By': '',
+    'Offline Override Reason': '',
   };
 
   appendObject_(
@@ -4848,6 +4857,12 @@ function applyV31DefaultsToCycle_(
   cycle['Compensation Record ID'] =
     cycle['Compensation Record ID'] || '';
   cycle['CAF Final PDF ID'] = cycle['CAF Final PDF ID'] || '';
+  cycle['Signature Release Mode'] =
+    cycle['Signature Release Mode'] || '';
+  cycle['Offline Override At'] = cycle['Offline Override At'] || '';
+  cycle['Offline Override By'] = cycle['Offline Override By'] || '';
+  cycle['Offline Override Reason'] =
+    cycle['Offline Override Reason'] || '';
 
   return backfillLegacyLaunchFields_(cycle);
 }

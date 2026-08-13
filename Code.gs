@@ -3709,6 +3709,14 @@ function getCycleView_(cycleId, email, isHr) {
     canDownloadSelf:
       !!cycle['Self Evaluation PDF ID'] &&
       (isHr || isManager || isEmployee),
+
+    signatureReleaseMode:
+      String(cycle['Signature Release Mode'] || '').trim() ||
+      V31_OFFLINE.MODE_STANDARD,
+    offlineReviewDisclosure: buildOfflineReviewDisclosure_(cycle),
+    canOfflineReviewOverride:
+      !!isHr &&
+      evaluateOfflineReviewOverrideEligibility_(cycle).action === 'allow',
   };
 }
 
@@ -6368,6 +6376,8 @@ function createReviewTemplate_(type, folderId) {
       'Employee Comments:\n{{MEETING_EMPLOYEE_COMMENTS}}'
   );
 
+  body.appendParagraph('{{OFFLINE_REVIEW_BLOCK}}');
+
   body
     .appendParagraph('Signatures')
     .setHeading(DocumentApp.ParagraphHeading.HEADING2);
@@ -6499,6 +6509,7 @@ function generateReviewPdf_(cycleId, type) {
     '{{MEETING_EMPLOYEE_COMMENTS}}':
       meeting.employeeComments,
   });
+  insertOfflineReviewNoticeOnBody_(body, cycle);
 
   if (type === PR.TYPE.MANAGER) {
     replaceRatings_(body, 'MGR', managerReview.ratings);

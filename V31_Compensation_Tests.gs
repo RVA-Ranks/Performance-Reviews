@@ -593,6 +593,19 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Offline override still consults compensation completeness', function () {
+    assert_(
+      typeof releaseOfflineReviewForSignatures === 'function',
+      'offline override endpoint exists'
+    );
+    assert_(
+      String(releaseOfflineReviewForSignatures).indexOf(
+        'isV31CompensationComplete_'
+      ) !== -1,
+      'offline override must still call isV31CompensationComplete_'
+    );
+  });
+
   check('Final document builders invoke AITHERAS branding helpers', function () {
     assert_(
       typeof applyAitherasDocumentBranding_ === 'function' &&

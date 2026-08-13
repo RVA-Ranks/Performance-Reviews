@@ -103,6 +103,7 @@ function testSecurityEmployeeDeniedAdmin_() {
     'canEnableLiveMode',
     'canAdministerTriggers',
     'canAccessOtherCycles',
+    'canOfflineReviewOverride',
     'canInvokePrivateSetupOrTestsFromWebClient',
   ].forEach(function (key) {
     assertTriggerTest_(
@@ -132,6 +133,7 @@ function testSecurityManagerDeniedHrRecovery_() {
     'canReconcileSignature',
     'canRetryFinalization',
     'canAccessOtherCycles',
+    'canOfflineReviewOverride',
     'canAdministerTriggers',
   ].forEach(function (key) {
     assertTriggerTest_(
@@ -151,7 +153,8 @@ function testSecurityHrRecoveryWithoutOwner_() {
     automationOwnerEmail: 'aitheras-hr@aitheras.com',
   });
   assertTriggerTest_(
-    auth.canSystemHealth === true &&
+    auth.canOfflineReviewOverride === true &&
+      auth.canSystemHealth === true &&
       auth.canDrainSystemAlerts === true &&
       auth.canReconcileSignature === true &&
       auth.canRetryFinalization === true,
@@ -193,7 +196,8 @@ function testSecurityOffDomainDenied_() {
   assertTriggerTest_(
     auth.canSystemHealth === false &&
       auth.canAdministerTriggers === false &&
-      auth.canSeeCompensation === false,
+      auth.canSeeCompensation === false &&
+      auth.canOfflineReviewOverride === false,
     'Off-domain callers must receive no admin capabilities.'
   );
 }
@@ -375,6 +379,16 @@ function testSecurityPublicRecoveryApiSurface_() {
   assertTriggerTest_(
     typeof acknowledgeMeetingRelease === 'function',
     'acknowledgeMeetingRelease must remain a public release API.'
+  );
+  assertTriggerTest_(
+    typeof releaseOfflineReviewForSignatures === 'function',
+    'releaseOfflineReviewForSignatures must remain a public HR API.'
+  );
+  assertTriggerTest_(
+    typeof evaluateOfflineReviewOverrideEligibility_ === 'function' &&
+      String(evaluateOfflineReviewOverrideEligibility_.name || '').slice(-1) ===
+        '_',
+    'evaluateOfflineReviewOverrideEligibility_ must remain private.'
   );
   assertTriggerTest_(
     typeof getPreviousReviewContext === 'function',

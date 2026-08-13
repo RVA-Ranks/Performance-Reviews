@@ -20,6 +20,29 @@ function runV31LifecycleTests_() {
   );
 
   results.push(
+    lifeCase_('ordinary release still requires meeting after offline helper exists', function () {
+      assertLife_(
+        typeof evaluateOfflineReviewOverrideEligibility_ === 'function',
+        'offline eligibility helper exists'
+      );
+      assertLife_(
+        planReleaseReviewSignatures_({
+          Status: PR.CYCLE.OPEN,
+          'Signatures Released At': '',
+        }).action === 'reject',
+        'Open still cannot use ordinary release'
+      );
+      assertLife_(
+        evaluateOfflineReviewOverrideEligibility_({
+          Status: PR.CYCLE.OPEN,
+          'Signatures Released At': '',
+        }).action === 'allow',
+        'Open may use offline override eligibility'
+      );
+    })
+  );
+
+  results.push(
     lifeCase_('release planner is idempotent for Awaiting Signatures', function () {
       assertLife_(
         planReleaseReviewSignatures_({

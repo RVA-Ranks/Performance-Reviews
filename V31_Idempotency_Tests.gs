@@ -640,6 +640,10 @@ function testCycleHeadersIncludeIdempotencyFields_() {
     'Launch Completed At',
     'Last Launch Error',
     'Launch Attempt Count',
+    'Signature Release Mode',
+    'Offline Override At',
+    'Offline Override By',
+    'Offline Override Reason',
   ];
 
   required.forEach(function (header) {
