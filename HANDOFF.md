@@ -9,7 +9,7 @@ highest-priority source of truth.
 
 Branch: `perf/live-ux-orchestration` (from lifecycle tip `71945f4`)  
 Backup: `backup/pre-live-ux-client-93` (also `backup/pre-live-ux-correction-72`, `-91`)  
-Tip SHA: _(update after OBS-ready commit)_
+Tip SHA: `69b4a4e20c08afb60b444b58fcada88535b665a4`
 
 OBS-ready Stage 0 micro-fixes (Index.html only):
 
