@@ -377,6 +377,7 @@ function buildReopenSubmittedReviewResult_(
     compensationRecommendationRemainsUnchanged:
       fields.key === 'manager' &&
       extra.compensationRecommendationRemainsUnchanged === true,
+    auditWarning: extra.auditWarning || '',
     message:
       extra.message ||
       'This review is open for editing again. Submit it before the review meeting can begin.',
@@ -499,8 +500,12 @@ function reopenSubmittedReview(cycleId, reviewType, payload) {
     };
   });
 
+  let auditWarning = '';
   if (locked.pendingAuditEvent) {
-    commitAuditEventOutsideLock_(locked.pendingAuditEvent);
+    const auditResult = commitAuditEventOutsideLock_(locked.pendingAuditEvent);
+    if (auditResult && !auditResult.ok) {
+      auditWarning = auditResult.warning || '';
+    }
   }
 
   return buildReopenSubmittedReviewResult_(
@@ -515,6 +520,7 @@ function reopenSubmittedReview(cycleId, reviewType, payload) {
       revisionNumber: locked.revisionNumber,
       compensationRecommendationRemainsUnchanged:
         locked.compensationRecommendationRemainsUnchanged,
+      auditWarning: auditWarning,
       message: locked.message,
     }
   );

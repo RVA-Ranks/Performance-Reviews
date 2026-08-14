@@ -452,6 +452,25 @@ function runV31LiveReviewTests_() {
           reopenFn.indexOf('canStartMeeting = false') !== -1,
         'reopen must patch locally without a full bootstrap'
       );
+      assertLive_(
+        html.indexOf('permanently seals') === -1 &&
+          html.indexOf('cannot be edited') === -1,
+        'obsolete permanent-seal copy must be gone'
+      );
+      assertLive_(
+        html.indexOf(
+          'After submission, your evaluation remains sealed unless you reopen it before the review meeting.'
+        ) !== -1 &&
+          html.indexOf(
+            'you may reopen it before the review meeting is opened'
+          ) !== -1 &&
+          html.indexOf('you may use Reopen for Editing') !== -1,
+        'submit copy must describe pre-meeting reopen'
+      );
+      assertLive_(
+        html.indexOf('Submitted and sealed') !== -1,
+        'Submitted and sealed status wording remains'
+      );
     })
   );
 

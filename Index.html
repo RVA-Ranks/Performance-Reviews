@@ -4759,7 +4759,7 @@ function renderReviewEditor(type, target) {
     ? renderPreviousReviewPanel()
     : '';
 
-  target.innerHTML = previousPanel + '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>Drafts save automatically while you work. Submission permanently seals your independent evaluation.</p></div>' + statusPillForDocument(type === 'manager' ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus) + printReviewButtonHtml_(type) + '</div>' +
+  target.innerHTML = previousPanel + '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>Drafts save automatically while you work. After submission, your evaluation remains sealed unless you reopen it before the review meeting.</p></div>' + statusPillForDocument(type === 'manager' ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus) + printReviewButtonHtml_(type) + '</div>' +
     '<div class="editor-shell"><aside class="editor-sidebar"><div class="progress-block"><div id="editorProgressNumber" class="editor-progress-number">' + progress.percent + '%</div><div class="progress-track"><div id="editorProgressFill" class="progress-fill" style="width:' + progress.percent + '%"></div></div><div id="editorProgressMeta" class="editor-progress-meta">' + progress.ratingsCompleted + ' of ' + progress.ratingsTotal + ' ratings · ' + progress.errors.length + ' required item(s) missing</div></div>' +
     steps.map(function(step, index) { return '<button class="editor-step-button ' + (index === model.step ? 'active ' : '') + (isStepComplete(model.draft, type, index) ? 'complete' : '') + '" onclick="setEditorStep(\'' + type + '\',' + index + ')"><span class="step-number">' + (index + 1) + '</span><span>' + escapeHtml(step.label) + '</span></button>'; }).join('') + '</aside>' +
     '<div class="editor-main"><div id="editorStepContent"></div><div class="editor-footer"><button class="button outline" onclick="moveEditorStep(\'' + type + '\',-1)" ' + (model.step === 0 ? 'disabled' : '') + '>Previous</button><button class="button secondary" onclick="manualSaveReview(\'' + type + '\')">Save draft</button><div class="editor-footer-spacer"></div><span id="editorFooterStatus" class="editor-footer-status">' + editorSaveStatusText(type) + '</span>' + (model.step < steps.length - 1 ? '<button class="button primary" onclick="moveEditorStep(\'' + type + '\',1)">Next</button>' : '<button class="button primary" onclick="requestSubmitReview(\'' + type + '\')">Submit and Seal</button>') + '</div></div></div></div>';
@@ -4836,7 +4836,7 @@ function renderReviewSubmitStep(type, draft) {
   if (!validation.errors.length) readiness += '<div class="readiness-item success">✓ All required ratings and comments are complete.</div>';
   validation.errors.forEach(function(error) { readiness += '<div class="readiness-item error">! ' + escapeHtml(error.message) + '</div>'; });
   validation.warnings.forEach(function(warning) { readiness += '<div class="readiness-item warning">△ ' + escapeHtml(warning.message) + '</div>'; });
-  return '<div class="editor-section-header"><h2>Review and Submit</h2><p>Check the evaluation before sealing it. Once submitted, the original independent response cannot be edited.</p></div>' +
+  return '<div class="editor-section-header"><h2>Review and Submit</h2><p>Check the evaluation before submitting. If you need to make a correction afterward, you may reopen it before the review meeting is opened.</p></div>' +
     '<div class="card" style="box-shadow:none"><div class="card-header"><div><h3>Submission readiness</h3><p>' + progress.percent + '% complete · ' + validation.errors.length + ' blocking issue(s) · ' + validation.warnings.length + ' recommendation(s)</p></div>' + statusPill(validation.errors.length ? 'Needs attention' : 'Ready to submit', validation.errors.length ? 'amber' : 'green') + '</div><div class="readiness-list">' + readiness + '</div>' +
     '<div class="warning-banner"><strong>Submission seals your ' + label + '.</strong> It remains private from the other participant until both evaluations are submitted and the review meeting is opened.</div>' +
     '<div class="button-row"><button class="button secondary" onclick="manualSaveReview(\'' + type + '\')">Save draft</button><button class="button primary" onclick="requestSubmitReview(\'' + type + '\')">Submit and Seal</button></div></div>';
@@ -4985,7 +4985,7 @@ function requestSubmitReview(type) {
   const warningHtml = validation.warnings.length ? '<div class="warning-banner"><strong>Recommended improvements</strong><ul>' + validation.warnings.map(function(item) { return '<li>' + escapeHtml(item.message) + '</li>'; }).join('') + '</ul></div>' : '<div class="success-banner">All required information is complete.</div>';
   openModal({
     title: 'Submit and seal this evaluation?',
-    body: warningHtml + '<p>Once submitted, the original independent evaluation cannot be edited. It will remain private until the review meeting is opened.</p>',
+    body: warningHtml + '<p>Once submitted, your evaluation is sealed and remains private from the other participant. Before the review meeting is opened, you may use Reopen for Editing if you need to make a correction.</p>',
     confirmLabel: 'Submit and Seal',
     tone: 'primary',
     onConfirm: function() { submitReview(type); }
@@ -7136,6 +7136,9 @@ async function submitReopenSubmittedReview_(type, reason) {
       message += ' Your existing compensation recommendation remains unchanged.';
     }
     showToast('success', 'Review reopened', message);
+    if (result.auditWarning) {
+      showToast('warning', 'Audit trail', result.auditWarning);
+    }
   } catch (error) {
     showToast('error', 'Could not reopen review', errorMessage(error));
   }

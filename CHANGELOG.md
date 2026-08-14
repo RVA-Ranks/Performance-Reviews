@@ -1,5 +1,13 @@
 # V3.1 Changelog
 
+## V3.1.1 Pass 2 — reopen copy and resubmit coverage
+
+- Replaced obsolete “permanently sealed / cannot be edited” submit copy with
+  pre-meeting Reopen for Editing guidance. Submitted and sealed status remains.
+- Reopen now surfaces `auditWarning` without rolling back a successful reopen.
+- Added a real reopen → saveIndependentReview_ resubmit regression that stamps
+  `Resubmitted At` and restores Ready.
+
 ## V3.1.1 — pre-meeting Reopen for Editing
 
 - Participants can reopen their own submitted Manager Review or Self-Evaluation

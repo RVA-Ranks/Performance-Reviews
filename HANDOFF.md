@@ -12,6 +12,11 @@ Backup/base: `feat/offline-signature-print-mobile`
 
 V3.1.1 UX enhancement: **Reopen for Editing** before Review Meeting Open.
 
+Pass 2: submit copy now matches the reopen rule; reopen returns `auditWarning`;
+resubmit regression exercises `saveIndependentReview_()` and stamps
+`Resubmitted At`. History stamping stays on the submit path unless live timing
+shows a regression.
+
 - Manager may reopen own submitted Manager Review; Employee may reopen own
   Self-Evaluation; HR may reopen either with a required reason.
 - Allowed only while `Meeting Opened At` is blank and cycle status is

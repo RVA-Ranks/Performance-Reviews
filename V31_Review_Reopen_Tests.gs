@@ -284,22 +284,91 @@ function runV31ReviewReopenTests_() {
     assert_(store['Manager Review Status'] === PR.DOC.SUBMITTED, 'unchanged');
   });
 
-  check('Resubmit after reopen returns to Ready', function () {
+  check('Resubmit after reopen stamps history and returns to Ready', function () {
     const store = sampleReopenCycle_({
       Status: PR.CYCLE.READY,
       'Manager Review Status': PR.DOC.SUBMITTED,
       'Self Evaluation Status': PR.DOC.SUBMITTED,
       'Compensation Decision': V31.COMPENSATION.NONE,
     });
+    const originalJson = store['Manager Review JSON'];
+    const compensationDecision = store['Compensation Decision'];
+    const compensationRecordId = store['Compensation Record ID'];
     withReopenEndpointDoubles_(store, 'mgr@aitheras.com', { isHr: false }, function () {
-      reopenSubmittedReview(store['Cycle ID'], 'manager', {
+      const reopened = reopenSubmittedReview(store['Cycle ID'], 'manager', {
         confirmed: true,
         confirmationToken: V31_REOPEN.CONFIRMATION_TOKEN,
       });
-      store['Manager Review Status'] = PR.DOC.SUBMITTED;
-      updateCycleReadiness_(store);
+      assert_(reopened.documentStatus === PR.DOC.DRAFT, 'reopened to Draft');
+      assert_(store.Status === PR.CYCLE.OPEN, 'demoted to Open');
+      const submitted = saveIndependentReview_(
+        store['Cycle ID'],
+        PR.TYPE.MANAGER,
+        sampleReopenManagerPayload_('EDITED_RESUBMIT_TEXT'),
+        true,
+        'manual'
+      );
+      assert_(submitted.documentStatus === PR.DOC.SUBMITTED, 'resubmitted');
+      assert_(submitted.cycleStatus === PR.CYCLE.READY, 'Ready via submit path');
     });
-    assert_(store.Status === PR.CYCLE.READY, 'readiness restored');
+    assert_(store.Status === PR.CYCLE.READY, 'cycle Ready');
+    assert_(store['Manager Review Status'] === PR.DOC.SUBMITTED, 'manager submitted');
+    assert_(
+      String(store['Manager Review JSON'] || '').indexOf('EDITED_RESUBMIT_TEXT') !==
+        -1,
+      'edited submission is authoritative'
+    );
+    assert_(
+      String(store['Manager Review JSON'] || '').indexOf(
+        'ORIGINAL_SUBMITTED_TEXT'
+      ) === -1,
+      'edited JSON replaced the live review'
+    );
+    assert_((store.__revisions || []).length === 1, 'exactly one revision');
+    assert_(
+      String(store.__revisions[0]['Submitted JSON'] || '') === originalJson,
+      'history keeps original submitted JSON'
+    );
+    assert_(
+      String(store.__revisions[0]['Submitted JSON'] || '').indexOf(
+        'EDITED_RESUBMIT_TEXT'
+      ) === -1,
+      'history is not the edited resubmission'
+    );
+    assert_(!!store.__revisions[0]['Resubmitted At'], 'Resubmitted At stamped');
+    assert_(
+      store['Compensation Decision'] === compensationDecision &&
+        store['Compensation Record ID'] === compensationRecordId,
+      'compensation unchanged'
+    );
+  });
+
+  check('Reopen surfaces auditWarning without rolling back', function () {
+    const store = sampleReopenCycle_({
+      Status: PR.CYCLE.READY,
+      'Self Evaluation Status': PR.DOC.SUBMITTED,
+    });
+    const result = withReopenEndpointDoubles_(
+      store,
+      'mgr@aitheras.com',
+      {
+        isHr: false,
+        auditWarning: 'The change was saved, but the audit trail write failed.',
+      },
+      function () {
+        return reopenSubmittedReview(store['Cycle ID'], 'manager', {
+          confirmed: true,
+          confirmationToken: V31_REOPEN.CONFIRMATION_TOKEN,
+        });
+      }
+    );
+    assert_(store['Manager Review Status'] === PR.DOC.DRAFT, 'business commit kept');
+    assert_(result.ok === true, 'success');
+    assert_(
+      String(result.auditWarning || '').indexOf('audit trail write failed') !==
+        -1,
+      'auditWarning surfaced'
+    );
   });
 
   check('Compensation recommendation remains unchanged', function () {
@@ -402,6 +471,22 @@ function runV31ReviewReopenTests_() {
   };
 }
 
+function sampleReopenManagerPayload_(overallComments) {
+  return {
+    ratings: PR.FACTORS.map(function (factor) {
+      return {
+        factorId: factor.id,
+        rating: '4',
+        comments: '',
+      };
+    }),
+    overallComments: overallComments || 'EDITED_RESUBMIT_TEXT',
+    areasForImprovement: 'Keep current development plan.',
+    actionSteps: 'Continue current action steps.',
+    supervisorComments: 'Supervisor comments retained.',
+  };
+}
+
 function sampleReopenCycle_(overrides) {
   const submitted = JSON.stringify({
     overallComments: 'ORIGINAL_SUBMITTED_TEXT',
@@ -481,7 +566,10 @@ function withReopenEndpointDoubles_(store, actorEmail, extras, fn) {
     return !!opts.isHr;
   };
   getSettings_ = function () {
-    return { ALLOWED_DOMAIN: 'aitheras.com' };
+    return {
+      ALLOWED_DOMAIN: 'aitheras.com',
+      COMPENSATION_DECISION_REQUIRED: 'FALSE',
+    };
   };
   assertDomain_ = function () {};
   assertReviewRevisionHistoryReady_ = function () {};
@@ -490,6 +578,13 @@ function withReopenEndpointDoubles_(store, actorEmail, extras, fn) {
   };
   commitAuditEventOutsideLock_ = function (event) {
     store.__audits.push(event);
+    if (opts.auditWarning) {
+      return {
+        ok: false,
+        warning: opts.auditWarning,
+        eventId: event.eventId,
+      };
+    }
     return { ok: true, warning: '', eventId: event.eventId };
   };
   getAllObjects_ = function (sheetName) {
