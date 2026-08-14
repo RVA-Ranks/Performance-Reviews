@@ -5,7 +5,35 @@ The governing engineering standard is
 Read it before every delivery. Daniel's explicit business decisions remain the
 highest-priority source of truth.
 
-## Active work — Offline override / Print / Mobile
+## Active work — Pre-meeting review reopen
+
+Branch: `feat/pre-meeting-review-reopen` (from offline/print/mobile tip `d8e7e2f`)  
+Backup/base: `feat/offline-signature-print-mobile`
+
+V3.1.1 UX enhancement: **Reopen for Editing** before Review Meeting Open.
+
+- Manager may reopen own submitted Manager Review; Employee may reopen own
+  Self-Evaluation; HR may reopen either with a required reason.
+- Allowed only while `Meeting Opened At` is blank and cycle status is
+  Open for Input or Ready for Review Meeting. Server-enforced.
+- Document: Submitted → Draft. Cycle: Ready → Open for Input when needed.
+  Resubmit uses existing `updateCycleReadiness_`.
+- Prior submitted JSON is stored in HR-only `ReviewRevisionHistory`.
+  Managers/employees have no version-history UI.
+- CompensationRecords are not reset. Existing manager recommendation stays.
+- Do **not** touch ACK semantics, `meetingLocalRevision`, `releaseRequestId`,
+  signature Attempt IDs, Offline Review Override, PDF/CAF provenance,
+  finalization, Delivery Unknown, or live UX orchestration.
+
+**Deploy / setup:** run the V3.1 idempotent data-model upgrade so
+`ReviewRevisionHistory` exists. Keep Automation in Preview.
+
+Run in Apps Script: `runV31ReviewReopenTests_()`, `runV31OfflineReviewTests_()`,
+`runV31LifecycleTests_()`, `runV31CompensationTests_()`,
+`runV31LiveReviewTests_()`, `runV31PerformanceTests_()`,
+`runV31SecurityTests_()`. Stop for Coach.
+
+## Previous — Offline override / Print / Mobile
 
 Branch: `feat/offline-signature-print-mobile` (from accepted OBS tip `1871e23`)  
 Backup: `backup/pre-offline-signature-print-mobile`  
@@ -1111,6 +1139,24 @@ Columns:
 - Previous Status
 - New Status
 - Details
+
+## `ReviewRevisionHistory` (HR-only)
+
+Stores the previously submitted evaluation JSON when a participant or HR
+reopens that document before Meeting Open. Not exposed to Manager/Employee.
+
+Columns:
+
+- Revision ID
+- Cycle ID
+- Review Type
+- Revision Number
+- Submitted JSON
+- Submitted At
+- Reopened At
+- Reopened By
+- Reopen Reason
+- Resubmitted At
 
 ## `ReviewAutomationLog`
 

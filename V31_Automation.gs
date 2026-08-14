@@ -408,6 +408,7 @@ function ensureV31DataModel_() {
 
   ensureSystemAlertsDataModel_();
   ensureCompensationDataModel_();
+  ensureReviewRevisionHistoryDataModel_();
 
   const assignmentHeaders = getHeaders_(assignments);
   const automationColumn =

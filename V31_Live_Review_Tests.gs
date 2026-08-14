@@ -431,6 +431,27 @@ function runV31LiveReviewTests_() {
         html.indexOf("actionLabel = 'View Signature Status'") !== -1,
         'HR waiting after offline release must use View Signature Status'
       );
+      assertLive_(
+        html.indexOf('Reopen for Editing') !== -1 &&
+          html.indexOf('function openReopenSubmittedReviewModal_') !== -1 &&
+          html.indexOf('function applyReopenSubmittedReviewResult_') !== -1,
+        'pre-meeting reopen client controls must exist'
+      );
+      assertLive_(
+        html.indexOf('Your existing compensation recommendation remains unchanged.') !==
+          -1,
+        'manager reopen must disclose that compensation is unchanged'
+      );
+      const reopenFn = html.slice(
+        html.indexOf('function applyReopenSubmittedReviewResult_'),
+        html.indexOf('function collectPrintModelKeys_')
+      );
+      assertLive_(
+        reopenFn.indexOf('refreshApplication') === -1 &&
+          reopenFn.indexOf('loadCycle(') === -1 &&
+          reopenFn.indexOf('canStartMeeting = false') !== -1,
+        'reopen must patch locally without a full bootstrap'
+      );
     })
   );
 

@@ -21,6 +21,7 @@ const PR = Object.freeze({
     CYCLES: 'ReviewCycles',
     AUDIT: 'ReviewAuditLog',
     PENDING_AUDIT: 'ReviewPendingAudits',
+    REVISION_HISTORY: 'ReviewRevisionHistory',
   },
 
   CYCLE: {
@@ -818,6 +819,9 @@ function saveIndependentReview_(
 
     updateCycleReadiness_(cycle);
     writeCycle_(location.rowNumber, cycle);
+    if (submit) {
+      stampReviewRevisionResubmittedAt_(cycleId, type, now);
+    }
 
     let pendingAuditEvent = null;
     if (source !== 'autosave') {
@@ -3717,6 +3721,18 @@ function getCycleView_(cycleId, email, isHr) {
     canOfflineReviewOverride:
       !!isHr &&
       evaluateOfflineReviewOverrideEligibility_(cycle).action === 'allow',
+    canReopenManagerReview: canReopenSubmittedReview_(
+      cycle,
+      'manager',
+      email,
+      isHr
+    ),
+    canReopenSelfEvaluation: canReopenSubmittedReview_(
+      cycle,
+      'self',
+      email,
+      isHr
+    ),
   };
 }
 
@@ -8086,6 +8102,7 @@ function protectSheets_(ss) {
     PR.SHEETS.ASSIGNMENTS,
     PR.SHEETS.AUDIT,
     PR.SHEETS.PENDING_AUDIT,
+    PR.SHEETS.REVISION_HISTORY,
   ].forEach(function (name) {
     const sheet = ss.getSheetByName(name);
     if (!sheet) return;

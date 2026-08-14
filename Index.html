@@ -392,6 +392,13 @@
     }
     .card-header h2, .card-header h3 { margin: 0; }
     .card-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .review-header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      flex-shrink: 0;
+    }
 
     .metric-grid {
       display: grid;
@@ -4685,7 +4692,7 @@ function renderReviewTab(type, target) {
 
   if (!editable) {
     const review = isManager ? currentCycle.managerReview : currentCycle.selfEvaluation;
-    target.innerHTML = previousPanel + '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>' + escapeHtml(humanDocumentStatus(isManager ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus)) + '</p></div>' + printReviewButtonHtml_(isManager ? 'manager' : 'self') + '</div>' + renderReadOnlyReview(review, type) + '</div>';
+    target.innerHTML = previousPanel + '<div class="card"><div class="card-header"><div><h2>' + title + '</h2><p>' + escapeHtml(humanDocumentStatus(isManager ? currentCycle.managerReviewStatus : currentCycle.selfEvaluationStatus)) + '</p></div>' + reviewHeaderActionsHtml_(isManager ? 'manager' : 'self') + '</div>' + renderReadOnlyReview(review, type) + '</div>';
     maybeLoadPreviousReviewContext();
     return;
   }
@@ -7027,6 +7034,174 @@ function printReviewButtonHtml_(type) {
   return '<button class="button outline print-review-button" type="button" onclick="printReview_(\'' +
     type +
     '\')">Print Review</button>';
+}
+
+function canReopenReview_(type) {
+  if (!currentCycle) return false;
+  return type === 'manager'
+    ? !!currentCycle.canReopenManagerReview
+    : !!currentCycle.canReopenSelfEvaluation;
+}
+
+function reopenReviewButtonHtml_(type) {
+  if (!canReopenReview_(type)) return '';
+  return '<button class="button outline reopen-review-button" type="button" onclick="openReopenSubmittedReviewModal_(\'' +
+    type +
+    '\')">Reopen for Editing</button>';
+}
+
+function reviewHeaderActionsHtml_(type) {
+  const printHtml = printReviewButtonHtml_(type);
+  const reopenHtml = reopenReviewButtonHtml_(type);
+  if (!printHtml && !reopenHtml) return '';
+  return '<div class="review-header-actions">' + printHtml + reopenHtml + '</div>';
+}
+
+function existingCompensationRecommendationNote_() {
+  if (!currentCycle || !currentCycle.v31) return '';
+  const decision = String(currentCycle.v31.compensationDecision || '');
+  const recordId = String(currentCycle.v31.compensationRecordId || '');
+  if (
+    decision === 'Adjustment Recommended' ||
+    decision === 'No Adjustment Recommended' ||
+    recordId
+  ) {
+    return 'Your existing compensation recommendation remains unchanged.';
+  }
+  return '';
+}
+
+function openReopenSubmittedReviewModal_(type) {
+  if (!canReopenReview_(type)) return;
+  const isHr = !!currentCycle.isHr;
+  const isManagerReview = type === 'manager';
+  const ownWork = isManagerReview ? !!currentCycle.isManager : !!currentCycle.isEmployee;
+  const compensationNote = isManagerReview && (ownWork || isHr)
+    ? existingCompensationRecommendationNote_()
+    : '';
+  const body =
+    '<p>' +
+    (ownWork
+      ? 'Your submitted review will return to Draft status. You must submit it again before the review meeting can begin. The other participant will still not be able to see your responses until the meeting is opened.'
+      : 'This submitted review will return to Draft status. The assigned participant must submit it again before the review meeting can begin. The other participant will still not be able to see these responses until the meeting is opened.') +
+    '</p>' +
+    (compensationNote ? '<p><strong>' + escapeHtml(compensationNote) + '</strong></p>' : '') +
+    (isHr
+      ? '<label class="field"><span>Reason (required)</span><textarea id="reopenReviewReason" rows="3" placeholder="Why this submitted review should be reopened."></textarea></label>'
+      : '<label class="field"><span>Note (optional)</span><textarea id="reopenReviewReason" rows="3" placeholder="Optional note for HR."></textarea></label>');
+  openModal({
+    title: 'Reopen this review for editing?',
+    tone: 'warning',
+    confirmLabel: 'Reopen for Editing',
+    checks: [
+      'I understand this review will return to Draft and must be submitted again.'
+    ],
+    body: body,
+    onConfirm: function() {
+      const reason = String((document.getElementById('reopenReviewReason') || {}).value || '').trim();
+      if (isHr && !reason) {
+        showToast('warning', 'Reason required', 'Enter why this submitted review should be reopened.');
+        return;
+      }
+      submitReopenSubmittedReview_(type, reason);
+    }
+  });
+  setTimeout(function() {
+    const reason = document.getElementById('reopenReviewReason');
+    const confirmButton = document.getElementById('modalConfirmButton');
+    if (!reason || !confirmButton) return;
+    function sync() {
+      const checks = Array.from(document.querySelectorAll('#modalChecklist input'));
+      confirmButton.disabled =
+        checks.some(function(check) { return !check.checked; }) ||
+        (isHr && !String(reason.value || '').trim());
+    }
+    reason.addEventListener('input', sync);
+    sync();
+  }, 0);
+}
+
+async function submitReopenSubmittedReview_(type, reason) {
+  closeModal();
+  const cycleId = currentCycle && currentCycle.cycleId;
+  try {
+    const result = await server('reopenSubmittedReview', cycleId, type, {
+      confirmed: true,
+      confirmationToken: 'REVIEW_REOPEN_CONFIRMED',
+      reason: reason || ''
+    });
+    applyReopenSubmittedReviewResult_(type, result);
+    let message = result.message || 'This review is open for editing again.';
+    if (result.compensationRecommendationRemainsUnchanged) {
+      message += ' Your existing compensation recommendation remains unchanged.';
+    }
+    showToast('success', 'Review reopened', message);
+  } catch (error) {
+    showToast('error', 'Could not reopen review', errorMessage(error));
+  }
+}
+
+function applyReopenSubmittedReviewResult_(type, result) {
+  if (!currentCycle || !result) return;
+  const documentStatus = result.documentStatus || 'Draft';
+  if (type === 'manager') {
+    currentCycle.managerReviewStatus = documentStatus;
+  } else {
+    currentCycle.selfEvaluationStatus = documentStatus;
+  }
+  if (result.cycleStatus) currentCycle.status = result.cycleStatus;
+  currentCycle.canEditManagerReview = !!result.canEditManagerReview;
+  currentCycle.canEditSelfEvaluation = !!result.canEditSelfEvaluation;
+  currentCycle.canStartMeeting = false;
+  currentCycle.canReopenManagerReview = !!result.canReopenManagerReview;
+  currentCycle.canReopenSelfEvaluation = !!result.canReopenSelfEvaluation;
+  currentCycle.canReleaseSignatures = false;
+  reconcileCurrentCycleDerivedState_(currentCycle.status);
+  currentCycle.canStartMeeting = false;
+  currentCycle.canEditManagerReview = !!result.canEditManagerReview;
+  currentCycle.canEditSelfEvaluation = !!result.canEditSelfEvaluation;
+  if (state && Array.isArray(state.cycles)) {
+    state.cycles.forEach(function(row) {
+      if (String(row.cycleId) !== String(currentCycle.cycleId)) return;
+      row.status = currentCycle.status;
+      if (type === 'manager') row.managerReviewStatus = documentStatus;
+      else row.selfEvaluationStatus = documentStatus;
+      row.canStartMeeting = false;
+      if (result.canEditManagerReview) {
+        row.actionRequired = true;
+        row.actionKey = 'manager-review';
+        row.actionLabel = 'Continue Manager Review';
+        row.actionTone = 'primary';
+      } else if (result.canEditSelfEvaluation) {
+        row.actionRequired = true;
+        row.actionKey = 'self-evaluation';
+        row.actionLabel = 'Continue Self-Evaluation';
+        row.actionTone = 'primary';
+      } else {
+        row.actionRequired = false;
+        row.actionKey = 'overview';
+        row.actionLabel = 'Open Review';
+        row.actionTone = 'outline';
+      }
+    });
+  }
+  try {
+    localStorage.removeItem(draftStorageKey(type));
+  } catch (error) {}
+  if (editorState[type]) {
+    editorState[type].dirty = false;
+    editorState[type].showErrors = false;
+    editorState[type].step = 0;
+  }
+  initializeDrafts(currentCycle);
+  currentCycleTab = type;
+  preferredCycleAction = type === 'manager' ? 'manager-review' : 'self-evaluation';
+  renderCycleWorkspace();
+  setTopbar(
+    currentCycle.employeeName + ' — ' + currentCycle.reviewType,
+    humanStatus(currentCycle.status)
+  );
+  refreshLocalSummaryViews_();
 }
 
 function collectPrintModelKeys_(value, acc) {

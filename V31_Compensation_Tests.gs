@@ -654,6 +654,18 @@ function runV31CompensationTests_() {
     );
   });
 
+  check('Reopening a Manager Review does not reset compensation', function () {
+    assert_(
+      typeof reopenSubmittedReview === 'function',
+      'reopen endpoint exists'
+    );
+    assert_(
+      String(reopenSubmittedReview).indexOf('resetCompensation') === -1 &&
+        String(reopenSubmittedReview).indexOf('CompensationRecords') === -1,
+      'reopen must not mutate CompensationRecords'
+    );
+  });
+
   check('Owner decision result includes compact compensation record DTO', function () {
     const record = {
       'Compensation Record ID': 'REC-DTO',

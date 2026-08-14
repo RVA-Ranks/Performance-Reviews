@@ -1,5 +1,18 @@
 # V3.1 Changelog
 
+## V3.1.1 — pre-meeting Reopen for Editing
+
+- Participants can reopen their own submitted Manager Review or Self-Evaluation
+  while the cycle is still Open for Input or Ready for Review Meeting.
+- Meeting Open is the hard cutoff. Signatures, Finalizing, Complete, and
+  Cancelled remain sealed.
+- Ready for Review Meeting returns to Open for Input until both reviews are
+  submitted again. Existing readiness logic restores Ready on resubmit.
+- HR may reopen either review with a required reason and a `REVIEW_REOPENED`
+  audit. The prior submitted JSON is preserved in HR-only ReviewRevisionHistory.
+- Reopening a Manager Review does not reset or modify CompensationRecords.
+  Managers are told the existing compensation recommendation remains unchanged.
+
 ## Pass 3 — offline signature readiness and audit attribution
 
 - Preserved role-specific signature readiness after Offline Review Override
