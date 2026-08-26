@@ -113,6 +113,27 @@ function runV31CompensationTests_() {
     assert_(threw, 'Missing effective date must throw');
   });
 
+  check('Recommendation validation requires business justification', function () {
+    let threw = false;
+    try {
+      validateCompensationRecommendation_(
+        {
+          recommendedPercent: 8,
+          proposedEffectiveDate: '2026-09-01',
+          businessJustification: '   ',
+        },
+        46.4
+      );
+    } catch (error) {
+      threw = true;
+      assert_(
+        /business justification/i.test(String(error.message || error)),
+        'Must require business justification'
+      );
+    }
+    assert_(threw, 'Blank business justification must throw');
+  });
+
   check('Recommendation derives rate from percent only', function () {
     const clean = validateCompensationRecommendation_(
       {

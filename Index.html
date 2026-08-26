@@ -7801,7 +7801,7 @@ async function beginCompensationRecommendation(cycleId) {
         '<div><label for="proposedEffectiveDate">Proposed Effective Date * ' +
         infoTipHtml('The date the approved pay rate should take effect. Future dates schedule the roster update; today or earlier update Current Pay Rate after CAF seal.') +
         '</label><input id="proposedEffectiveDate" type="date" required></div>' +
-        '<div class="wide"><label for="businessJustification">Business Justification *</label><textarea id="businessJustification" required></textarea></div>' +
+        '<div class="wide"><label for="businessJustification">Business Justification *</label><textarea id="businessJustification" required placeholder="Explain why this adjustment is recommended. Required before submission."></textarea><div class="field-help">Required. The recommendation cannot be submitted without a business justification.</div></div>' +
         '</div>',
       confirmLabel: 'Submit Recommendation',
       tone: 'primary',
@@ -7809,6 +7809,11 @@ async function beginCompensationRecommendation(cycleId) {
         submitCompensationRecommendationForm(cycleId);
       }
     });
+    const confirmButton = document.getElementById('modalConfirmButton');
+    if (confirmButton) confirmButton.disabled = true;
+    setTimeout(function() {
+      wireCompensationRecommendationFormValidation_();
+    }, 0);
   } catch (error) {
     showToast('error', 'Could not open recommendation', errorMessage(error));
   }
@@ -7825,6 +7830,7 @@ function syncRecommendationPercentFields(currentRate, currentAnnual) {
     rateEl.value = '';
     annualEl.value = '';
     increaseEl.value = '';
+    wireCompensationRecommendationFormValidation_();
     return;
   }
   const rate = Math.round(currentRate * (1 + percent / 100) * 100) / 100;
@@ -7832,9 +7838,66 @@ function syncRecommendationPercentFields(currentRate, currentAnnual) {
   rateEl.value = formatMoneyDisplay(rate);
   annualEl.value = formatMoneyDisplay(annual);
   increaseEl.value = formatMoneyDisplay(annual - currentAnnual);
+  wireCompensationRecommendationFormValidation_();
+}
+
+function compensationRecommendationFormErrors_() {
+  const percentRaw = String(valueOf('recommendedPercent') || '').trim();
+  const percent = Number(percentRaw);
+  const effectiveDate = String(valueOf('proposedEffectiveDate') || '').trim();
+  const justification = String(valueOf('businessJustification') || '').trim();
+  const errors = [];
+  if (!percentRaw || !Number.isFinite(percent)) {
+    errors.push('Enter a recommended increase percent.');
+  } else if (percent <= 0) {
+    errors.push('Recommended percent must be greater than zero.');
+  }
+  if (!effectiveDate) {
+    errors.push('Choose a proposed effective date.');
+  }
+  if (!justification) {
+    errors.push('Business justification is required.');
+  }
+  return errors;
+}
+
+function wireCompensationRecommendationFormValidation_() {
+  const confirmButton = document.getElementById('modalConfirmButton');
+  const percent = document.getElementById('recommendedPercent');
+  const effectiveDate = document.getElementById('proposedEffectiveDate');
+  const justification = document.getElementById('businessJustification');
+  if (!confirmButton || !percent || !effectiveDate || !justification) return;
+
+  function sync() {
+    confirmButton.disabled = compensationRecommendationFormErrors_().length > 0;
+  }
+
+  if (!justification.dataset.compRecWired) {
+    justification.dataset.compRecWired = '1';
+    percent.addEventListener('input', sync);
+    percent.addEventListener('change', sync);
+    effectiveDate.addEventListener('input', sync);
+    effectiveDate.addEventListener('change', sync);
+    justification.addEventListener('input', sync);
+    justification.addEventListener('change', sync);
+  }
+  sync();
 }
 
 async function submitCompensationRecommendationForm(cycleId) {
+  const formErrors = compensationRecommendationFormErrors_();
+  if (formErrors.length) {
+    showToast(
+      'warning',
+      'Recommendation incomplete',
+      formErrors[0]
+    );
+    modalCallback = function () {
+      submitCompensationRecommendationForm(cycleId);
+    };
+    wireCompensationRecommendationFormValidation_();
+    return;
+  }
   const payload = {
     recommendedPercent: valueOf('recommendedPercent'),
     proposedEffectiveDate: valueOf('proposedEffectiveDate'),

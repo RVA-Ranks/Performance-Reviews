@@ -1,5 +1,12 @@
 # V3.1 Changelog
 
+## Compensation recommendation — required business justification UX
+
+- Manager Compensation Recommendation modal keeps Submit disabled until
+  percent, effective date, and business justification are filled.
+- Blank justification is blocked in the browser before the modal closes, so
+  managers no longer see a silent/server-only failure after submit.
+
 ## V3.1.1 Pass 2 — reopen copy and resubmit coverage
 
 - Replaced obsolete “permanently sealed / cannot be edited” submit copy with

@@ -471,6 +471,24 @@ function runV31LiveReviewTests_() {
         html.indexOf('Submitted and sealed') !== -1,
         'Submitted and sealed status wording remains'
       );
+      assertLive_(
+        html.indexOf('function compensationRecommendationFormErrors_') !==
+          -1 &&
+          html.indexOf('function wireCompensationRecommendationFormValidation_') !==
+            -1 &&
+          html.indexOf('Business justification is required.') !== -1,
+        'compensation recommendation modal must require business justification client-side'
+      );
+      const submitCompFn = html.slice(
+        html.indexOf('async function submitCompensationRecommendationForm'),
+        html.indexOf('function applyCompensationMutationResult_')
+      );
+      assertLive_(
+        submitCompFn.indexOf('compensationRecommendationFormErrors_') !== -1 &&
+          submitCompFn.indexOf('closeModal()') >
+            submitCompFn.indexOf('formErrors.length'),
+        'blank justification must block before the modal closes'
+      );
     })
   );
 
